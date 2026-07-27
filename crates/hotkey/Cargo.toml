@@ -1,0 +1,24 @@
+[package]
+name = "hotkey"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+# Internal workspace crate: never published to crates.io. This also lets
+# `cargo deny` treat path dependencies as first-party rather than as
+# unversioned wildcards.
+publish = false
+description = "Global push-to-talk hotkey: chord parsing, tap-vs-hold timing, conflict detection, CGEventTap backend"
+
+[dependencies]
+anyhow.workspace = true
+
+[target.'cfg(target_os = "macos")'.dependencies]
+# Same CF crates ax-edit already uses; the CoreGraphics event-tap calls are a
+# small hand-written extern block (see backend/macos.rs) rather than a new
+# dependency, keeping the supply-chain surface where it already was.
+core-foundation = "0.10"
+core-foundation-sys = "0.8"
+
+[[bin]]
+name = "hotkey-demo"
+path = "src/bin/hotkey-demo.rs"

@@ -10,10 +10,11 @@ use std::ffi::c_void;
 use accessibility_sys::{
     kAXErrorSuccess, kAXFocusedApplicationAttribute, kAXFocusedUIElementAttribute,
     kAXNumberOfCharactersAttribute, kAXRoleAttribute, kAXSelectedTextAttribute,
-    kAXSelectedTextRangeAttribute, kAXValueAttribute, kAXValueTypeCFRange, AXError,
-    AXIsProcessTrusted, AXIsProcessTrustedWithOptions, AXUIElementCopyAttributeValue,
-    AXUIElementCreateApplication, AXUIElementCreateSystemWide, AXUIElementIsAttributeSettable,
-    AXUIElementRef, AXUIElementSetAttributeValue, AXUIElementSetMessagingTimeout, AXValueGetValue,
+    kAXSelectedTextRangeAttribute, kAXValueAttribute, kAXValueTypeAXError, kAXValueTypeCFRange,
+    AXError, AXIsProcessTrusted, AXIsProcessTrustedWithOptions, AXUIElementCopyAttributeValue,
+    AXUIElementCopyMultipleAttributeValues, AXUIElementCreateApplication,
+    AXUIElementCreateSystemWide, AXUIElementIsAttributeSettable, AXUIElementRef,
+    AXUIElementSetAttributeValue, AXUIElementSetMessagingTimeout, AXValueGetType, AXValueGetValue,
     AXValueRef,
 };
 use core_foundation::array::CFArray;
@@ -168,6 +169,86 @@ fn copy_range_attribute(
         return Ok(None);
     }
     Ok(Some((range.location as usize, range.length as usize)))
+}
+
+/// Read several attributes off an element in ONE synchronous IPC round trip.
+///
+/// Benchmarked motivation (M-series, macOS 26, TextEdit focused): each
+/// `AXUIElementCopyAttributeValue` costs 22-30us of round trip regardless of
+/// payload, so the five snapshot attributes cost ~135us read separately and
+/// ~50us batched. On the cold path (first contact with the target process,
+/// where each round trip is milliseconds) the saving multiplies.
+///
+/// Called with options=0, so an attribute the element does not support comes
+/// back as an `AXValue` of type `kAXValueTypeAXError` in its slot rather than
+/// failing the whole call. Those placeholders are mapped to `None`, preserving
+/// the per-call behaviour where an absent attribute is a normal outcome.
+fn copy_attributes_batched(
+    element: AXUIElementRef,
+    names: &[&str],
+) -> Result<Vec<Option<Value>>, Error> {
+    let cf_names: Vec<CFString> = names.iter().map(|n| CFString::new(n)).collect();
+    let array = CFArray::from_CFTypes(&cf_names);
+    let mut out: CFArrayRef = std::ptr::null();
+    let code = unsafe {
+        AXUIElementCopyMultipleAttributeValues(element, array.as_concrete_TypeRef(), 0, &mut out)
+    };
+    ax_result(code)?;
+    if out.is_null() {
+        return Err(Error::Api(code));
+    }
+    // The returned array is owned (+1) and its length always equals the number
+    // of attributes requested; own it so every element is released with it.
+    let values: CFArray<CFType> = unsafe { CFArray::wrap_under_create_rule(out) };
+    let mut result = Vec::with_capacity(names.len());
+    for value in values.iter() {
+        let raw = value.as_CFTypeRef();
+        if raw.is_null() {
+            result.push(None);
+            continue;
+        }
+        // An unsupported attribute arrives as an AXValue wrapping an AXError.
+        // AXValueGetType on a non-AXValue CFType would be undefined, so check
+        // the type id first.
+        let is_error_placeholder = unsafe {
+            core_foundation_sys::base::CFGetTypeID(raw) == accessibility_sys::AXValueGetTypeID()
+                && AXValueGetType(raw as AXValueRef) == kAXValueTypeAXError
+        };
+        if is_error_placeholder {
+            result.push(None);
+        } else {
+            // Retain: the CFArray owns its elements and releases them when it
+            // drops, so a Value that outlives this scope needs its own +1.
+            unsafe { core_foundation_sys::base::CFRetain(raw) };
+            result.push(Some(Value(raw)));
+        }
+    }
+    Ok(result)
+}
+
+/// Interpret an owned attribute value as a string, if it is one.
+fn value_as_string(value: &Value) -> Option<String> {
+    let cf_type: CFType = unsafe { CFType::wrap_under_get_rule(value.0) };
+    cf_type.downcast::<CFString>().map(|s| s.to_string())
+}
+
+/// Interpret an owned attribute value as a CFRange, if it is one.
+fn value_as_range(value: &Value) -> Option<(usize, usize)> {
+    let mut range = CFRange {
+        location: 0,
+        length: 0,
+    };
+    let ok = unsafe {
+        AXValueGetValue(
+            value.0 as AXValueRef,
+            kAXValueTypeCFRange,
+            &mut range as *mut CFRange as *mut c_void,
+        )
+    };
+    if !ok || range.location < 0 || range.length < 0 {
+        return None;
+    }
+    Some((range.location as usize, range.length as usize))
 }
 
 fn is_settable(element: AXUIElementRef, name: &str) -> bool {
@@ -371,14 +452,41 @@ pub fn snapshot_focused() -> Result<TextSnapshot, Error> {
     let focused = focused_in(&app_element)?;
     let el = focused.0;
 
-    let role = copy_string_attribute(el, kAXRoleAttribute)?.unwrap_or_else(|| "unknown".into());
-    let value = copy_string_attribute(el, kAXValueAttribute)?;
-    let selected_text = copy_string_attribute(el, kAXSelectedTextAttribute)?;
-    let selection = copy_range_attribute(el, kAXSelectedTextRangeAttribute)?;
+    // One batched IPC round trip for all five attributes instead of five
+    // separate ones. Measured on this machine: 22-30us per separate warm call
+    // vs ~50us for the whole batch, and the gap widens dramatically on the
+    // cold path where every round trip costs milliseconds. Some accessibility
+    // servers may not implement the batch call, so a whole-call failure falls
+    // back to per-attribute reads rather than reporting an error the old code
+    // would not have produced.
+    const ATTRS: [&str; 5] = [
+        kAXRoleAttribute,
+        kAXValueAttribute,
+        kAXSelectedTextAttribute,
+        kAXSelectedTextRangeAttribute,
+        kAXNumberOfCharactersAttribute,
+    ];
+    let (role, value, selected_text, selection, has_char_count) =
+        match copy_attributes_batched(el, &ATTRS) {
+            Ok(values) => (
+                values[0].as_ref().and_then(value_as_string),
+                values[1].as_ref().and_then(value_as_string),
+                values[2].as_ref().and_then(value_as_string),
+                values[3].as_ref().and_then(value_as_range),
+                values[4].is_some(),
+            ),
+            Err(_) => (
+                copy_string_attribute(el, kAXRoleAttribute)?,
+                copy_string_attribute(el, kAXValueAttribute)?,
+                copy_string_attribute(el, kAXSelectedTextAttribute)?,
+                copy_range_attribute(el, kAXSelectedTextRangeAttribute)?,
+                copy_attribute(el, kAXNumberOfCharactersAttribute)?.is_some(),
+            ),
+        };
+    let role = role.unwrap_or_else(|| "unknown".into());
 
     // A field with neither a value nor a selection nor a character count is not
     // a text field at all, so report that rather than a confusing empty edit.
-    let has_char_count = copy_attribute(el, kAXNumberOfCharactersAttribute)?.is_some();
     if value.is_none() && selected_text.is_none() && !has_char_count {
         return Err(Error::NoTextValue);
     }

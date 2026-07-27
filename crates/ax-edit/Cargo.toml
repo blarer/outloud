@@ -17,3 +17,22 @@ accessibility-sys = "0.1"
 core-foundation = "0.10"
 core-foundation-sys = "0.8"
 libc = "0.2.189"
+
+# Benchmarks measure real IPC into other processes, so criterion is a
+# dev-dependency only and never ships in the product binary.
+[dev-dependencies]
+criterion = { version = "0.5", default-features = false, features = ["cargo_bench_support"] }
+# The regression gate reuses diag's Recorder/percentile machinery so CI and
+# the doctor report identical numbers. A dev-dependency cycle (diag depends
+# on ax-edit) is fine: cargo resolves dev-dependencies separately.
+diag = { path = "../diag" }
+
+[[bench]]
+name = "ax_latency"
+harness = false
+
+# The regression gate is a plain binary with a pass/fail exit code, not a
+# criterion harness, so CI can run it directly: cargo bench -p ax-edit --bench gate
+[[bench]]
+name = "gate"
+harness = false
