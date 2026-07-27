@@ -1,0 +1,11 @@
+[package]
+name = "text-target"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Read and rewrite text in the focused destination, across every destination that accepts text"
+
+[dependencies]
+anyhow.workspace = true
+ax-edit = { path = "../ax-edit" }
+base64 = "0.22"
