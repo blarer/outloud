@@ -1,0 +1,11 @@
+[package]
+name = "spike-cli"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "M0 spike harness: probe and exercise edit-by-voice primitives"
+
+[dependencies]
+anyhow.workspace = true
+ax-edit = { path = "../ax-edit" }
+edit-intent = { path = "../edit-intent" }
