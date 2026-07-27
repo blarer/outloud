@@ -1,0 +1,23 @@
+[package]
+name = "shell-bridge"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+# Internal workspace crate: never published to crates.io. This also lets
+# `cargo deny` treat path dependencies as first-party rather than as
+# unversioned wildcards.
+publish = false
+description = "T2 shell integration: unix-socket bridge that lets shell line editors expose and accept command-line rewrites"
+
+[dependencies]
+anyhow.workspace = true
+base64 = "0.22"
+edit-intent = { path = "../edit-intent" }
+# Peer-credential checks (SO_PEERCRED / LOCAL_PEERCRED) have no safe stdlib
+# surface; this is the only unsafe FFI in the crate and it is isolated in
+# `peer.rs`.
+libc = "0.2"
+
+[[bin]]
+name = "shell-bridge"
+path = "src/main.rs"

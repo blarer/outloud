@@ -1,0 +1,54 @@
+#!/usr/bin/env expect -f
+# Live verification: drives a real interactive zsh (temp ZDOTDIR) through
+# the aqua ZLE widget and asserts the command line was rewritten in place.
+# Args: <bridge-bin> <socket> <zdotdir>
+set timeout 10
+set bridge [lindex $argv 0]
+set socket [lindex $argv 1]
+set zdot   [lindex $argv 2]
+
+set env(ZDOTDIR) $zdot
+spawn zsh -i
+expect "aqua-demo"
+
+# Type a command but DO NOT run it.
+send "kubectl get pods --namespace prod-web --output wide"
+expect "prod-web --output wide"
+
+# Stage the edit while the line sits in ZLE.
+exec $bridge intent "change prod-web to staging-web" --socket $socket
+
+# Trigger the widget.
+send "\x18\x01"
+expect {
+    "staging-web" { puts "\nVERIFY: buffer rewritten to staging-web" }
+    timeout { puts "\nVERIFY-FAIL: rewrite did not appear"; exit 1 }
+}
+# Confirm via the daemon too: the EDIT frame carried the pre-edit buffer.
+set seen [exec $bridge status --socket $socket]
+if {![string match "*prod-web --output wide*" $seen]} {
+    puts "\nVERIFY-FAIL: daemon never saw the original buffer: $seen"
+    exit 1
+}
+
+# Undo through zsh's own undo (^Xu in the emacs keymap).
+send "\x18u"
+# ZLE repaints incrementally, so the restored text may never appear as one
+# contiguous string in the pty stream. Ground truth instead: trigger the
+# widget again (no intent staged, so it is a NOOP) which makes the plugin
+# report its buffer to the daemon, then ask the daemon what it saw.
+send "\x18\x01"
+expect "aqua:"
+set peeked [exec $bridge peek --socket $socket]
+if {[string match "*prod-web*" $peeked]} {
+    puts "\nVERIFY: zsh undo restored prod-web (daemon peek: $peeked)"
+} else {
+    puts "\nVERIFY-FAIL: after undo daemon saw: $peeked"
+    exit 1
+}
+
+# Abort the line and exit cleanly; nothing was ever executed.
+send "\x03"
+send "exit\r"
+expect eof
+puts "VERIFY: done"
