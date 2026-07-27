@@ -204,7 +204,7 @@ fn replace_case_insensitive(haystack: &str, needle: &str, replacement: &str) -> 
         for lc in ch.to_lowercase() {
             let start = lowered.len();
             lowered.push(lc);
-            origin.extend(std::iter::repeat(orig_start).take(lowered.len() - start));
+            origin.extend(std::iter::repeat_n(orig_start, lowered.len() - start));
         }
     }
 

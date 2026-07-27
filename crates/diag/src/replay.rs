@@ -84,7 +84,7 @@ pub struct EnvFacts {
 }
 
 /// What the transport selector decided, and the reason it printed.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Default, Debug, Clone, PartialEq, Eq)]
 pub struct TransportRecord {
     pub name: String,
     pub reason: String,
@@ -92,7 +92,7 @@ pub struct TransportRecord {
 
 /// Shape of the focused field at read time. All content-bearing fields are
 /// stored pre-redacted; there is no way to construct this with raw text.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Default, Debug, Clone, PartialEq, Eq)]
 pub struct AxRecord {
     /// AX role, e.g. `AXTextArea`. Roles are framework vocabulary, not user
     /// data, so they are safe verbatim and essential for "wrong tree" bugs.
@@ -110,7 +110,7 @@ pub struct AxRecord {
 /// The parsed intent, reduced to its shape. The operand text is what the
 /// user said, which is exactly what must never leave the machine; its length
 /// still distinguishes "empty needle" bugs from real ones.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Default, Debug, Clone, PartialEq, Eq)]
 pub struct IntentRecord {
     /// `replace` / `delete` / `append` / `recase` / `freeform`.
     pub kind: String,
@@ -124,7 +124,7 @@ pub struct IntentRecord {
 /// over-edit gate: chars outside it are provably untouched, and a window
 /// wider than the intent explains itself as an over-edit without either
 /// string being present.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Default, Debug, Clone, PartialEq, Eq)]
 pub struct TransformRecord {
     pub before_chars: usize,
     pub after_chars: usize,
@@ -137,7 +137,7 @@ pub struct TransformRecord {
 }
 
 /// Outcome of the write-back.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Default, Debug, Clone, PartialEq, Eq)]
 pub struct WriteRecord {
     pub ok: bool,
     /// Strategy used on success, scrubbed error detail on failure.
@@ -588,56 +588,6 @@ impl SessionRecord {
 /// form would borrow the option twice in the match arms.
 fn section<T: Default>(slot: &mut Option<T>) -> &mut T {
     slot.get_or_insert_with(T::default)
-}
-
-// Defaults exist only so `section()` can assemble records field-by-field
-// during parsing; recording code never constructs these directly.
-impl Default for TransportRecord {
-    fn default() -> Self {
-        TransportRecord {
-            name: String::new(),
-            reason: String::new(),
-        }
-    }
-}
-impl Default for AxRecord {
-    fn default() -> Self {
-        AxRecord {
-            role: String::new(),
-            title: String::new(),
-            text: String::new(),
-            strategy: String::new(),
-        }
-    }
-}
-impl Default for IntentRecord {
-    fn default() -> Self {
-        IntentRecord {
-            kind: String::new(),
-            from_chars: 0,
-            to_chars: 0,
-        }
-    }
-}
-impl Default for TransformRecord {
-    fn default() -> Self {
-        TransformRecord {
-            before_chars: 0,
-            after_chars: 0,
-            changed_start: 0,
-            removed_chars: 0,
-            inserted_chars: 0,
-        }
-    }
-}
-impl Default for WriteRecord {
-    fn default() -> Self {
-        WriteRecord {
-            ok: false,
-            detail: String::new(),
-            class: None,
-        }
-    }
 }
 
 fn push(out: &mut String, key: &str, value: &str) {

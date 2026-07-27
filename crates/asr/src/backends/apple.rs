@@ -38,7 +38,7 @@
 use std::io::{BufRead, BufReader, Write};
 use std::path::PathBuf;
 use std::process::{Child, ChildStdin, Command, Stdio};
-use std::sync::mpsc::{Receiver, TryRecvError};
+use std::sync::mpsc::Receiver;
 
 use crate::{Partial, Recognizer, Transcript};
 
@@ -145,15 +145,13 @@ impl AppleRecognizer {
     }
 
     fn drain_events(&mut self) {
-        loop {
-            match self.events.try_recv() {
-                Ok(ev) => match ev.kind.as_str() {
-                    // Finals also update the running text: the helper emits
-                    // cumulative text on both event kinds.
-                    "partial" | "final" => self.last_partial = Some(ev.text),
-                    _ => {}
-                },
-                Err(TryRecvError::Empty) | Err(TryRecvError::Disconnected) => break,
+        // Both Empty and Disconnected end the drain: there is nothing to read
+        // now, and a dead helper is handled by the caller on finalize.
+        while let Ok(ev) = self.events.try_recv() {
+            // Finals also update the running text: the helper emits cumulative
+            // text on both event kinds.
+            if matches!(ev.kind.as_str(), "partial" | "final") {
+                self.last_partial = Some(ev.text);
             }
         }
     }
