@@ -1,0 +1,179 @@
+# PR / push CI: correctness, compliance, MSRV, headless, and a cheap build of
+# every shipped target so cross-platform breakage is caught per-PR instead of
+# at release time.
+#
+# Design decisions (full rationale in docs/build-and-release.md#ci):
+#   - Scripts, not inline run-blocks, for anything longer than two lines:
+#     contributors run scripts/ci-*.sh locally and get the identical result.
+#   - Swatinem/rust-cache over manual actions/cache: it keys on the lockfile
+#     AND toolchain AND target list, and prunes stale artifacts, which manual
+#     cache keys always eventually get wrong.
+#   - Every cargo invocation is --locked: CI must build what the lockfile
+#     says, or the lockfile is fiction.
+
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+# A superseded push to the same PR cancels the older run; saves the finite
+# macOS/Windows runner minutes for the commit that matters.
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  # Incremental compilation is a lose on CI: the cache restore already covers
+  # warm starts, and incremental artifacts bloat the cache by gigabytes.
+  CARGO_INCREMENTAL: "0"
+
+jobs:
+  # Lint + test on the two OSes with OS-specific code paths. Linux covers the
+  # pure crates; macOS covers ax-edit's real FFI. Windows joins this list the
+  # day a Windows backend exists.
+  check:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, macos-15]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      # rustup reads rust-toolchain.toml automatically; no toolchain action
+      # needed for the default case, which is one less pinned dependency.
+      - uses: Swatinem/rust-cache@v2
+        with:
+          # One shared cache per OS for check+test; the build matrix below
+          # keys separately per target.
+          shared-key: check
+      - run: scripts/ci-check.sh
+        shell: bash
+
+  # MSRV is validated with its own toolchain and WITHOUT --locked semantics
+  # being violated: same lockfile, older compiler. If this fails, either fix
+  # the code or bump the documented MSRV in a deliberate PR.
+  msrv:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install MSRV toolchain
+        run: rustup toolchain install 1.85.0 --profile minimal
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: msrv
+      - name: Build with MSRV
+        run: cargo +1.85.0 build --workspace --locked
+
+  # Licence + CVE gate. Runs on PRs (catches a bad dep at review time) and
+  # is additionally scheduled nightly by audit-nightly below, because new
+  # CVEs arrive without any commit happening.
+  compliance:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: compliance
+          # cargo-install'd tools live in ~/.cargo/bin and are cached too.
+          cache-all-crates: "true"
+      - run: scripts/ci-compliance.sh
+        shell: bash
+      - name: Upload SBOM
+        uses: actions/upload-artifact@v4
+        with:
+          name: sbom
+          path: dist/sbom/
+
+  # Cross-target build check: every triple we ship must at least COMPILE on
+  # every PR. Cheap (check-only where possible, no packaging) and catches
+  # cfg() breakage the day it is written, not at release tag time.
+  build-matrix:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-15
+            target: aarch64-apple-darwin
+          - os: macos-15
+            target: x86_64-apple-darwin
+          - os: windows-2025
+            target: x86_64-pc-windows-msvc
+          - os: windows-2025
+            # aarch64 Windows cross-compiles from the x86_64 runner; MSVC
+            # ships the cross linker so no extra toolchain is required.
+            target: aarch64-pc-windows-msvc
+          - os: ubuntu-24.04
+            target: x86_64-unknown-linux-gnu
+          - os: ubuntu-24.04
+            target: x86_64-unknown-linux-musl
+          - os: ubuntu-24.04
+            target: aarch64-unknown-linux-gnu
+            use-cross: true
+          - os: ubuntu-24.04
+            target: aarch64-unknown-linux-musl
+            use-cross: true
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: Swatinem/rust-cache@v2
+        with:
+          # Per-target cache key: artifacts for different triples never
+          # share object files, so sharing a cache only causes eviction.
+          key: ${{ matrix.target }}
+      - name: Add target
+        if: ${{ !matrix.use-cross }}
+        run: rustup target add ${{ matrix.target }}
+      - name: Install musl tools
+        if: contains(matrix.target, 'musl') && !matrix.use-cross
+        run: sudo apt-get update && sudo apt-get install -y musl-tools
+      - name: Install cross
+        if: matrix.use-cross
+        run: cargo install cross --locked
+      - name: Build
+        shell: bash
+        run: |
+          if [ "${{ matrix.use-cross }}" = "true" ]; then
+            cross build --workspace --locked --target ${{ matrix.target }}
+          else
+            cargo build --workspace --locked --target ${{ matrix.target }}
+          fi
+
+  # Headless build: proves the daemon path stays display-free. Runs on a
+  # plain ubuntu container with no X/Wayland present, which IS the deployment
+  # environment being claimed.
+  headless:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: headless
+      - name: Install musl tools
+        run: sudo apt-get update && sudo apt-get install -y musl-tools
+      - name: Build static headless daemon
+        run: |
+          rustup target add x86_64-unknown-linux-musl
+          scripts/build-headless.sh x86_64-unknown-linux-musl
+      - name: Smoke test with no display server
+        # Explicitly unset every display variable; if the binary needed a
+        # display to even start, this is where it dies.
+        run: |
+          env -u DISPLAY -u WAYLAND_DISPLAY dist/headless/aqua-spiked-x86_64-unknown-linux-musl dry-run "change hello to goodbye"
+
+  # Reproducibility tripwire: double-build on Linux and require identical
+  # hashes. Only x86_64-linux (the cheapest runner) because determinism bugs
+  # are almost never target-specific; the flags are shared by all targets.
+  repro:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # build-repro.sh derives SOURCE_DATE_EPOCH from git history.
+          fetch-depth: 1
+      # NOTE: no rust-cache here on purpose. A cache-restored target dir
+      # defeats the point of proving a clean double-build is deterministic.
+      - name: Double build and compare hashes
+        run: REPRO_VERIFY=1 scripts/build-repro.sh

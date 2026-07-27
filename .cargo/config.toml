@@ -1,0 +1,46 @@
+# Workspace-level cargo configuration.
+#
+# Everything here must be safe for BOTH local development and CI on every
+# platform, because cargo merges this file into whatever environment it runs
+# in. Anything platform-conditional lives under [target.*].
+
+[env]
+# Strip the absolute build path out of panic messages and debug info so two
+# checkouts at different paths produce byte-identical binaries. This is one
+# of the three legs of reproducibility (the others: pinned toolchain and
+# SOURCE_DATE_EPOCH in scripts/build-repro.sh).
+# --remap-path-prefix alone misses macro-embedded paths; both are needed.
+RUSTFLAGS_REPRO_NOTE = "see scripts/build-repro.sh; flags are set there, not here, so normal dev builds keep full paths for debugger usability"
+
+[target.'cfg(target_os = "linux")']
+# WHY not lld/mold pins here: forcing a specific linker breaks the musl and
+# cross-container builds where that linker is absent. Cross.toml owns the
+# cross-compilation linker story instead.
+
+[target.x86_64-unknown-linux-musl]
+# Static musl binaries: crt-static is the default for musl targets, stated
+# explicitly so nobody "fixes" it away. A fully static binary is what makes
+# the headless daemon copyable to any Linux box over SSH with zero runtime
+# dependencies, which is the whole point of the musl matrix rows.
+rustflags = ["-C", "target-feature=+crt-static"]
+
+[target.aarch64-unknown-linux-musl]
+rustflags = ["-C", "target-feature=+crt-static"]
+
+# WHY there is no [target.x86_64-*] -C target-cpu setting anywhere in this
+# repo: shipping binaries built with target-cpu=native (or any post-baseline
+# CPU like haswell) reproduces the Handy/ONNX-Runtime crash class, where code
+# compiled with an AVX2 baseline runs in a static initializer and SIGILLs on
+# pre-Haswell CPUs before main() even starts, i.e. before any runtime CPU
+# detection could possibly help. We stay on the default x86-64 baseline
+# (SSE2) and leave ISA selection to runtime dispatch in whichever ML crates
+# arrive later. docs/build-and-release.md#windows covers this in depth.
+
+[alias]
+# One-word entry points so contributors and CI run the identical commands.
+ci-check = "check --workspace --all-targets --locked"
+ci-test = "test --workspace --locked"
+# Headless daemon builds go through scripts/build-headless.sh, which probes
+# whether the `headless` cargo feature exists yet (it lives in crates/, owned
+# by the crate maintainers) and verifies the produced binary links no display
+# libraries either way.

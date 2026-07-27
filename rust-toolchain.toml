@@ -1,0 +1,27 @@
+# Pinned toolchain for every contributor and every CI job.
+#
+# WHY a pin at all: "whatever stable rustup happens to have" produces builds
+# that differ between two machines on the same day, which kills reproducibility
+# and makes CI failures impossible to bisect. A single pinned version means a
+# green local build and a green CI build are the same claim.
+#
+# WHY this is *newer* than the MSRV: the MSRV (1.85, checked by the msrv CI
+# job with `cargo +1.85 build --locked`) is a promise to downstream packagers
+# (Debian, Fedora, nixpkgs) who ship older compilers. The pin here is what we
+# develop and release with. The two are deliberately decoupled: bumping the dev
+# toolchain is cheap and routine; bumping the MSRV is a compatibility break and
+# gets a CHANGELOG entry.
+#
+# Update policy: bump to the latest stable within two weeks of a Rust release,
+# in its own PR, so a toolchain regression is never entangled with a code
+# change.
+[toolchain]
+channel = "1.95.0"
+components = ["rustfmt", "clippy"]
+# Targets used by local cross-builds (macOS universal binary needs both).
+# CI adds its own per-job targets with `rustup target add`; listing the mac
+# pair here means `scripts/build-macos-universal.sh` works on a fresh clone.
+targets = [
+    "aarch64-apple-darwin",
+    "x86_64-apple-darwin",
+]

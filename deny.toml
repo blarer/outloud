@@ -1,0 +1,99 @@
+# cargo-deny configuration: licence compliance, CVE gate, and supply-chain
+# hygiene. Run locally with `cargo deny check`; CI runs it on every PR and
+# nightly (scripts/ci-compliance.sh).
+#
+# The governing constraint: this project is MIT and must stay redistributable
+# under MIT-compatible terms. Any copyleft dependency (GPL, AGPL, LGPL, MPL in
+# copyleft mode) is a BUILD FAILURE, not a warning, because a warning would be
+# discovered at release time when it is most expensive to unwind.
+
+[graph]
+# Check every target we actually ship, not just the host. A dependency that is
+# GPL only on Linux would otherwise slip through a macOS dev machine's check.
+targets = [
+    "aarch64-apple-darwin",
+    "x86_64-apple-darwin",
+    "x86_64-pc-windows-msvc",
+    "aarch64-pc-windows-msvc",
+    "x86_64-unknown-linux-gnu",
+    "aarch64-unknown-linux-gnu",
+    "x86_64-unknown-linux-musl",
+    "aarch64-unknown-linux-musl",
+]
+all-features = true
+
+[advisories]
+# CVE / RustSec gate. "deny" turns any advisory affecting our lockfile into a
+# failed build. Unmaintained crates warn rather than fail: they are a risk
+# signal, not an emergency, and failing on them trains people to ignore red CI.
+version = 2
+db-path = "$CARGO_HOME/advisory-dbs"
+db-urls = ["https://github.com/rustsec/advisory-db"]
+yanked = "deny"
+# When a CVE has no fixed release yet, add a scoped ignore HERE with a comment
+# linking the tracking issue, never by loosening this policy.
+ignore = []
+
+[licenses]
+version = 2
+# Explicit allow-list, not a deny-list. A deny-list fails open when a new
+# licence id appears; an allow-list fails closed, which is the correct
+# direction for legal risk. Everything listed is MIT-compatible and permits
+# static linking into an MIT binary.
+allow = [
+    "MIT",
+    "Apache-2.0",
+    "Apache-2.0 WITH LLVM-exception",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "ISC",
+    "Zlib",
+    "Unicode-3.0",  # unicode-ident, pulled in by virtually every proc-macro
+    "CC0-1.0",
+]
+# Anything NOT in the allow list fails, which is how GPL/AGPL/LGPL/SSPL/
+# proprietary all become build failures without being enumerated. confidence
+# below is how sure the SPDX classifier must be before trusting a detected
+# licence text.
+confidence-threshold = 0.9
+
+[licenses.private]
+# Our own unpublished workspace crates carry `license = "MIT"` already, but if
+# one is ever left unset this keeps the check honest instead of silently
+# skipping it.
+ignore = false
+
+[bans]
+# Duplicate major versions of the same crate bloat the binary and multiply the
+# audit surface. Warn, don't fail: transitive duplicates are often outside our
+# control and a hard failure here would block unrelated PRs.
+multiple-versions = "warn"
+# "warn" rather than "deny", reluctantly: allow-wildcard-paths only exempts
+# PRIVATE (publish = false) crates, and the workspace manifests in crates/**
+# do not set publish = false yet (they are owned by the crate maintainers,
+# not the build system). Path-only workspace deps count as wildcards, so
+# "deny" would fail every build on our own crates. FOLLOW-UP for crate
+# owners: add `publish = false` to each crate in crates/**, then flip this
+# back to "deny" so a real "*" crates.io requirement fails the build.
+wildcards = "warn"
+allow-wildcard-paths = true
+deny = [
+    # The Handy AVX2 lesson, enforced mechanically where possible: pyke's
+    # prebuilt ONNX Runtime (`ort` with default download feature) ships
+    # /arch:AVX2 static initializers that SIGILL on pre-Haswell CPUs at
+    # process start. If/when ONNX arrives, it must come in with a
+    # baseline-ISA, runtime-dispatch build, so the naive crate name is
+    # banned to force that conversation in review.
+    { crate = "ort", reason = "prebuilt ONNX Runtime is AVX2-baseline; see docs/build-and-release.md#the-pre-haswell-avx2-crash-class" },
+    # openssl means dynamic system OpenSSL: breaks musl static builds and
+    # reproducibility. rustls covers every need this project will have.
+    { crate = "openssl-sys", reason = "use rustls; keeps musl builds static and avoids system libssl skew" },
+]
+
+[sources]
+# Everything must come from crates.io. A git dependency is unauditable by
+# cargo-audit (no advisory mapping), unpinnable by version, and a supply-chain
+# hole. Exceptions require a rev-pinned entry added here with a justification.
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-git = []

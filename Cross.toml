@@ -1,0 +1,35 @@
+# Configuration for `cross` (https://github.com/cross-rs/cross), used only for
+# the Linux aarch64 rows of the release matrix.
+#
+# WHY cross and not plain rustup targets: rustup gives us the Rust std for the
+# target, but a C toolchain, linker, and sysroot still have to come from
+# somewhere. cross ships them in pinned container images, which is both less
+# host-machine setup and more reproducible than whatever gcc-aarch64 package a
+# runner happens to have. x86_64 Linux (glibc and musl) builds natively on the
+# ubuntu runner and does not go through cross at all.
+#
+# WHY images are pinned by digest-tag rather than "latest": an image bump can
+# silently change the glibc floor of the produced binary. Bumps happen in
+# their own PR, like toolchain bumps.
+
+[build]
+# Fetch on the host with the host's git/credentials, then hand vendored
+# sources to the container. Avoids network access from inside the build
+# container, which is one less variable for reproducibility.
+default-target = "x86_64-unknown-linux-gnu"
+
+[build.env]
+# Reproducibility variables must cross the container boundary or the
+# container build and the host build stop being comparable.
+passthrough = ["SOURCE_DATE_EPOCH", "RUSTFLAGS", "CARGO_INCREMENTAL"]
+
+[target.aarch64-unknown-linux-gnu]
+# Ubuntu 20.04-based image => glibc 2.31 floor for shipped aarch64 binaries.
+# That covers Debian 11+, Ubuntu 20.04+, RHEL 9+. Raising this floor is a
+# user-visible compatibility change; treat like an MSRV bump.
+image = "ghcr.io/cross-rs/aarch64-unknown-linux-gnu:0.2.5"
+
+[target.aarch64-unknown-linux-musl]
+# Musl target is fully static (see .cargo/config.toml), so the image choice
+# affects only the build environment, not the runtime floor of the binary.
+image = "ghcr.io/cross-rs/aarch64-unknown-linux-musl:0.2.5"

@@ -1,0 +1,24 @@
+# Nightly security audit. Exists because CVEs are published against
+# dependencies we already ship, with no commit to trigger PR CI. A repo that
+# only audits on push discovers a RUSTSEC advisory whenever someone next
+# happens to touch the code, which can be months late.
+name: audit-nightly
+
+on:
+  schedule:
+    # 06:23 UTC: an odd minute avoids the top-of-hour GitHub cron stampede
+    # that delays or drops jobs.
+    - cron: "23 6 * * *"
+  workflow_dispatch:
+
+jobs:
+  audit:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: compliance
+          cache-all-crates: "true"
+      - run: scripts/ci-compliance.sh
+        shell: bash

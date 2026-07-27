@@ -1,0 +1,215 @@
+# Release pipeline: tag v* -> build, sign, notarize, package, SBOM, publish.
+#
+# Signing steps are guarded by secret presence so a fork (or a tag pushed
+# before certificates exist) still produces unsigned-but-labelled artifacts
+# instead of a red pipeline. Real releases require the secrets:
+#   macOS:   MACOS_CERT_P12 (base64), MACOS_CERT_PASSWORD,
+#            MACOS_SIGN_IDENTITY, APPLE_ID, APPLE_TEAM_ID, APPLE_APP_PASSWORD
+#   Windows: WINDOWS_CERT_PFX (base64), WINDOWS_CERT_PASSWORD
+
+name: release
+
+on:
+  push:
+    tags: ["v*"]
+  # Manual dry-run of the whole pipeline without tagging; artifacts are
+  # uploaded but no GitHub Release is created.
+  workflow_dispatch:
+
+permissions:
+  contents: write   # create the GitHub Release
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: "0"
+
+jobs:
+  # Gate: a release must never ship what CI would have rejected.
+  compliance:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: compliance
+          cache-all-crates: "true"
+      - run: scripts/ci-check.sh
+        shell: bash
+      - run: scripts/ci-compliance.sh
+        shell: bash
+      - uses: actions/upload-artifact@v4
+        with:
+          name: sbom
+          path: dist/sbom/
+
+  macos:
+    needs: compliance
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: release-macos
+      - name: Import Developer ID certificate
+        # Secrets are unavailable in forks; skip cleanly instead of failing.
+        if: ${{ secrets.MACOS_CERT_P12 != '' }}
+        env:
+          MACOS_CERT_P12: ${{ secrets.MACOS_CERT_P12 }}
+          MACOS_CERT_PASSWORD: ${{ secrets.MACOS_CERT_PASSWORD }}
+        run: |
+          # Ephemeral keychain: the cert exists only for this job and dies
+          # with the runner. Never imported into the login keychain.
+          KEYCHAIN="$RUNNER_TEMP/release.keychain-db"
+          KEYCHAIN_PW="$(uuidgen)"
+          security create-keychain -p "$KEYCHAIN_PW" "$KEYCHAIN"
+          security set-keychain-settings -lut 3600 "$KEYCHAIN"
+          security unlock-keychain -p "$KEYCHAIN_PW" "$KEYCHAIN"
+          echo "$MACOS_CERT_P12" | base64 --decode > "$RUNNER_TEMP/cert.p12"
+          security import "$RUNNER_TEMP/cert.p12" -k "$KEYCHAIN" \
+            -P "$MACOS_CERT_PASSWORD" -T /usr/bin/codesign
+          security set-key-partition-list -S apple-tool:,apple: \
+            -s -k "$KEYCHAIN_PW" "$KEYCHAIN"
+          security list-keychains -d user -s "$KEYCHAIN" login.keychain-db
+          rm -f "$RUNNER_TEMP/cert.p12"
+      - name: Store notarytool credentials
+        if: ${{ secrets.APPLE_APP_PASSWORD != '' }}
+        env:
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          APPLE_APP_PASSWORD: ${{ secrets.APPLE_APP_PASSWORD }}
+        run: |
+          xcrun notarytool store-credentials release-profile \
+            --apple-id "$APPLE_ID" --team-id "$APPLE_TEAM_ID" \
+            --password "$APPLE_APP_PASSWORD"
+          echo "MACOS_NOTARY_PROFILE=release-profile" >> "$GITHUB_ENV"
+      - name: Build, sign, notarize, package
+        env:
+          MACOS_SIGN_IDENTITY: ${{ secrets.MACOS_SIGN_IDENTITY }}
+        run: scripts/build-macos-release.sh
+      - uses: actions/upload-artifact@v4
+        with:
+          name: macos-universal
+          path: dist/*.dmg
+
+  windows:
+    needs: compliance
+    strategy:
+      fail-fast: false
+      matrix:
+        target: [x86_64-pc-windows-msvc, aarch64-pc-windows-msvc]
+    runs-on: windows-2025
+    steps:
+      - uses: actions/checkout@v4
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: release-${{ matrix.target }}
+      - name: Import Authenticode certificate
+        if: ${{ secrets.WINDOWS_CERT_PFX != '' }}
+        shell: pwsh
+        env:
+          WINDOWS_CERT_PFX: ${{ secrets.WINDOWS_CERT_PFX }}
+          WINDOWS_CERT_PASSWORD: ${{ secrets.WINDOWS_CERT_PASSWORD }}
+        run: |
+          $pfx = Join-Path $env:RUNNER_TEMP 'cert.pfx'
+          [IO.File]::WriteAllBytes($pfx, [Convert]::FromBase64String($env:WINDOWS_CERT_PFX))
+          $pw = ConvertTo-SecureString $env:WINDOWS_CERT_PASSWORD -AsPlainText -Force
+          $cert = Import-PfxCertificate -FilePath $pfx -CertStoreLocation Cert:\CurrentUser\My -Password $pw
+          Remove-Item $pfx
+          "WINDOWS_CERT_THUMBPRINT=$($cert.Thumbprint)" | Out-File -Append $env:GITHUB_ENV
+      - name: Install NSIS
+        run: choco install nsis -y --no-progress
+      - name: Build and package
+        shell: bash
+        run: scripts/build-windows.sh ${{ matrix.target }}
+      - name: Verify x86-64 ISA baseline (pre-Haswell guard)
+        if: matrix.target == 'x86_64-pc-windows-msvc'
+        shell: bash
+        # objdump ships with the Git-for-Windows/MSYS toolchain on runners.
+        run: scripts/ci-verify-baseline.sh dist/windows/${{ matrix.target }}/aqua-spike.exe
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows-${{ matrix.target }}
+          path: |
+            dist/windows/${{ matrix.target }}/*.zip
+            dist/windows/${{ matrix.target }}/*.exe
+            dist/windows/${{ matrix.target }}/*.msi
+
+  linux:
+    needs: compliance
+    strategy:
+      fail-fast: false
+      matrix:
+        target:
+          - x86_64-unknown-linux-gnu
+          - x86_64-unknown-linux-musl
+          - aarch64-unknown-linux-gnu
+          - aarch64-unknown-linux-musl
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: release-${{ matrix.target }}
+      - name: Install packaging tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y musl-tools rpm binutils
+          # appimagetool: single static binary, pinned release.
+          curl -fsSL -o /usr/local/bin/appimagetool \
+            https://github.com/AppImage/appimagetool/releases/download/1.9.0/appimagetool-x86_64.AppImage
+          sudo chmod +x /usr/local/bin/appimagetool
+      - name: Build and package
+        run: scripts/build-linux.sh ${{ matrix.target }}
+      - name: Verify x86-64 ISA baseline (pre-Haswell guard)
+        if: startsWith(matrix.target, 'x86_64')
+        run: scripts/ci-verify-baseline.sh dist/linux/${{ matrix.target }}/aqua-spike
+      - uses: actions/upload-artifact@v4
+        with:
+          name: linux-${{ matrix.target }}
+          path: |
+            dist/linux/${{ matrix.target }}/*.tar.gz
+            dist/linux/${{ matrix.target }}/*.AppImage
+            dist/linux/${{ matrix.target }}/*.deb
+            dist/linux/${{ matrix.target }}/*.rpm
+            dist/linux/${{ matrix.target }}/*.yml
+
+  headless:
+    needs: compliance
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: release-headless
+      - name: Build static headless daemons
+        run: |
+          sudo apt-get update && sudo apt-get install -y musl-tools
+          rustup target add x86_64-unknown-linux-musl
+          scripts/build-headless.sh x86_64-unknown-linux-musl
+          cargo install cross --locked
+          scripts/build-headless.sh aarch64-unknown-linux-musl || true
+      - uses: actions/upload-artifact@v4
+        with:
+          name: headless
+          path: dist/headless/
+
+  publish:
+    # workflow_dispatch runs stop here: artifacts exist, no release created.
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [macos, windows, linux, headless]
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+      - name: Generate checksums
+        run: |
+          cd artifacts
+          find . -type f ! -name 'SHA256SUMS' -exec shasum -a 256 {} \; > SHA256SUMS
+          cat SHA256SUMS
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          draft: true   # a human sanity-checks artifacts before publishing
+          files: |
+            artifacts/**/*
