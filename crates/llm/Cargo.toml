@@ -1,0 +1,23 @@
+[package]
+name = "llm"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Local LLM freeform text transformation: Transformer trait, guardrails, sanitation, model manager"
+
+[features]
+default = []
+# The real llama.cpp backend is opt-in because it compiles llama.cpp from
+# source (minutes of build time) and is useless without a downloaded model.
+# CI and `cargo test` exercise everything else through MockTransformer.
+llama = ["dep:llama-cpp-2"]
+
+[dependencies]
+sha2 = "0.10"
+thiserror = "2"
+ureq = "2"
+llama-cpp-2 = { version = "0.1.152", optional = true, features = ["metal"] }
+
+[[example]]
+name = "bench_freeform"
+required-features = ["llama"]
