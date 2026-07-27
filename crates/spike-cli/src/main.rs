@@ -12,6 +12,7 @@
 //!   spike-cli replace <text>     rewrite the selection (or field) in place
 //!   spike-cli edit <command>     interpret a spoken edit and apply it in place
 //!   spike-cli dry-run <command>  interpret an edit against sample text, no AX needed
+//!   spike-cli inspect <app>      scan a named application for text fields
 //!   spike-cli matrix             guided pass over the M0 target applications
 
 use std::time::{Duration, Instant};
@@ -65,6 +66,7 @@ fn main() {
         "replace" => cmd_replace(&args[1..].join(" ")),
         "edit" => cmd_edit(&args[1..].join(" ")),
         "dry-run" => cmd_dry_run(&args[1..].join(" ")),
+        "inspect" => cmd_inspect(&args[1..].join(" ")),
         "matrix" => cmd_matrix(),
         "help" | "--help" | "-h" => {
             print_help();
@@ -133,6 +135,7 @@ fn print_help() {
          \x20 replace <text>       Replace the selection, or the whole field, with <text>\n\
          \x20 edit <command>       Interpret a spoken edit command and apply it in place\n\
          \x20 dry-run <command>    Interpret an edit command against sample text, no permission needed\n\
+         \x20 inspect <app>        Scan a named application for text fields, even if not frontmost\n\
          \x20 matrix               Print the guided M0 application test matrix\n\
          \n\
          OPTIONS\n\
@@ -196,7 +199,7 @@ fn cmd_watch(interval_ms: u64) -> i32 {
             Ok(snapshot) => format!(
                 "{:<14} app={:<34} strategy={:<20} chars={:<6} sel={}",
                 snapshot.role,
-                ax_edit::frontmost_app().unwrap_or_else(|| "?".into()),
+                snapshot.app.as_deref().unwrap_or("?"),
                 snapshot.strategy().to_string(),
                 snapshot.value.as_deref().map(str::len).unwrap_or(0),
                 snapshot
@@ -404,6 +407,88 @@ fn describe(intent: &EditIntent) -> String {
     }
 }
 
+/// Walk a named application's accessibility tree and report its text fields.
+///
+/// The focus-based commands can only describe the application the user is
+/// currently in, which makes an application on another Space or behind other
+/// windows impossible to check. More importantly, they cannot distinguish
+/// "this application exposes nothing editable" from "the user simply had
+/// nothing focused" - and that distinction is the entire question the M0
+/// matrix is trying to answer.
+fn cmd_inspect(app_name: &str) -> i32 {
+    if app_name.is_empty() {
+        eprintln!("inspect requires an application name, e.g. `inspect Safari`");
+        return 2;
+    }
+    if !require_trust() {
+        return 1;
+    }
+
+    let started = Instant::now();
+    match ax_edit::find_text_fields(app_name, 18) {
+        Ok(scan) if scan.fields.is_empty() && scan.windows == 0 => {
+            // Zero windows is not evidence about accessibility support. The
+            // window server hides windows that live on another Space, so
+            // saying "exposes nothing" here would be an unsupported claim.
+            println!("{app_name}: no windows visible to the scan");
+            println!(
+                "the application may be on another Space; this says nothing about \
+                 its accessibility support"
+            );
+            0
+        }
+        Ok(scan) if scan.fields.is_empty() => {
+            println!(
+                "{app_name}: {} window(s), no text fields exposed",
+                scan.windows
+            );
+            println!(
+                "this application needs the {} fallback",
+                RewriteStrategy::ClipboardPaste
+            );
+            0
+        }
+        Ok(scan) => {
+            let fields = scan.fields;
+            println!(
+                "{app_name}: {} window(s), {} text field(s), scanned in {:.0}ms\n",
+                scan.windows,
+                fields.len(),
+                started.elapsed().as_secs_f64() * 1000.0
+            );
+            for field in fields.iter().take(20) {
+                let path = field
+                    .path
+                    .iter()
+                    .map(usize::to_string)
+                    .collect::<Vec<_>>()
+                    .join(".");
+                println!(
+                    "  {:<12} writable={:<5} path={:<22} {:?}",
+                    field.role,
+                    field.settable,
+                    path,
+                    truncate(field.value.as_deref().unwrap_or(""))
+                );
+            }
+            if fields.len() > 20 {
+                println!("  ... and {} more", fields.len() - 20);
+            }
+            let writable = fields.iter().filter(|f| f.settable).count();
+            println!(
+                "\n{writable} of {} field(s) support in-place rewrite",
+                fields.len()
+            );
+            0
+        }
+        Err(err) => {
+            eprintln!("inspect failed: {err}");
+            explain(&err);
+            1
+        }
+    }
+}
+
 fn cmd_matrix() -> i32 {
     println!("M0 accessibility test matrix\n");
     println!("For each application: open it, focus a text field, type a sentence,");
@@ -420,10 +505,7 @@ fn cmd_matrix() -> i32 {
 
 fn report(snapshot: &TextSnapshot, elapsed: Duration) {
     println!("role:      {}", snapshot.role);
-    println!(
-        "app:       {}",
-        ax_edit::frontmost_app().unwrap_or_else(|| "unknown".into())
-    );
+    println!("app:       {}", snapshot.app.as_deref().unwrap_or("unknown"));
     println!(
         "value:     {:?}",
         snapshot.value.as_deref().map(truncate).unwrap_or_default()

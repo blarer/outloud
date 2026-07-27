@@ -1,0 +1,26 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <title>Chromium accessibility test</title>
+  </head>
+  <body style="font: 16px sans-serif; padding: 40px">
+    <h3>Chromium accessibility test</h3>
+    <p>
+      This page exists so the spike can probe a Chromium text field, which is a
+      different accessibility implementation from a native AppKit field.
+    </p>
+    <textarea id="target" rows="4" cols="60">
+the quick brown fox jumps over the lazy dog</textarea
+    >
+    <script>
+      // Focus the field and place the caret at the end, so the probe sees the
+      // same state a user would produce by clicking into it and typing.
+      window.addEventListener("load", () => {
+        const field = document.getElementById("target");
+        field.focus();
+        field.setSelectionRange(field.value.length, field.value.length);
+      });
+    </script>
+  </body>
+</html>

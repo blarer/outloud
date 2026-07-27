@@ -50,6 +50,13 @@ impl std::error::Error for AxError {}
 pub struct TextSnapshot {
     /// Accessibility role, e.g. `AXTextArea` or `AXTextField`.
     pub role: String,
+    /// Name of the application that owns the field.
+    ///
+    /// Captured as part of the same snapshot rather than looked up separately,
+    /// because focus can move between two calls. A report that pairs one
+    /// application's name with another's text is worse than no report at all,
+    /// and destination-aware formatting would act on the wrong rules.
+    pub app: Option<String>,
     /// Full text contents of the field, when the field exposes them.
     pub value: Option<String>,
     /// The currently selected substring, when there is a selection.
@@ -171,6 +178,54 @@ pub fn frontmost_app() -> Option<String> {
     }
 }
 
+/// A text field found somewhere in an application's accessibility tree.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FoundField {
+    /// Accessibility role of the field.
+    pub role: String,
+    /// Path of child indices from the application element, for diagnostics.
+    pub path: Vec<usize>,
+    /// Current contents, truncated by the caller if needed.
+    pub value: Option<String>,
+    /// Whether the field can be rewritten in place.
+    pub settable: bool,
+}
+
+/// Search a named application's accessibility tree for text fields.
+///
+/// Focus-based inspection can only ever describe the application the user is
+/// currently in, which makes it impossible to check an application sitting on
+/// another Space or behind other windows. This walks a named application
+/// directly, so coverage can be verified without choreographing windows.
+///
+/// It is a diagnostic, not part of the dictation path: the real product always
+/// acts on the focused field.
+pub fn find_text_fields(app_name: &str, max_depth: usize) -> Result<ScanResult, AxError> {
+    #[cfg(target_os = "macos")]
+    {
+        macos::find_text_fields(app_name, max_depth)
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = (app_name, max_depth);
+        Err(AxError::Unsupported)
+    }
+}
+
+/// Outcome of scanning one application.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ScanResult {
+    /// Windows the application exposed to the scan.
+    ///
+    /// Reported because zero windows is ambiguous: it can mean the application
+    /// has none, or that all of them are on another Space, which the window
+    /// server hides. Without this number an empty field list reads as "exposes
+    /// nothing editable", which would be the wrong conclusion.
+    pub windows: usize,
+    /// Text fields discovered across those windows.
+    pub fields: Vec<FoundField>,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -178,6 +233,7 @@ mod tests {
     fn snap(value: Option<&str>, selected: Option<&str>) -> TextSnapshot {
         TextSnapshot {
             role: "AXTextArea".into(),
+            app: Some("TestApp".into()),
             value: value.map(str::to_string),
             selected_text: selected.map(str::to_string),
             selection: None,

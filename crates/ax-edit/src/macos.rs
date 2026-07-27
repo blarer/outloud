@@ -16,7 +16,9 @@ use accessibility_sys::{
     AXUIElementRef, AXUIElementSetAttributeValue, AXUIElementSetMessagingTimeout, AXValueGetValue,
     AXValueRef,
 };
+use core_foundation::array::CFArray;
 use core_foundation::base::{CFType, TCFType};
+use core_foundation::boolean::CFBoolean;
 use core_foundation::dictionary::CFDictionary;
 use core_foundation::number::CFNumber;
 use core_foundation::string::CFString;
@@ -24,7 +26,7 @@ use core_foundation_sys::array::CFArrayRef;
 use core_foundation_sys::base::{CFRange, CFRelease, CFTypeRef};
 use libc::pid_t;
 
-use crate::{AxError as Error, RewriteStrategy, TextSnapshot};
+use crate::{AxError as Error, FoundField, RewriteStrategy, ScanResult, TextSnapshot};
 
 /// Owned `AXUIElementRef` that releases on drop.
 ///
@@ -208,46 +210,22 @@ pub fn is_trusted(prompt: bool) -> bool {
 
 /// Resolve the element that currently owns keyboard focus.
 ///
-/// There are two routes to the focused element and they are not equivalent.
+/// The obvious approach, asking `AXUIElementCreateSystemWide()` directly for
+/// `AXFocusedUIElement`, is what most examples show and it does not work: on
+/// current macOS it returns `kAXErrorCannotComplete` even for a fully trusted
+/// process, because that element is served by a separate, stricter path.
 ///
-/// The obvious one, `AXUIElementCreateSystemWide()`, is what most tutorials
-/// show. On current macOS it frequently returns `kAXErrorCannotComplete` even
-/// for a fully trusted process, because the system-wide element is served by a
-/// separate path with its own stricter checks.
-///
-/// The reliable route is to identify the frontmost application, build an
-/// element for *that process*, and ask it for its focused element. This is what
-/// the shipping product must do. The system-wide element is still tried first,
-/// since when it does work it saves a process lookup.
+/// The route that does work is to resolve the focused *application* first and
+/// ask it for its focused element.
 fn focused_element() -> Result<Element, Error> {
-    if let Some(element) = focused_via_system_wide() {
-        return Ok(element);
-    }
-    focused_via_frontmost_app()
-}
-
-/// Configure an element so a hung target cannot block the caller, then return it.
-fn with_timeout(element: Element) -> Element {
-    unsafe { AXUIElementSetMessagingTimeout(element.0, MESSAGING_TIMEOUT_SECS) };
-    element
-}
-
-fn focused_via_system_wide() -> Option<Element> {
-    let system = Element(unsafe { AXUIElementCreateSystemWide() });
-    if system.0.is_null() {
-        return None;
-    }
-    let system = with_timeout(system);
-    copy_element_attribute(system.0, kAXFocusedUIElementAttribute)
-        .ok()
-        .flatten()
-}
-
-fn focused_via_frontmost_app() -> Result<Element, Error> {
     let app = frontmost_app_element().ok_or(Error::NoFocusedElement)?;
+    focused_in(&app)
+}
 
+/// Ask a specific application for the element that holds keyboard focus.
+fn focused_in(app: &Element) -> Result<Element, Error> {
     match copy_element_attribute(app.0, kAXFocusedUIElementAttribute) {
-        Ok(Some(element)) => Ok(element),
+        Ok(Some(element)) => Ok(with_timeout(element)),
         // The application answered but reports nothing focused, which is a real
         // state (an app showing only a toolbar, for instance).
         Ok(None) => Err(Error::NoFocusedElement),
@@ -256,6 +234,35 @@ fn focused_via_frontmost_app() -> Result<Element, Error> {
         // failure.
         Err(Error::NotTrusted) if !unsafe { AXIsProcessTrusted() } => Err(Error::NotTrusted),
         Err(other) => Err(other),
+    }
+}
+
+/// Configure an element so a hung target cannot block the caller, then return it.
+fn with_timeout(element: Element) -> Element {
+    unsafe { AXUIElementSetMessagingTimeout(element.0, MESSAGING_TIMEOUT_SECS) };
+    element
+}
+
+/// Ask a Chromium- or Electron-based application to expose its accessibility
+/// tree.
+///
+/// Chromium keeps its full accessibility tree switched off by default, because
+/// building it is expensive and most processes never need it. It turns the tree
+/// on when an assistive technology sets the private `AXManualAccessibility`
+/// attribute on the application element.
+///
+/// Without this, every Chromium-derived application (Chrome, Edge, VS Code,
+/// Slack, Discord, Notion, Spotify, and much of the desktop) reports no text
+/// fields at all, which would wrongly appear to be a limitation of the
+/// accessibility API rather than an opt-in that was never requested.
+///
+/// Failure is deliberately ignored: native applications have no such attribute
+/// and will simply refuse, which is not an error.
+fn enable_chromium_accessibility(app: AXUIElementRef) {
+    let key = CFString::new("AXManualAccessibility");
+    let value = CFBoolean::true_value();
+    unsafe {
+        AXUIElementSetAttributeValue(app, key.as_concrete_TypeRef(), value.as_CFTypeRef());
     }
 }
 
@@ -277,7 +284,9 @@ fn frontmost_app_element() -> Option<Element> {
     if !system.0.is_null() {
         let system = with_timeout(system);
         if let Ok(Some(app)) = copy_element_attribute(system.0, kAXFocusedApplicationAttribute) {
-            return Some(with_timeout(app));
+            let app = with_timeout(app);
+            enable_chromium_accessibility(app.0);
+            return Some(app);
         }
     }
 
@@ -286,7 +295,9 @@ fn frontmost_app_element() -> Option<Element> {
     if app.0.is_null() {
         return None;
     }
-    Some(with_timeout(app))
+    let app = with_timeout(app);
+    enable_chromium_accessibility(app.0);
+    Some(app)
 }
 
 /// Process id of the frontmost application.
@@ -350,7 +361,14 @@ extern "C" {
 }
 
 pub fn snapshot_focused() -> Result<TextSnapshot, Error> {
-    let focused = focused_element()?;
+    // Resolve the application once, then read both its name and its focused
+    // field from that same element. Looking them up independently allows focus
+    // to move in between, which yields a snapshot that describes two different
+    // applications at once.
+    let app_element = frontmost_app_element().ok_or(Error::NoFocusedElement)?;
+    let app = app_title(&app_element);
+
+    let focused = focused_in(&app_element)?;
     let el = focused.0;
 
     let role = copy_string_attribute(el, kAXRoleAttribute)?.unwrap_or_else(|| "unknown".into());
@@ -367,6 +385,7 @@ pub fn snapshot_focused() -> Result<TextSnapshot, Error> {
 
     Ok(TextSnapshot {
         role,
+        app,
         value,
         selected_text,
         selection,
@@ -409,9 +428,131 @@ pub fn frontmost_app() -> Option<String> {
     // preferable for keying formatting rules, but obtaining one requires
     // AppKit; the title is sufficient for the spike and the lookup can be
     // upgraded later without changing this signature.
+    //
+    // Prefer `TextSnapshot::app` where a snapshot is already in hand: it is
+    // captured atomically with the field, whereas this call can race focus.
     let app = frontmost_app_element()?;
+    app_title(&app)
+}
+
+/// Accessibility title of an application element, when it has a usable one.
+fn app_title(app: &Element) -> Option<String> {
     copy_string_attribute(app.0, accessibility_sys::kAXTitleAttribute)
         .ok()
         .flatten()
         .filter(|title| !title.is_empty())
+}
+
+/// Walk a named application's accessibility tree and collect its text fields.
+///
+/// Used to verify coverage in applications that cannot easily be brought to the
+/// front, and to answer the question "does this application expose anything we
+/// can edit at all", which is otherwise indistinguishable from "the user had
+/// nothing focused".
+///
+/// One limitation is worth knowing: `AXWindows` reports no windows for an
+/// application whose windows all live on another Space. That is a property of
+/// the window server, not of this code, and it does not affect the product,
+/// which only ever acts on the focused application on the current Space. It
+/// does mean an empty result here can mean either "exposes nothing" or "is
+/// elsewhere", so the caller reports the window count alongside.
+pub fn find_text_fields(app_name: &str, max_depth: usize) -> Result<ScanResult, Error> {
+    let pid = pid_for_app_named(app_name).ok_or(Error::NoFocusedElement)?;
+    let app = Element(unsafe { AXUIElementCreateApplication(pid) });
+    if app.0.is_null() {
+        return Err(Error::NoFocusedElement);
+    }
+    let app = with_timeout(app);
+
+    // Chromium-derived applications expose nothing until asked, and the tree
+    // takes a moment to be built once they are.
+    enable_chromium_accessibility(app.0);
+    std::thread::sleep(std::time::Duration::from_millis(400));
+
+    // An application's windows are reached through `AXWindows`, not through
+    // `AXChildren`: the child list of an application element holds its menu
+    // bar. Walking children alone therefore finds nothing but menus, which is
+    // both useless and slow.
+    let mut fields = Vec::new();
+    let mut window_count = 0;
+    if let Some(windows) = copy_attribute(app.0, accessibility_sys::kAXWindowsAttribute)? {
+        let windows: CFArray<CFType> =
+            unsafe { CFArray::wrap_under_get_rule(windows.0 as CFArrayRef) };
+        window_count = windows.len() as usize;
+        for (index, window) in windows.iter().enumerate() {
+            let mut path = vec![index];
+            let window_ref = window.as_CFTypeRef() as AXUIElementRef;
+            collect_text_fields(window_ref, &mut path, 0, max_depth, &mut fields)?;
+        }
+    }
+    Ok(ScanResult {
+        windows: window_count,
+        fields,
+    })
+}
+
+fn collect_text_fields(
+    element: AXUIElementRef,
+    path: &mut Vec<usize>,
+    depth: usize,
+    max_depth: usize,
+    out: &mut Vec<FoundField>,
+) -> Result<(), Error> {
+    if depth > max_depth {
+        return Ok(());
+    }
+
+    let role = copy_string_attribute(element, kAXRoleAttribute)
+        .ok()
+        .flatten()
+        .unwrap_or_default();
+
+    if role == "AXTextArea" || role == "AXTextField" {
+        out.push(FoundField {
+            role: role.clone(),
+            path: path.clone(),
+            value: copy_string_attribute(element, kAXValueAttribute).ok().flatten(),
+            settable: is_settable(element, kAXValueAttribute)
+                || is_settable(element, kAXSelectedTextAttribute),
+        });
+        // A text field's descendants are its own internals, never further
+        // fields, so there is nothing to gain by descending into it.
+        return Ok(());
+    }
+
+    // Menus can hold thousands of elements and never contain an editable
+    // field, so skipping them keeps a scan fast enough to be interactive.
+    if role.starts_with("AXMenu") {
+        return Ok(());
+    }
+
+    let Some(children) = copy_attribute(element, accessibility_sys::kAXChildrenAttribute)? else {
+        return Ok(());
+    };
+    let children: CFArray<CFType> = unsafe { CFArray::wrap_under_get_rule(children.0 as CFArrayRef) };
+
+    for (index, child) in children.iter().enumerate() {
+        path.push(index);
+        let child_ref = child.as_CFTypeRef() as AXUIElementRef;
+        collect_text_fields(child_ref, path, depth + 1, max_depth, out)?;
+        path.pop();
+    }
+    Ok(())
+}
+
+/// Process id of a running application, found by its accessibility title.
+///
+/// Walking the window list finds only applications with on-screen windows,
+/// which is exactly the limitation this diagnostic exists to work around, so
+/// the process list is consulted instead.
+fn pid_for_app_named(name: &str) -> Option<pid_t> {
+    let output = std::process::Command::new("pgrep")
+        .arg("-f")
+        .arg(format!("{name}.app/Contents/MacOS/"))
+        .output()
+        .ok()?;
+    String::from_utf8_lossy(&output.stdout)
+        .lines()
+        .filter_map(|line| line.trim().parse::<pid_t>().ok())
+        .next()
 }
