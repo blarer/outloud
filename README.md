@@ -29,12 +29,31 @@ product thesis is wrong and it is much better to learn that in week one.
 |---|---|
 | `ax-edit` | Read and rewrite the focused text field via the macOS Accessibility API |
 | `edit-intent` | Turn a spoken phrase into a deterministic text transformation |
-| `spike-cli` | Harness that exercises both and measures the result |
+| `text-target` | Choose and drive a transport for any destination: accessibility, input method, synthetic keys, clipboard, terminal-native, or headless |
+| `diag` | Diagnose the environment and name the next action; ships the `doctor` binary |
+| `spike-cli` | Harness that exercises all of the above and measures the result |
 
 The split is deliberate. `edit-intent` has no operating-system dependency, so it
 runs and is tested anywhere, including CI. `ax-edit` isolates all the unsafe FFI
 behind a small safe surface and returns `Unsupported` off macOS, so the Windows
-and Linux backends can be added later without disturbing callers.
+and Linux backends can be added later without disturbing callers. `text-target`
+keeps transport selection a pure function of an `Env` trait, so every branch is
+unit tested rather than only reachable on the machine that happens to have that
+software installed.
+
+## Documentation
+
+| Document | Read it when |
+|---|---|
+| `docs/M0-results.md` | You want the measured result and what it cost to get |
+| `docs/macos-permissions.md` | Anything permission-shaped is behaving strangely |
+| `docs/debugging.md` | Something works in one application and not another |
+| `docs/compat-matrix.md` | You need to know what a given destination supports |
+| `docs/signing-runbook.md` | You are setting up certificates, or wondering why grants keep dying |
+| `docs/build-and-release.md` | You are changing how anything is built or shipped |
+| `docs/ux/` | You are designing or implementing user-facing behaviour |
+| `docs/planning/` | You are picking up work or planning a milestone |
+| `CONTRIBUTING.md` | You are about to write code here |
 
 ## Design decisions worth knowing
 
@@ -70,8 +89,34 @@ BIN=dist/AquaSpike.app/Contents/MacOS/AquaSpike
 $BIN probe                          # read the focused field right now
 $BIN watch 500                      # poll it while you tab between applications
 $BIN edit "change hello to goodbye" # full read-interpret-apply-write pipeline
+$BIN target                         # which transport this environment resolves to, and why
+$BIN inspect Safari                 # scan a named application for text fields
 $BIN matrix                         # the guided application test checklist
 ```
+
+When anything behaves unexpectedly, run the doctor first. It reports the
+environmental traps that account for nearly every confusing failure here, and
+each finding names the exact next action:
+
+```bash
+./scripts/doctor.sh
+```
+
+## Headless builds
+
+The terminal and headless transports are the differentiator: no competing
+product edits text over SSH, and no open-source tool does edit-by-voice at all.
+They are also a build-time contract rather than a runtime hope.
+
+```bash
+cargo build --no-default-features --features headless   # no display libraries
+./scripts/build-headless.sh                             # builds and verifies it
+```
+
+The `display` feature gates the accessibility, input-method, synthetic-key, and
+clipboard tiers. Building without it drops those dependencies entirely, so a GUI
+library reaching the default feature set becomes a compile error here rather
+than a runtime crash on a server with no display stack.
 
 The intent parser needs no permission at all:
 
