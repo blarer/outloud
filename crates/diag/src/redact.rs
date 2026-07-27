@@ -87,7 +87,12 @@ pub fn bundle_with_identity(reports: &[Report], home: &str, user: &str) -> Strin
     // so triage does not have to.
     let bug_worthy = reports
         .iter()
-        .filter(|r| r.outcome.class.map(|c| c.worth_a_github_issue()).unwrap_or(false))
+        .filter(|r| {
+            r.outcome
+                .class
+                .map(|c| c.worth_a_github_issue())
+                .unwrap_or(false)
+        })
         .count();
     out.push_str(&format!(
         "bug-class failures: {bug_worthy} (only these belong in a GitHub issue)\n\n"
@@ -145,7 +150,10 @@ mod tests {
 
     #[test]
     fn non_home_path_keeps_only_last_component() {
-        assert_eq!(redact_path("/tmp/secret-dir/log.txt", "/Users/jane"), "…/log.txt");
+        assert_eq!(
+            redact_path("/tmp/secret-dir/log.txt", "/Users/jane"),
+            "…/log.txt"
+        );
         assert_eq!(redact_path("plainfile", "/Users/jane"), "plainfile");
     }
 

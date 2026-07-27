@@ -134,7 +134,10 @@ fn parse_case(lower: &str) -> Option<Case> {
 /// string and is vastly better than panicking on a byte boundary.
 fn slice_original(original: &str, start: usize, end: usize) -> String {
     let lower = original.to_lowercase();
-    if lower.len() == original.len() && original.is_char_boundary(start) && original.is_char_boundary(end) {
+    if lower.len() == original.len()
+        && original.is_char_boundary(start)
+        && original.is_char_boundary(end)
+    {
         return original[start..end].to_string();
     }
     lower
@@ -221,10 +224,7 @@ fn collapse_spaces(text: &str) -> String {
         last_was_space = is_space;
     }
     // Removing a trailing word leaves a dangling space before punctuation.
-    out.replace(" ,", ",")
-        .replace(" .", ".")
-        .trim()
-        .to_string()
+    out.replace(" ,", ",").replace(" .", ".").trim().to_string()
 }
 
 fn recase(text: &str, case: Case) -> String {

@@ -19,7 +19,9 @@ use diag::{run_all, Env, Status};
 fn main() {
     // Same log-mirroring contract as spike-cli: a LaunchServices launch has
     // no terminal, so the wrapper script tails this file instead.
-    let log = std::env::var("AQUA_SPIKE_LOG").ok().and_then(|p| std::fs::File::create(p).ok());
+    let log = std::env::var("AQUA_SPIKE_LOG")
+        .ok()
+        .and_then(|p| std::fs::File::create(p).ok());
     let mut sink = MultiSink { log };
 
     let args: Vec<String> = std::env::args().skip(1).collect();
@@ -33,7 +35,12 @@ fn main() {
     writeln!(sink, "aqua-oss doctor\n").ok();
     for r in &reports {
         worst = worst.max(r.outcome.status);
-        writeln!(sink, "[{}] {:<26} {}", r.outcome.status, r.name, r.outcome.detail).ok();
+        writeln!(
+            sink,
+            "[{}] {:<26} {}",
+            r.outcome.status, r.name, r.outcome.detail
+        )
+        .ok();
         if let (Some(class), Some(remedy)) = (&r.outcome.class, &r.outcome.remedy) {
             writeln!(sink, "       class:  {class}").ok();
             writeln!(sink, "       remedy: {remedy}").ok();
@@ -42,7 +49,12 @@ fn main() {
 
     let bug_count = reports
         .iter()
-        .filter(|r| r.outcome.class.map(|c| c.worth_a_github_issue()).unwrap_or(false))
+        .filter(|r| {
+            r.outcome
+                .class
+                .map(|c| c.worth_a_github_issue())
+                .unwrap_or(false)
+        })
         .count();
     writeln!(
         sink,
@@ -55,7 +67,12 @@ fn main() {
     }
 
     if want_report {
-        writeln!(sink, "\n----- pasteable redacted report -----\n{}", diag::redact::bundle(&reports)).ok();
+        writeln!(
+            sink,
+            "\n----- pasteable redacted report -----\n{}",
+            diag::redact::bundle(&reports)
+        )
+        .ok();
     }
 
     // Marker consumed by scripts/doctor.sh so a detached launch still yields
@@ -93,7 +110,11 @@ fn bench(sink: &mut MultiSink) {
     }
     writeln!(sink, "\nbench ({ITERATIONS} focused-field reads):").ok();
     for s in rec.summary() {
-        let flag = if s.over_budget(READ_BUDGET) { "  <-- OVER BUDGET" } else { "" };
+        let flag = if s.over_budget(READ_BUDGET) {
+            "  <-- OVER BUDGET"
+        } else {
+            ""
+        };
         writeln!(sink, "  {}{}", s.render(), flag).ok();
     }
     if rec.summary().is_empty() {

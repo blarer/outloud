@@ -8,11 +8,11 @@
 use std::ffi::c_void;
 
 use accessibility_sys::{
-    kAXErrorSuccess, kAXFocusedApplicationAttribute, kAXFocusedUIElementAttribute, kAXNumberOfCharactersAttribute,
-    kAXRoleAttribute, kAXSelectedTextAttribute, kAXSelectedTextRangeAttribute, kAXValueAttribute,
-    kAXValueTypeCFRange, AXError, AXIsProcessTrusted, AXIsProcessTrustedWithOptions,
-    AXUIElementCopyAttributeValue, AXUIElementCreateApplication, AXUIElementCreateSystemWide,
-    AXUIElementIsAttributeSettable,
+    kAXErrorSuccess, kAXFocusedApplicationAttribute, kAXFocusedUIElementAttribute,
+    kAXNumberOfCharactersAttribute, kAXRoleAttribute, kAXSelectedTextAttribute,
+    kAXSelectedTextRangeAttribute, kAXValueAttribute, kAXValueTypeCFRange, AXError,
+    AXIsProcessTrusted, AXIsProcessTrustedWithOptions, AXUIElementCopyAttributeValue,
+    AXUIElementCreateApplication, AXUIElementCreateSystemWide, AXUIElementIsAttributeSettable,
     AXUIElementRef, AXUIElementSetAttributeValue, AXUIElementSetMessagingTimeout, AXValueGetValue,
     AXValueRef,
 };
@@ -511,7 +511,9 @@ fn collect_text_fields(
         out.push(FoundField {
             role: role.clone(),
             path: path.clone(),
-            value: copy_string_attribute(element, kAXValueAttribute).ok().flatten(),
+            value: copy_string_attribute(element, kAXValueAttribute)
+                .ok()
+                .flatten(),
             settable: is_settable(element, kAXValueAttribute)
                 || is_settable(element, kAXSelectedTextAttribute),
         });
@@ -529,7 +531,8 @@ fn collect_text_fields(
     let Some(children) = copy_attribute(element, accessibility_sys::kAXChildrenAttribute)? else {
         return Ok(());
     };
-    let children: CFArray<CFType> = unsafe { CFArray::wrap_under_get_rule(children.0 as CFArrayRef) };
+    let children: CFArray<CFType> =
+        unsafe { CFArray::wrap_under_get_rule(children.0 as CFArrayRef) };
 
     for (index, child) in children.iter().enumerate() {
         path.push(index);

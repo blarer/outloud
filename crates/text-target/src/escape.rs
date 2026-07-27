@@ -109,9 +109,7 @@ mod tests {
         assert!(out.starts_with(b"\x1bPtmux;"));
         assert!(out.ends_with(b"\x1b\\"));
         // The inner sequence's single ESC must appear doubled.
-        assert!(out
-            .windows(2)
-            .any(|w| w == [0x1b, 0x1b]));
+        assert!(out.windows(2).any(|w| w == [0x1b, 0x1b]));
     }
 
     #[test]

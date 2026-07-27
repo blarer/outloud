@@ -113,11 +113,7 @@ impl ClipboardTarget {
     }
 
     fn set_clipboard(&self, text: &str) -> Result<(), TargetError> {
-        let mut child = self
-            .backend
-            .copy_cmd()
-            .stdin(Stdio::piped())
-            .spawn()?;
+        let mut child = self.backend.copy_cmd().stdin(Stdio::piped()).spawn()?;
         child
             .stdin
             .as_mut()

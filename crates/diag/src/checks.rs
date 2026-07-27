@@ -310,8 +310,10 @@ impl Check for WindowVisibility {
         // Depth 1 is enough: we only need the window count, not the fields.
         match ax_edit::find_text_fields(&app, 1) {
             Ok(scan) if scan.windows == 0 => CheckOutcome::warn(
-                format!("frontmost app ({app}) reports ZERO windows: they are likely on \
-                         another Space, which the window server hides"),
+                format!(
+                    "frontmost app ({app}) reports ZERO windows: they are likely on \
+                         another Space, which the window server hides"
+                ),
                 ErrorClass::Environment,
                 "move one of the app's windows to the current Space (or Mission Control > \
                  drag it here) and re-run doctor",
@@ -355,8 +357,10 @@ impl Check for ChromiumOptIn {
         }
         if !ax_edit::is_trusted(false) {
             return CheckOutcome::warn(
-                format!("Chromium apps running ({}) but no trust to probe them",
-                        chromium_running.join(", ")),
+                format!(
+                    "Chromium apps running ({}) but no trust to probe them",
+                    chromium_running.join(", ")
+                ),
                 ErrorClass::Permission,
                 "fix accessibility-permission first; the AXManualAccessibility opt-in needs it",
             );
@@ -374,8 +378,10 @@ impl Check for ChromiumOptIn {
             }
         }
         CheckOutcome::warn(
-            format!("Chromium app(s) running ({}) but exposing no tree",
-                    chromium_running.join(", ")),
+            format!(
+                "Chromium app(s) running ({}) but exposing no tree",
+                chromium_running.join(", ")
+            ),
             ErrorClass::Configuration,
             "the client must set AXManualAccessibility=true on the app element before reading \
              it (ax-edit does this in find_text_fields); if windows are still zero, check they \
@@ -506,12 +512,17 @@ pub fn detect_terminal(env: &Env) -> Option<TerminalInfo> {
         name.push_str(" (over SSH)");
     } else if env.get("TMUX").is_some() {
         name.push_str(" (inside tmux)");
-        caveat = Some("tmux intercepts paste; enable bracketed paste or use `tmux load-buffer`".into());
+        caveat =
+            Some("tmux intercepts paste; enable bracketed paste or use `tmux load-buffer`".into());
     } else if env.get("STY").is_some() {
         name.push_str(" (inside GNU screen)");
         caveat = Some("screen intercepts paste; injection may need `screen -X paste`".into());
     }
-    Some(TerminalInfo { name, injectable, caveat })
+    Some(TerminalInfo {
+        name,
+        injectable,
+        caveat,
+    })
 }
 
 pub struct TerminalEmulator;
@@ -927,7 +938,10 @@ mod tests {
 
     #[test]
     fn macos_is_aqua_unless_ssh() {
-        assert_eq!(detect_display(&Env::from_pairs(&[]), true), DisplayKind::MacOsAqua);
+        assert_eq!(
+            detect_display(&Env::from_pairs(&[]), true),
+            DisplayKind::MacOsAqua
+        );
         assert_eq!(
             detect_display(&Env::from_pairs(&[("SSH_TTY", "/dev/ttys0")]), true),
             DisplayKind::HeadlessOrSsh

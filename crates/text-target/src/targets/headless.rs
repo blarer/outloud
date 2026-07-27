@@ -145,7 +145,8 @@ impl<R: BufRead, W: Write> TextTarget for StdioFilterTarget<R, W> {
     }
 
     fn insert(&mut self, text: &str) -> Result<(), TargetError> {
-        self.output.write_all(frame("INSERT", Some(text)).as_bytes())?;
+        self.output
+            .write_all(frame("INSERT", Some(text)).as_bytes())?;
         self.output.flush()?;
         Ok(())
     }

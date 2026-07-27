@@ -54,7 +54,10 @@ impl Recorder {
     }
 
     pub fn start(&self, stage: Stage) -> Span {
-        Span { stage, started: Instant::now() }
+        Span {
+            stage,
+            started: Instant::now(),
+        }
     }
 
     pub fn finish(&mut self, span: Span) -> Duration {

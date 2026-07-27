@@ -115,7 +115,12 @@ pub struct CheckOutcome {
 
 impl CheckOutcome {
     pub fn pass(detail: impl Into<String>) -> Self {
-        CheckOutcome { status: Status::Pass, detail: detail.into(), remedy: None, class: None }
+        CheckOutcome {
+            status: Status::Pass,
+            detail: detail.into(),
+            remedy: None,
+            class: None,
+        }
     }
     pub fn warn(detail: impl Into<String>, class: ErrorClass, remedy: impl Into<String>) -> Self {
         CheckOutcome {
@@ -146,7 +151,9 @@ pub struct Env {
 impl Env {
     /// Snapshot the real process environment.
     pub fn capture() -> Self {
-        Env { vars: std::env::vars().collect() }
+        Env {
+            vars: std::env::vars().collect(),
+        }
     }
 
     pub fn get(&self, key: &str) -> Option<&str> {
@@ -155,7 +162,12 @@ impl Env {
 
     #[cfg(test)]
     pub fn from_pairs(pairs: &[(&str, &str)]) -> Self {
-        Env { vars: pairs.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect() }
+        Env {
+            vars: pairs
+                .iter()
+                .map(|(k, v)| (k.to_string(), v.to_string()))
+                .collect(),
+        }
     }
 }
 
@@ -200,7 +212,10 @@ pub fn registry() -> Vec<Box<dyn Check>> {
 pub fn run_all(env: &Env) -> Vec<Report> {
     registry()
         .iter()
-        .map(|c| Report { name: c.name(), outcome: c.run(env) })
+        .map(|c| Report {
+            name: c.name(),
+            outcome: c.run(env),
+        })
         .collect()
 }
 
@@ -220,7 +235,10 @@ mod tests {
     fn ax_errors_classify_sanely() {
         use ax_edit::AxError::*;
         assert_eq!(classify_ax_error(&NotTrusted), ErrorClass::Permission);
-        assert_eq!(classify_ax_error(&NoFocusedElement), ErrorClass::Environment);
+        assert_eq!(
+            classify_ax_error(&NoFocusedElement),
+            ErrorClass::Environment
+        );
         assert_eq!(classify_ax_error(&NotSettable), ErrorClass::Environment);
         assert_eq!(classify_ax_error(&Unsupported), ErrorClass::Environment);
         // A raw code escaping ax-edit's translation means our mapping missed

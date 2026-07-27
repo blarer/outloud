@@ -25,7 +25,10 @@ use edit_intent::{apply as apply_intent, parse as parse_intent, EditIntent};
 /// Electron, a browser, a terminal, and a native chat client.
 const M0_TARGETS: &[(&str, &str)] = &[
     ("TextEdit", "native AppKit text system, the easy baseline"),
-    ("Visual Studio Code", "Electron, historically the worst case"),
+    (
+        "Visual Studio Code",
+        "Electron, historically the worst case",
+    ),
     ("Safari", "web content, contenteditable and form fields"),
     ("Terminal", "terminal emulator, expected read-only"),
     ("Slack", "Electron chat, the highest-traffic real target"),
@@ -211,7 +214,10 @@ fn cmd_watch(interval_ms: u64) -> i32 {
         };
         // Only print on change so a long session stays readable.
         if line != last {
-            println!("[{:>6.1}ms] {line}", started.elapsed().as_secs_f64() * 1000.0);
+            println!(
+                "[{:>6.1}ms] {line}",
+                started.elapsed().as_secs_f64() * 1000.0
+            );
             last = line;
         }
         std::thread::sleep(Duration::from_millis(interval_ms));
@@ -239,7 +245,14 @@ fn cmd_replace(replacement: &str) -> i32 {
     };
 
     println!("before: {:?}", truncate(before.edit_target().unwrap_or("")));
-    println!("scope:  {}", if before.is_selection_edit() { "selection" } else { "whole field" });
+    println!(
+        "scope:  {}",
+        if before.is_selection_edit() {
+            "selection"
+        } else {
+            "whole field"
+        }
+    );
 
     let started = Instant::now();
     match ax_edit::replace_focused(replacement) {
@@ -260,7 +273,14 @@ fn cmd_replace(replacement: &str) -> i32 {
                         .as_deref()
                         .map(|v| v.contains(replacement))
                         .unwrap_or(false);
-                    println!("verify: {}", if landed { "PASS" } else { "FAIL (write did not land)" });
+                    println!(
+                        "verify: {}",
+                        if landed {
+                            "PASS"
+                        } else {
+                            "FAIL (write did not land)"
+                        }
+                    );
                     if landed {
                         0
                     } else {
@@ -324,7 +344,14 @@ fn cmd_edit(utterance: &str) -> i32 {
 
     println!("heard:   {utterance:?}");
     println!("intent:  {}", describe(&intent));
-    println!("scope:   {}", if snapshot.is_selection_edit() { "selection" } else { "whole field" });
+    println!(
+        "scope:   {}",
+        if snapshot.is_selection_edit() {
+            "selection"
+        } else {
+            "whole field"
+        }
+    );
     println!("before:  {:?}", truncate(target));
 
     let apply_started = Instant::now();
@@ -505,7 +532,10 @@ fn cmd_matrix() -> i32 {
 
 fn report(snapshot: &TextSnapshot, elapsed: Duration) {
     println!("role:      {}", snapshot.role);
-    println!("app:       {}", snapshot.app.as_deref().unwrap_or("unknown"));
+    println!(
+        "app:       {}",
+        snapshot.app.as_deref().unwrap_or("unknown")
+    );
     println!(
         "value:     {:?}",
         snapshot.value.as_deref().map(truncate).unwrap_or_default()
@@ -571,7 +601,10 @@ mod tests {
     #[test]
     fn take_flag_value_extracts_and_strips() {
         let mut args = vec!["edit".into(), "--after".into(), "3".into(), "hello".into()];
-        assert_eq!(super::take_flag_value(&mut args, "--after"), Some("3".into()));
+        assert_eq!(
+            super::take_flag_value(&mut args, "--after"),
+            Some("3".into())
+        );
         assert_eq!(args, vec!["edit".to_string(), "hello".to_string()]);
     }
 
