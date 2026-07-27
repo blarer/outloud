@@ -1,0 +1,20 @@
+[package]
+name = "config"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+# Internal workspace crate: never published to crates.io. This also lets
+# `cargo deny` treat path dependencies as first-party rather than as
+# unversioned wildcards.
+publish = false
+description = "Layered TOML configuration with provenance, per-app profiles, vocabulary correction, hot reload, and migration"
+
+[dependencies]
+# toml_edit rather than toml because rewriting the user's file must preserve
+# their comments and formatting (docs/ux/05: "one human-readable file ... with
+# the GUI as editor"). A round-trip that destroys comments teaches users the
+# file is not really theirs.
+toml_edit = "0.25"
+# Only for validating the `hotkey` key with the same parser the runtime uses,
+# so "invalid hotkey" errors quote the real grammar instead of a lookalike.
+hotkey = { path = "../hotkey" }
