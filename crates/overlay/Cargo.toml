@@ -1,0 +1,63 @@
+[package]
+name = "overlay"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+# Internal workspace crate: never published to crates.io. This also lets
+# `cargo deny` treat path dependencies as first-party rather than as
+# unversioned wildcards.
+publish = false
+description = "The dictation overlay: a non-activating floating indicator showing live state, audio level, and partial text"
+
+[features]
+# Everything a desktop session can use. Default because that is the common case.
+default = ["display"]
+
+# The actual GUI window. Mirrors the `display` gate in text-target: building
+# without this is a correctness gate for headless machines, not an
+# optimization. A headless server has no AppKit to link against, so the
+# overlay must compile down to the pure state machine and layout math (which
+# the terminal/OSC indicator surfaces still consume) with zero GUI linkage.
+display = [
+    "dep:objc2",
+    "dep:objc2-foundation",
+    "dep:objc2-app-kit",
+    "dep:block2",
+]
+
+[dependencies]
+anyhow.workspace = true
+
+# All GUI dependencies are doubly gated: by target (only macOS has AppKit)
+# and by the `display` feature (headless builds must not link it even on
+# macOS, so `--no-default-features` stays a workspace-wide guarantee).
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2 = { version = "0.6", optional = true }
+objc2-foundation = { version = "0.3", optional = true, features = [
+    "NSDate",
+    "NSDictionary",
+    "NSString",
+    "NSTimer",
+    "NSThread",
+] }
+objc2-app-kit = { version = "0.3", optional = true, features = [
+    "NSApplication",
+    "NSAttributedString",
+    "NSBezierPath",
+    "NSColor",
+    "NSEvent",
+    "NSFont",
+    "NSGraphics",
+    "NSPanel",
+    "NSResponder",
+    "NSRunningApplication",
+    "NSScreen",
+    "NSStringDrawing",
+    "NSView",
+    "NSWindow",
+] }
+block2 = { version = "0.6", optional = true }
+
+[[bin]]
+name = "overlay-demo"
+path = "src/bin/overlay-demo.rs"

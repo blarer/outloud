@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["crates/asr", "crates/audio", "crates/ax-edit", "crates/edit-intent", "crates/spike-cli", "crates/diag", "crates/text-target"]
+members = ["crates/asr", "crates/audio", "crates/ax-edit", "crates/edit-intent", "crates/spike-cli", "crates/diag", "crates/text-target", "crates/overlay"]
 
 [workspace.package]
 version = "0.1.0"
