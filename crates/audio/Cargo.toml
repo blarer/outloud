@@ -10,6 +10,13 @@ default = []
 # Silero VAD via the vad-rs crate (pulls ONNX Runtime). Off by default so CI
 # and contributors without the ~50MB ort download still build and test the
 # whole segmenter state machine, which is VAD-implementation-agnostic.
+#
+# Build notes for `--features silero`:
+# - needs `cmake` on PATH (vad-rs pulls libsamplerate-sys), and old CMakeLists
+#   there may need CMAKE_POLICY_VERSION_MINIMUM=3.5 with cmake 4.x;
+# - Cargo.lock pins ort-sys to 2.0.0-rc.9 to match vad-rs's ort 2.0.0-rc.9;
+#   letting it float to rc.12 breaks the build (ort-sys rc.11+ requires a TLS
+#   feature that ort rc.9 does not forward). Build with --locked.
 silero = ["dep:vad-rs"]
 
 [dependencies]
