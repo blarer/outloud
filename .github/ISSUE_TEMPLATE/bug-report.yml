@@ -1,0 +1,101 @@
+name: Bug report
+description: Something is broken. Requires doctor output; permission bugs are undiagnosable without it.
+title: "[bug]: "
+labels: ["bug", "needs-triage"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Before filing: read the environmental gotchas in CONTRIBUTING.md.
+        Running from a shell instead of via LaunchServices, and rebuilding
+        without re-granting Accessibility, are the two most common
+        false bugs.
+  - type: textarea
+    id: doctor
+    attributes:
+      label: Doctor output
+      description: >-
+        Paste the full output of the `doctor` command (or `spike-cli probe`
+        plus your macOS version and how you launched the binary, if doctor is
+        not yet available in your build). Reports without this will be sent
+        back for it.
+      render: text
+    validations:
+      required: true
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened
+      description: What you did, what you expected, what happened instead.
+      placeholder: |
+        1. Focused the Slack message box
+        2. Ran `edit --after 5 "change hello to goodbye"`
+        3. Expected the text to change; got "accessibility API error -25204"
+    validations:
+      required: true
+  - type: input
+    id: target-app
+    attributes:
+      label: Target application and version
+      description: The application you were dictating or editing into, if applicable.
+      placeholder: "Slack 4.39.95 (Electron)"
+    validations:
+      required: false
+  - type: dropdown
+    id: launch-method
+    attributes:
+      label: How did you launch the binary?
+      description: >-
+        This changes which process macOS checks permissions against.
+      options:
+        - Via scripts/run.sh or `open -a` (LaunchServices)
+        - Directly from a terminal
+        - Installed app (DMG/package)
+        - Other (explain in the description)
+    validations:
+      required: true
+  - type: dropdown
+    id: rebuilt
+    attributes:
+      label: Did you rebuild since last granting Accessibility permission?
+      description: >-
+        Rebuilding under ad-hoc signing silently revokes the grant while the
+        toggle still reads "on".
+      options:
+        - "No"
+        - "Yes, and I reset + re-granted afterwards"
+        - "Yes, and I did not re-grant"
+        - Not applicable / not sure
+    validations:
+      required: true
+  - type: input
+    id: os-version
+    attributes:
+      label: OS and version
+      placeholder: "macOS 15.5 (Apple Silicon)"
+    validations:
+      required: true
+  - type: input
+    id: app-version
+    attributes:
+      label: Project version or commit
+      placeholder: "v0.3.1 or commit bfb4e47"
+    validations:
+      required: true
+  - type: textarea
+    id: timings
+    attributes:
+      label: Timing output (for latency bugs)
+      description: >-
+        If this is a latency report, paste the per-stage timing breakdown the
+        `edit` command prints, ideally for several runs.
+      render: text
+    validations:
+      required: false
+  - type: textarea
+    id: extra
+    attributes:
+      label: Anything else
+      description: Logs, screenshots, clipboard managers or input tools running, unusual setup.
+    validations:
+      required: false

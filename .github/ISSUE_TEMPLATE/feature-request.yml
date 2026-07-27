@@ -1,0 +1,73 @@
+name: Feature request
+description: Propose a capability or improvement.
+title: "[feat]: "
+labels: ["enhancement", "needs-triage"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Check `docs/planning/00-roadmap.md` and `docs/planning/01-backlog.md`
+        first. If your idea matches an existing backlog task, comment there
+        instead of opening a duplicate.
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem
+      description: >-
+        What can you not do today, or what is painful? Describe the situation,
+        not the solution.
+      placeholder: "When dictating into vim inside tmux over SSH, ..."
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed behavior
+      description: What should happen, from the user's point of view.
+    validations:
+      required: true
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area
+      options:
+        - Recognition (ASR, VAD, streaming, vocabulary)
+        - Edit-by-voice (commands, grammar, LLM fallback, undo)
+        - Injection / application compatibility
+        - Terminal / tmux / SSH / headless
+        - Hotkeys / overlay / settings / onboarding
+        - Packaging / install / updates
+        - Docs
+        - Other
+    validations:
+      required: true
+  - type: dropdown
+    id: platform
+    attributes:
+      label: Platform(s)
+      multiple: true
+      options:
+        - macOS
+        - Windows
+        - Linux X11
+        - Linux Wayland
+        - All / not platform-specific
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+      description: >-
+        Workarounds you use today, or other tools that do this (and how).
+    validations:
+      required: false
+  - type: checkboxes
+    id: constraints
+    attributes:
+      label: Constraints acknowledged
+      options:
+        - label: This feature keeps all audio and text on-device (no cloud dependency).
+          required: true
+        - label: I searched existing issues and the backlog for duplicates.
+          required: true

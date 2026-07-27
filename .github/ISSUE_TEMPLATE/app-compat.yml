@@ -1,0 +1,104 @@
+name: Application compatibility report
+description: Report how a specific application behaves with read, write, and in-place edit. These reports build the public support matrix.
+title: "[compat]: "
+labels: ["app-compat", "needs-triage"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Run `matrix` (guided) or `probe` / `edit` against the application and
+        record what you saw. Filling one of these in for an unlisted app is a
+        great first contribution.
+  - type: input
+    id: app
+    attributes:
+      label: Application name and version
+      placeholder: "Obsidian 1.6.7"
+    validations:
+      required: true
+  - type: dropdown
+    id: family
+    attributes:
+      label: Application family
+      description: Which text system does it use? Pick your best guess.
+      options:
+        - Native (AppKit / SwiftUI / Win32 / GTK / Qt)
+        - Electron / Chromium
+        - Browser (page content)
+        - Browser (chrome, e.g. address bar)
+        - Terminal emulator
+        - Java / other cross-platform toolkit
+        - Unknown
+    validations:
+      required: true
+  - type: input
+    id: os
+    attributes:
+      label: OS and version
+      placeholder: "macOS 15.5 (Apple Silicon)"
+    validations:
+      required: true
+  - type: dropdown
+    id: read
+    attributes:
+      label: Read (probe finds the focused field and its text)
+      options:
+        - Works
+        - Partially (found the field, text missing or truncated)
+        - Fails
+        - Not tested
+    validations:
+      required: true
+  - type: dropdown
+    id: write
+    attributes:
+      label: Write (in-place rewrite lands correctly)
+      options:
+        - Works via set-selected-text
+        - Works via set-value
+        - Paste fallback only
+        - Fails entirely
+        - Not tested
+    validations:
+      required: true
+  - type: dropdown
+    id: edit
+    attributes:
+      label: Edit-by-voice (`edit "change X to Y"` end to end)
+      options:
+        - Works
+        - Works but host-app undo is broken afterwards
+        - Fails
+        - Not tested
+    validations:
+      required: true
+  - type: textarea
+    id: probe-output
+    attributes:
+      label: Probe / edit output
+      description: >-
+        Paste the output, including the reported role, strategy, and timing
+        breakdown.
+      render: text
+    validations:
+      required: true
+  - type: textarea
+    id: quirks
+    attributes:
+      label: Quirks and notes
+      description: >-
+        Anything unusual: needed the Chromium accessibility opt-in, only some
+        fields work, slow reads, selection behaves oddly, secure-input
+        interference, etc.
+    validations:
+      required: false
+  - type: checkboxes
+    id: launch-check
+    attributes:
+      label: Environment sanity check
+      description: These rule out the two most common false failures.
+      options:
+        - label: I launched via LaunchServices (scripts/run.sh or an installed app), not bare from a terminal.
+          required: true
+        - label: I have not rebuilt since last granting Accessibility permission (or I reset and re-granted after rebuilding).
+          required: true
