@@ -31,7 +31,32 @@ const M0_TARGETS: &[(&str, &str)] = &[
 ];
 
 fn main() {
-    let args: Vec<String> = std::env::args().skip(1).collect();
+    let mut args: Vec<String> = std::env::args().skip(1).collect();
+
+    // A dictation tool always acts on whatever application the user was already
+    // in, never on itself. To reproduce that from a terminal, `--after N` waits
+    // N seconds so the operator can click into the target application first.
+    // Without it, every measurement would be taken against the terminal.
+    let delay_secs = take_flag_value(&mut args, "--after").and_then(|v| v.parse::<u64>().ok());
+    if let Some(secs) = delay_secs {
+        eprintln!("waiting {secs}s: click into the application you want to test");
+        std::thread::sleep(Duration::from_secs(secs));
+    }
+
+    // macOS attributes an accessibility grant to the *responsible* process, not
+    // to whichever binary makes the call. A binary executed straight from a
+    // shell inherits the terminal as its responsible process, so it is judged
+    // against the terminal's permission rather than its own. Launching the
+    // bundle through LaunchServices (`open`) makes the app responsible for
+    // itself, which is how the shipping product will always be started.
+    //
+    // LaunchServices detaches the process from the terminal, so output is
+    // mirrored to a log file that the launching script can display.
+    let log_target = std::env::var("AQUA_SPIKE_LOG").ok();
+    if let Some(path) = &log_target {
+        redirect_output_to(path);
+    }
+
     let command = args.first().map(String::as_str).unwrap_or("probe");
 
     let exit = match command {
@@ -52,7 +77,50 @@ fn main() {
         }
     };
 
+    // Record the exit status in the log too, since a detached launch discards it.
+    if log_target.is_some() {
+        println!("__EXIT__{exit}");
+    }
+
     std::process::exit(exit);
+}
+
+/// Point stdout and stderr at `path` so a LaunchServices-detached run is still
+/// observable. Failure here is not worth aborting over: the run can proceed
+/// silently rather than not at all.
+fn redirect_output_to(path: &str) {
+    use std::os::unix::io::AsRawFd;
+    let Ok(file) = std::fs::File::create(path) else {
+        return;
+    };
+    let fd = file.as_raw_fd();
+    // SAFETY: `dup2` onto the standard descriptors is the documented way to
+    // redirect them, and `file` is kept alive for the process lifetime below.
+    unsafe {
+        libc_dup2(fd, 1);
+        libc_dup2(fd, 2);
+    }
+    std::mem::forget(file);
+}
+
+extern "C" {
+    #[link_name = "dup2"]
+    fn libc_dup2(src: i32, dst: i32) -> i32;
+}
+
+/// Remove `--name value` from the argument list and return the value.
+///
+/// The flag is stripped so the remaining arguments can still be joined into a
+/// command string without the flag leaking into the text to be inserted.
+fn take_flag_value(args: &mut Vec<String>, name: &str) -> Option<String> {
+    let index = args.iter().position(|arg| arg == name)?;
+    if index + 1 >= args.len() {
+        args.remove(index);
+        return None;
+    }
+    let value = args.remove(index + 1);
+    args.remove(index);
+    Some(value)
 }
 
 fn print_help() {
@@ -67,23 +135,32 @@ fn print_help() {
          \x20 dry-run <command>    Interpret an edit command against sample text, no permission needed\n\
          \x20 matrix               Print the guided M0 application test matrix\n\
          \n\
+         OPTIONS\n\
+         \x20 --after <seconds>    Wait before acting, so you can focus the target application\n\
+         \n\
          The binary must be granted Accessibility permission in\n\
          System Settings > Privacy & Security > Accessibility. When run from a\n\
          terminal, grant the permission to the terminal application itself."
     );
 }
 
-/// Ensure permission before doing anything, and explain clearly if it is
-/// missing. A confusing permission failure is the single most common reason
-/// users abandon tools in this category.
+/// Nudge the user toward granting permission, but never block on it.
+///
+/// `AXIsProcessTrusted` reports membership of the approved list, which is not
+/// the same thing as whether a call will succeed: the system checks the
+/// *responsible* process, and the two disagree often enough that treating this
+/// as a gate produces false refusals. So the prompt is offered and the command
+/// runs anyway, letting the real API produce the real answer.
 fn require_trust() -> bool {
     if ax_edit::is_trusted(false) {
         return true;
     }
-    eprintln!("Accessibility permission is not granted.");
-    eprintln!("Prompting now; approve the dialog, then re-run this command.");
+    eprintln!(
+        "note: this process is not in the Accessibility approved list. Prompting, \
+         then attempting the call anyway."
+    );
     ax_edit::is_trusted(true);
-    false
+    true
 }
 
 fn cmd_probe() -> i32 {
@@ -408,6 +485,25 @@ fn truncate(text: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::truncate;
+
+    #[test]
+    fn take_flag_value_extracts_and_strips() {
+        let mut args = vec!["edit".into(), "--after".into(), "3".into(), "hello".into()];
+        assert_eq!(super::take_flag_value(&mut args, "--after"), Some("3".into()));
+        assert_eq!(args, vec!["edit".to_string(), "hello".to_string()]);
+    }
+
+    #[test]
+    fn take_flag_value_handles_missing_and_dangling() {
+        let mut args = vec!["edit".into(), "hello".into()];
+        assert_eq!(super::take_flag_value(&mut args, "--after"), None);
+        assert_eq!(args.len(), 2);
+
+        // A trailing flag with no value must not panic or eat an argument.
+        let mut dangling = vec!["edit".into(), "--after".into()];
+        assert_eq!(super::take_flag_value(&mut dangling, "--after"), None);
+        assert_eq!(dangling, vec!["edit".to_string()]);
+    }
 
     #[test]
     fn truncate_leaves_short_text_alone() {

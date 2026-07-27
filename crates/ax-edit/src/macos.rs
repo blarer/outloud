@@ -8,10 +8,11 @@
 use std::ffi::c_void;
 
 use accessibility_sys::{
-    kAXErrorSuccess, kAXFocusedUIElementAttribute, kAXNumberOfCharactersAttribute,
+    kAXErrorSuccess, kAXFocusedApplicationAttribute, kAXFocusedUIElementAttribute, kAXNumberOfCharactersAttribute,
     kAXRoleAttribute, kAXSelectedTextAttribute, kAXSelectedTextRangeAttribute, kAXValueAttribute,
     kAXValueTypeCFRange, AXError, AXIsProcessTrusted, AXIsProcessTrustedWithOptions,
-    AXUIElementCopyAttributeValue, AXUIElementCreateSystemWide, AXUIElementIsAttributeSettable,
+    AXUIElementCopyAttributeValue, AXUIElementCreateApplication, AXUIElementCreateSystemWide,
+    AXUIElementIsAttributeSettable,
     AXUIElementRef, AXUIElementSetAttributeValue, AXUIElementSetMessagingTimeout, AXValueGetValue,
     AXValueRef,
 };
@@ -19,7 +20,9 @@ use core_foundation::base::{CFType, TCFType};
 use core_foundation::dictionary::CFDictionary;
 use core_foundation::number::CFNumber;
 use core_foundation::string::CFString;
+use core_foundation_sys::array::CFArrayRef;
 use core_foundation_sys::base::{CFRange, CFRelease, CFTypeRef};
+use libc::pid_t;
 
 use crate::{AxError as Error, RewriteStrategy, TextSnapshot};
 
@@ -203,20 +206,147 @@ pub fn is_trusted(prompt: bool) -> bool {
     unsafe { AXIsProcessTrustedWithOptions(options.as_concrete_TypeRef()) }
 }
 
-/// Resolve the element that currently owns keyboard focus, system-wide.
+/// Resolve the element that currently owns keyboard focus.
+///
+/// There are two routes to the focused element and they are not equivalent.
+///
+/// The obvious one, `AXUIElementCreateSystemWide()`, is what most tutorials
+/// show. On current macOS it frequently returns `kAXErrorCannotComplete` even
+/// for a fully trusted process, because the system-wide element is served by a
+/// separate path with its own stricter checks.
+///
+/// The reliable route is to identify the frontmost application, build an
+/// element for *that process*, and ask it for its focused element. This is what
+/// the shipping product must do. The system-wide element is still tried first,
+/// since when it does work it saves a process lookup.
 fn focused_element() -> Result<Element, Error> {
-    if !unsafe { AXIsProcessTrusted() } {
-        return Err(Error::NotTrusted);
+    if let Some(element) = focused_via_system_wide() {
+        return Ok(element);
     }
+    focused_via_frontmost_app()
+}
+
+/// Configure an element so a hung target cannot block the caller, then return it.
+fn with_timeout(element: Element) -> Element {
+    unsafe { AXUIElementSetMessagingTimeout(element.0, MESSAGING_TIMEOUT_SECS) };
+    element
+}
+
+fn focused_via_system_wide() -> Option<Element> {
     let system = Element(unsafe { AXUIElementCreateSystemWide() });
     if system.0.is_null() {
-        return Err(Error::NoFocusedElement);
+        return None;
     }
-    // Bound every downstream call, so one unresponsive application cannot hang
-    // the dictation hotkey. The timeout is inherited by elements obtained from
-    // this one.
-    unsafe { AXUIElementSetMessagingTimeout(system.0, MESSAGING_TIMEOUT_SECS) };
-    copy_element_attribute(system.0, kAXFocusedUIElementAttribute)?.ok_or(Error::NoFocusedElement)
+    let system = with_timeout(system);
+    copy_element_attribute(system.0, kAXFocusedUIElementAttribute)
+        .ok()
+        .flatten()
+}
+
+fn focused_via_frontmost_app() -> Result<Element, Error> {
+    let app = frontmost_app_element().ok_or(Error::NoFocusedElement)?;
+
+    match copy_element_attribute(app.0, kAXFocusedUIElementAttribute) {
+        Ok(Some(element)) => Ok(element),
+        // The application answered but reports nothing focused, which is a real
+        // state (an app showing only a toolbar, for instance).
+        Ok(None) => Err(Error::NoFocusedElement),
+        // Only report a trust problem when the process genuinely is not
+        // approved, so a permission message is never shown for an unrelated
+        // failure.
+        Err(Error::NotTrusted) if !unsafe { AXIsProcessTrusted() } => Err(Error::NotTrusted),
+        Err(other) => Err(other),
+    }
+}
+
+/// An `AXUIElement` for the application the user is currently working in.
+///
+/// Two routes are tried, in order of reliability.
+///
+/// The first asks the system-wide element for `AXFocusedApplication`. This is
+/// authoritative, because it reflects genuine keyboard focus rather than window
+/// stacking, and it is cheap.
+///
+/// The second falls back to the Core Graphics window list. That list is ordered
+/// front to back by *window*, which is not the same as by application: a
+/// floating panel or an overlay belonging to another process can sit in front
+/// of the window the user is actually typing into. It is therefore only a
+/// fallback, and it skips windows outside the normal application layer.
+fn frontmost_app_element() -> Option<Element> {
+    let system = Element(unsafe { AXUIElementCreateSystemWide() });
+    if !system.0.is_null() {
+        let system = with_timeout(system);
+        if let Ok(Some(app)) = copy_element_attribute(system.0, kAXFocusedApplicationAttribute) {
+            return Some(with_timeout(app));
+        }
+    }
+
+    let pid = frontmost_pid()?;
+    let app = Element(unsafe { AXUIElementCreateApplication(pid) });
+    if app.0.is_null() {
+        return None;
+    }
+    Some(with_timeout(app))
+}
+
+/// Process id of the frontmost application.
+///
+/// Resolved through the Core Graphics window list rather than AppKit, so the
+/// crate stays free of an Objective-C runtime dependency and, more importantly,
+/// free of a process spawn. This sits on the dictation hot path, where spawning
+/// `osascript` would cost tens of milliseconds out of the latency budget.
+///
+/// The frontmost application is the owner of the window at the front of the
+/// on-screen window list, which is what `CGWindowListCopyWindowInfo` returns
+/// first when asked for on-screen windows in front-to-back order.
+fn frontmost_pid() -> Option<pid_t> {
+    use core_foundation::array::CFArray;
+    use core_foundation::dictionary::CFDictionary;
+    use core_foundation::number::CFNumber;
+    use core_foundation::string::CFString;
+
+    const LIST_OPTION_ON_SCREEN_ONLY: u32 = 1 << 0;
+    const LIST_OPTION_EXCLUDE_DESKTOP: u32 = 1 << 4;
+    const NULL_WINDOW_ID: u32 = 0;
+
+    let info = unsafe {
+        CGWindowListCopyWindowInfo(
+            LIST_OPTION_ON_SCREEN_ONLY | LIST_OPTION_EXCLUDE_DESKTOP,
+            NULL_WINDOW_ID,
+        )
+    };
+    if info.is_null() {
+        return None;
+    }
+    let windows: CFArray<CFDictionary> = unsafe { CFArray::wrap_under_create_rule(info) };
+
+    let layer_key = CFString::new("kCGWindowLayer");
+    let pid_key = CFString::new("kCGWindowOwnerPID");
+
+    for window in windows.iter() {
+        // Layer 0 is the normal application layer. Menu bars, the Dock, and
+        // overlay windows live above it and must not be mistaken for the
+        // application the user is typing into.
+        let layer = window
+            .find(layer_key.as_CFTypeRef() as *const _)
+            .and_then(|v| unsafe { CFType::wrap_under_get_rule(*v) }.downcast::<CFNumber>())
+            .and_then(|n| n.to_i64());
+        if layer != Some(0) {
+            continue;
+        }
+        if let Some(pid) = window
+            .find(pid_key.as_CFTypeRef() as *const _)
+            .and_then(|v| unsafe { CFType::wrap_under_get_rule(*v) }.downcast::<CFNumber>())
+            .and_then(|n| n.to_i64())
+        {
+            return Some(pid as pid_t);
+        }
+    }
+    None
+}
+
+extern "C" {
+    fn CGWindowListCopyWindowInfo(option: u32, relative_to_window: u32) -> CFArrayRef;
 }
 
 pub fn snapshot_focused() -> Result<TextSnapshot, Error> {
@@ -274,23 +404,14 @@ pub fn replace_focused(replacement: &str) -> Result<RewriteStrategy, Error> {
 }
 
 pub fn frontmost_app() -> Option<String> {
-    // Read the frontmost bundle id without linking AppKit, by asking the
-    // accessibility layer for the focused application's process and resolving
-    // it through `NSRunningApplication` via a lightweight ObjC-free path.
-    // `lsappinfo` is avoided here because it costs a process spawn per call.
-    use std::process::Command;
-    let out = Command::new("osascript")
-        .arg("-e")
-        .arg("tell application \"System Events\" to get bundle identifier of first application process whose frontmost is true")
-        .output()
-        .ok()?;
-    if !out.status.success() {
-        return None;
-    }
-    let id = String::from_utf8_lossy(&out.stdout).trim().to_string();
-    if id.is_empty() {
-        None
-    } else {
-        Some(id)
-    }
+    // Identify the application by the accessibility title of its process, which
+    // is available without spawning anything. A bundle identifier would be
+    // preferable for keying formatting rules, but obtaining one requires
+    // AppKit; the title is sufficient for the spike and the lookup can be
+    // upgraded later without changing this signature.
+    let app = frontmost_app_element()?;
+    copy_string_attribute(app.0, accessibility_sys::kAXTitleAttribute)
+        .ok()
+        .flatten()
+        .filter(|title| !title.is_empty())
 }
