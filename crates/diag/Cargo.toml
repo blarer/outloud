@@ -1,0 +1,15 @@
+[package]
+name = "diag"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Environmental diagnostics: turn confusing failures into named next actions"
+
+[dependencies]
+anyhow.workspace = true
+# Only for the accessibility trust probe; diag never edits text itself.
+ax-edit = { path = "../ax-edit" }
+
+[[bin]]
+name = "doctor"
+path = "src/bin/doctor.rs"
