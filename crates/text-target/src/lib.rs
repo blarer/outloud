@@ -125,6 +125,7 @@ pub enum TargetError {
     Transport(String),
     /// Underlying accessibility error, passed through unmodified so callers
     /// keep the precise diagnosis (`NotTrusted` vs `NoFocusedElement`).
+    #[cfg(feature = "display")]
     Ax(ax_edit::AxError),
     Io(std::io::Error),
 }
@@ -135,6 +136,7 @@ impl fmt::Display for TargetError {
             TargetError::Unsupported(why) => write!(f, "unsupported: {why}"),
             TargetError::NotReadable(why) => write!(f, "not readable: {why}"),
             TargetError::Transport(why) => write!(f, "transport failed: {why}"),
+            #[cfg(feature = "display")]
             TargetError::Ax(e) => write!(f, "accessibility: {e}"),
             TargetError::Io(e) => write!(f, "io: {e}"),
         }
@@ -149,6 +151,7 @@ impl From<std::io::Error> for TargetError {
     }
 }
 
+#[cfg(feature = "display")]
 impl From<ax_edit::AxError> for TargetError {
     fn from(e: ax_edit::AxError) -> Self {
         TargetError::Ax(e)

@@ -75,6 +75,7 @@ dependencies = [
  "anyhow",
  "ax-edit",
  "edit-intent",
+ "text-target",
 ]
 
 [[package]]

@@ -3,9 +3,29 @@ name = "text-target"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+# Internal workspace crate: never published to crates.io. This also lets
+# `cargo deny` treat path dependencies as first-party rather than as
+# unversioned wildcards.
+publish = false
 description = "Read and rewrite text in the focused destination, across every destination that accepts text"
+
+[features]
+# Everything a desktop session can use. Default because that is the common case.
+default = ["display"]
+
+# Transports that require a graphical session: the accessibility tier, the
+# input-method tier, synthetic key events, and the desktop clipboard.
+#
+# Building without this is not an optimization, it is a correctness gate. A
+# headless server has no display libraries to link against, so a GUI
+# dependency reaching the default feature set would turn into a link error or
+# a runtime crash on the machine least able to report it. Gating the tiers
+# here means `--no-default-features` fails loudly at compile time in CI
+# instead of silently at runtime over SSH.
+display = ["dep:ax-edit"]
 
 [dependencies]
 anyhow.workspace = true
-ax-edit = { path = "../ax-edit" }
+# Optional so a headless build links no accessibility framework at all.
+ax-edit = { path = "../ax-edit", optional = true }
 base64 = "0.22"

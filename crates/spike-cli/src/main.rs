@@ -13,6 +13,7 @@
 //!   spike-cli edit <command>     interpret a spoken edit and apply it in place
 //!   spike-cli dry-run <command>  interpret an edit against sample text, no AX needed
 //!   spike-cli inspect <app>      scan a named application for text fields
+//!   spike-cli target             report the transport this environment resolves to
 //!   spike-cli matrix             guided pass over the M0 target applications
 
 use std::time::{Duration, Instant};
@@ -70,6 +71,7 @@ fn main() {
         "edit" => cmd_edit(&args[1..].join(" ")),
         "dry-run" => cmd_dry_run(&args[1..].join(" ")),
         "inspect" => cmd_inspect(&args[1..].join(" ")),
+        "target" => cmd_target(),
         "matrix" => cmd_matrix(),
         "help" | "--help" | "-h" => {
             print_help();
@@ -139,6 +141,7 @@ fn print_help() {
          \x20 edit <command>       Interpret a spoken edit command and apply it in place\n\
          \x20 dry-run <command>    Interpret an edit command against sample text, no permission needed\n\
          \x20 inspect <app>        Scan a named application for text fields, even if not frontmost\n\
+         \x20 target               Report which transport this environment resolves to, and why\n\
          \x20 matrix               Print the guided M0 application test matrix\n\
          \n\
          OPTIONS\n\
@@ -511,6 +514,40 @@ fn cmd_inspect(app_name: &str) -> i32 {
         Err(err) => {
             eprintln!("inspect failed: {err}");
             explain(&err);
+            1
+        }
+    }
+}
+
+/// Report which transport this environment resolves to, and why.
+///
+/// The focus-based commands assume a graphical session and the accessibility
+/// tier. Most destinations are not that: a terminal exposes no writable
+/// accessibility field, and an SSH session has no display server at all. This
+/// command answers "what would actually be used here", which is the first
+/// question to ask when a destination misbehaves.
+fn cmd_target() -> i32 {
+    let env = text_target::detect::SystemEnv;
+    let selection = text_target::detect::select(&env);
+
+    println!("transport: {}", selection.name);
+    println!("reason:    {}", selection.reason);
+
+    match text_target::detect::detect_with_env(&env) {
+        Ok(target) => {
+            let caps = target.capabilities();
+            println!("tier:      {}", target.tier());
+            println!(
+                "can read:  {}  (edit-by-voice needs this; without it only dictation works)",
+                caps.can_read
+            );
+            println!("in place:  {}", caps.can_write_in_place);
+            println!("keeps undo:{}", caps.preserves_undo);
+            println!("headless:  {}", caps.is_headless);
+            0
+        }
+        Err(err) => {
+            eprintln!("could not construct the selected transport: {err}");
             1
         }
     }

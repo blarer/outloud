@@ -3,9 +3,25 @@ name = "spike-cli"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+# Internal workspace crate: never published to crates.io. This also lets
+# `cargo deny` treat path dependencies as first-party rather than as
+# unversioned wildcards.
+publish = false
 description = "M0 spike harness: probe and exercise edit-by-voice primitives"
+
+[features]
+# A desktop build: every transport, including the accessibility tier this
+# spike was built to prove.
+default = ["display"]
+display = ["text-target/display"]
+
+# A build for machines with no graphical session: SSH hosts, containers, CI.
+# Selecting it is a compile-time assertion that nothing in the binary links a
+# display library, which is checked mechanically by scripts/build-headless.sh.
+headless = []
 
 [dependencies]
 anyhow.workspace = true
 ax-edit = { path = "../ax-edit" }
 edit-intent = { path = "../edit-intent" }
+text-target = { path = "../text-target", default-features = false }

@@ -3,6 +3,10 @@ name = "diag"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+# Internal workspace crate: never published to crates.io. This also lets
+# `cargo deny` treat path dependencies as first-party rather than as
+# unversioned wildcards.
+publish = false
 description = "Environmental diagnostics: turn confusing failures into named next actions"
 
 [dependencies]

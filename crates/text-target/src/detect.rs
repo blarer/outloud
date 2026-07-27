@@ -17,7 +17,9 @@
 //! selection logic is tested as a pure function of a described environment,
 //! not of whatever machine CI happens to run on.
 
+#[cfg(feature = "display")]
 use crate::targets::ax::AxTarget;
+#[cfg(feature = "display")]
 use crate::targets::clipboard::ClipboardTarget;
 use crate::targets::terminal::{KittyTarget, Osc52Target, ScreenTarget, TmuxTarget, WezTermTarget};
 use crate::{TargetError, TextTarget};
@@ -30,8 +32,14 @@ pub trait Env {
     fn has_command(&self, bin: &str) -> bool;
     /// Whether the process holds accessibility trust (macOS AX today).
     fn ax_trusted(&self) -> bool;
-    /// Whether stdin/stdout are attached to a terminal.
-    fn is_tty(&self) -> bool;
+    /// Whether the *destination* of the text is a terminal.
+    ///
+    /// Note the subtlety: this is not "does this process have a controlling
+    /// terminal". A GUI dictation daemon is usually launched from a shell
+    /// during development and so always has one, while the window the user is
+    /// typing into is a browser. Answering the wrong question here sends every
+    /// desktop session down the terminal path.
+    fn destination_is_terminal(&self) -> bool;
     /// Whether a display server is reachable.
     fn has_display(&self) -> bool;
     /// Whether a clipboard tool is usable.
@@ -53,13 +61,32 @@ impl Env for SystemEnv {
     }
 
     fn ax_trusted(&self) -> bool {
-        AxTarget::available()
+        #[cfg(feature = "display")]
+        {
+            AxTarget::available()
+        }
+        // A headless build has no accessibility tier compiled in, so the
+        // honest answer is no rather than a probe that cannot be acted on.
+        #[cfg(not(feature = "display"))]
+        {
+            false
+        }
     }
 
-    fn is_tty(&self) -> bool {
-        // /dev/tty opens iff a controlling terminal exists; cheaper and more
-        // truthful than isatty on stdin, which pipes would falsify.
-        std::fs::File::open("/dev/tty").is_ok()
+    fn destination_is_terminal(&self) -> bool {
+        // With no display server there is nothing else the destination could
+        // be, so a controlling terminal settles it.
+        if !self.has_display() {
+            return std::fs::File::open("/dev/tty").is_ok();
+        }
+
+        // With a display server present, having a terminal ourselves says
+        // nothing: it is almost always just how we were launched. The
+        // destination is a terminal only when the focused application is one.
+        // Until the platform layer can name the focused application here, the
+        // safe answer is no, because wrongly choosing a terminal transport
+        // would inject text into a shell the user is not looking at.
+        false
     }
 
     fn has_display(&self) -> bool {
@@ -73,7 +100,14 @@ impl Env for SystemEnv {
     }
 
     fn has_clipboard(&self) -> bool {
-        ClipboardTarget::available()
+        #[cfg(feature = "display")]
+        {
+            ClipboardTarget::available()
+        }
+        #[cfg(not(feature = "display"))]
+        {
+            false
+        }
     }
 }
 
@@ -91,7 +125,7 @@ pub struct Selection {
 /// Split from [`detect`] so the decision is testable: it is the part that
 /// can be wrong in interesting ways, while construction is mechanical.
 pub fn select(env: &dyn Env) -> Selection {
-    let in_terminal = env.is_tty();
+    let in_terminal = env.destination_is_terminal();
 
     if in_terminal {
         // Multiplexers first: they survive SSH and detach, and give the
@@ -130,6 +164,11 @@ pub fn select(env: &dyn Env) -> Selection {
         }
     }
 
+    // In a headless build the display tiers are not compiled in, so selecting
+    // one would be a promise the binary cannot keep. Skipping them here keeps
+    // selection and construction in agreement, which is what makes the
+    // `unreachable!` in detect_with_env sound.
+    #[cfg(feature = "display")]
     if env.has_display() && env.ax_trusted() {
         return Selection {
             name: "macos-ax",
@@ -137,6 +176,7 @@ pub fn select(env: &dyn Env) -> Selection {
         };
     }
 
+    #[cfg(feature = "display")]
     if env.has_display() && env.has_clipboard() {
         return Selection {
             name: "clipboard-paste",
@@ -167,7 +207,9 @@ pub fn detect_with_env(env: &dyn Env) -> Result<Box<dyn TextTarget>, TargetError
         "wezterm-cli" => Box::new(WezTermTarget::new(None)),
         "kitty-remote-control" => Box::new(KittyTarget),
         "osc52" => Box::new(Osc52Target::new()),
+        #[cfg(feature = "display")]
         "macos-ax" => Box::new(AxTarget),
+        #[cfg(feature = "display")]
         "clipboard-paste" => Box::new(ClipboardTarget::new()?),
         "daemon-socket" => Box::new(crate::targets::headless::DaemonTarget::new(
             crate::targets::headless::DaemonTarget::default_socket_path(),
@@ -187,7 +229,7 @@ mod tests {
         vars: HashMap<&'static str, &'static str>,
         commands: Vec<&'static str>,
         ax_trusted: bool,
-        is_tty: bool,
+        destination_is_terminal: bool,
         has_display: bool,
         has_clipboard: bool,
     }
@@ -202,8 +244,8 @@ mod tests {
         fn ax_trusted(&self) -> bool {
             self.ax_trusted
         }
-        fn is_tty(&self) -> bool {
-            self.is_tty
+        fn destination_is_terminal(&self) -> bool {
+            self.destination_is_terminal
         }
         fn has_display(&self) -> bool {
             self.has_display
@@ -214,12 +256,29 @@ mod tests {
     }
 
     #[test]
+    fn gui_destination_ignores_our_own_terminal_ancestry() {
+        // Regression: a GUI daemon launched from a shell inside WezTerm
+        // inherits WEZTERM_PANE and a controlling terminal, but the user is
+        // typing into a browser. Choosing the terminal transport here would
+        // inject text into a shell nobody is looking at.
+        let env = FakeEnv {
+            vars: HashMap::from([("WEZTERM_PANE", "0"), ("TMUX", "/tmp/t,1,0")]),
+            commands: vec!["wezterm", "tmux"],
+            ax_trusted: true,
+            destination_is_terminal: false,
+            has_display: true,
+            has_clipboard: true,
+        };
+        assert_eq!(select(&env).name, "macos-ax");
+    }
+
+    #[test]
     fn tmux_beats_accessibility_inside_a_terminal() {
         let env = FakeEnv {
             vars: HashMap::from([("TMUX", "/tmp/tmux-501/default,123,0")]),
             commands: vec!["tmux"],
             ax_trusted: true,
-            is_tty: true,
+            destination_is_terminal: true,
             has_display: true,
             ..Default::default()
         };
@@ -232,7 +291,7 @@ mod tests {
         let env = FakeEnv {
             vars: HashMap::from([("TMUX", "stale")]),
             ax_trusted: true,
-            is_tty: true,
+            destination_is_terminal: true,
             has_display: true,
             ..Default::default()
         };
@@ -244,7 +303,7 @@ mod tests {
         let env = FakeEnv {
             vars: HashMap::from([("WEZTERM_PANE", "7")]),
             commands: vec!["wezterm"],
-            is_tty: true,
+            destination_is_terminal: true,
             has_display: true,
             has_clipboard: true,
             ..Default::default()
@@ -258,7 +317,7 @@ mod tests {
         let env = FakeEnv {
             vars: HashMap::from([("TMUX", "x"), ("WEZTERM_PANE", "7")]),
             commands: vec!["tmux", "wezterm"],
-            is_tty: true,
+            destination_is_terminal: true,
             has_display: true,
             ..Default::default()
         };
@@ -268,7 +327,7 @@ mod tests {
     #[test]
     fn ssh_without_display_falls_to_osc52() {
         let env = FakeEnv {
-            is_tty: true,
+            destination_is_terminal: true,
             has_display: false,
             ..Default::default()
         };
@@ -310,23 +369,23 @@ mod tests {
             FakeEnv {
                 vars: HashMap::from([("TMUX", "x")]),
                 commands: vec!["tmux"],
-                is_tty: true,
+                destination_is_terminal: true,
                 ..Default::default()
             },
             FakeEnv {
                 vars: HashMap::from([("STY", "x")]),
                 commands: vec!["screen"],
-                is_tty: true,
+                destination_is_terminal: true,
                 ..Default::default()
             },
             FakeEnv {
                 vars: HashMap::from([("KITTY_WINDOW_ID", "1")]),
                 commands: vec!["kitten"],
-                is_tty: true,
+                destination_is_terminal: true,
                 ..Default::default()
             },
             FakeEnv {
-                is_tty: true,
+                destination_is_terminal: true,
                 ..Default::default()
             },
             FakeEnv {

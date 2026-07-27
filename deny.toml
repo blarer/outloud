@@ -68,14 +68,14 @@ ignore = false
 # audit surface. Warn, don't fail: transitive duplicates are often outside our
 # control and a hard failure here would block unrelated PRs.
 multiple-versions = "warn"
-# "warn" rather than "deny", reluctantly: allow-wildcard-paths only exempts
-# PRIVATE (publish = false) crates, and the workspace manifests in crates/**
-# do not set publish = false yet (they are owned by the crate maintainers,
-# not the build system). Path-only workspace deps count as wildcards, so
-# "deny" would fail every build on our own crates. FOLLOW-UP for crate
-# owners: add `publish = false` to each crate in crates/**, then flip this
-# back to "deny" so a real "*" crates.io requirement fails the build.
-wildcards = "warn"
+# A literal "*" version requirement on a crates.io dependency means any
+# upstream release, including a breaking or compromised one, enters the build
+# unreviewed. That fails here.
+#
+# Our own path dependencies also read as wildcards, so they are exempted by
+# allow-wildcard-paths below, which only applies to crates marked
+# `publish = false`. Every crate in crates/** sets that.
+wildcards = "deny"
 allow-wildcard-paths = true
 deny = [
     # The Handy AVX2 lesson, enforced mechanically where possible: pyke's

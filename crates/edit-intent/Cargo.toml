@@ -3,6 +3,10 @@ name = "edit-intent"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+# Internal workspace crate: never published to crates.io. This also lets
+# `cargo deny` treat path dependencies as first-party rather than as
+# unversioned wildcards.
+publish = false
 description = "Parse spoken edit commands into deterministic text transformations"
 
 [dependencies]
