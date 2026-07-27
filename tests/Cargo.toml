@@ -1,0 +1,21 @@
+[package]
+name = "workspace-tests"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+# Internal-only: a test-carrier crate with no library surface of its own.
+publish = false
+description = "Cross-crate integration tests: the seams between crates, where every hard bug so far has lived"
+
+[lib]
+# The crate exists only for its tests/ directory; an empty lib target keeps
+# `cargo test -p workspace-tests` meaningful without shipping any code.
+path = "lib.rs"
+
+[dependencies]
+
+[dev-dependencies]
+diag = { path = "../crates/diag" }
+edit-intent = { path = "../crates/edit-intent" }
+text-target = { path = "../crates/text-target" }
+ax-edit = { path = "../crates/ax-edit" }

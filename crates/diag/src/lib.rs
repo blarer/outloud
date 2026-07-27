@@ -20,6 +20,7 @@
 
 pub mod checks;
 pub mod redact;
+pub mod replay;
 pub mod timing;
 
 use std::collections::HashMap;

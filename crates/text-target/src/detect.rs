@@ -255,7 +255,10 @@ mod tests {
         }
     }
 
+    // Asserts a display-tier outcome, so it only applies to a build that
+    // has those tiers compiled in.
     #[test]
+    #[cfg(feature = "display")]
     fn gui_destination_ignores_our_own_terminal_ancestry() {
         // Regression: a GUI daemon launched from a shell inside WezTerm
         // inherits WEZTERM_PANE and a controlling terminal, but the user is
@@ -285,7 +288,10 @@ mod tests {
         assert_eq!(select(&env).name, "tmux");
     }
 
+    // Asserts a display-tier outcome, so it only applies to a build that
+    // has those tiers compiled in.
     #[test]
+    #[cfg(feature = "display")]
     fn tmux_env_without_binary_is_not_tmux() {
         // A detached SSH hop can leave $TMUX set with no tmux on PATH.
         let env = FakeEnv {
@@ -324,6 +330,28 @@ mod tests {
         assert_eq!(select(&env).name, "tmux");
     }
 
+    /// The mirror of the display-gated tests above: in a headless build the
+    /// same desktop environment has no display tier to fall back to, so it
+    /// must land on the daemon rather than naming a transport that was never
+    /// compiled in. Getting this wrong would make `detect_with_env` hit its
+    /// `unreachable!`, turning a missing feature into a panic.
+    #[test]
+    #[cfg(not(feature = "display"))]
+    fn headless_build_degrades_desktop_to_the_daemon() {
+        let env = FakeEnv {
+            ax_trusted: true,
+            has_display: true,
+            has_clipboard: true,
+            destination_is_terminal: false,
+            ..Default::default()
+        };
+        assert_eq!(select(&env).name, "daemon-socket");
+        assert!(
+            detect_with_env(&env).is_ok(),
+            "must not panic on a missing tier"
+        );
+    }
+
     #[test]
     fn ssh_without_display_falls_to_osc52() {
         let env = FakeEnv {
@@ -334,7 +362,10 @@ mod tests {
         assert_eq!(select(&env).name, "osc52");
     }
 
+    // Asserts a display-tier outcome, so it only applies to a build that
+    // has those tiers compiled in.
     #[test]
+    #[cfg(feature = "display")]
     fn desktop_with_trust_uses_accessibility() {
         let env = FakeEnv {
             ax_trusted: true,
@@ -344,7 +375,10 @@ mod tests {
         assert_eq!(select(&env).name, "macos-ax");
     }
 
+    // Asserts a display-tier outcome, so it only applies to a build that
+    // has those tiers compiled in.
     #[test]
+    #[cfg(feature = "display")]
     fn desktop_without_trust_uses_clipboard() {
         let env = FakeEnv {
             has_display: true,

@@ -180,35 +180,68 @@ pub fn apply(target: &str, intent: &EditIntent) -> Option<String> {
 /// Case-insensitive replace, because speech recognition does not reliably
 /// reproduce the casing of what is on screen. Returns `None` when there is
 /// nothing to replace.
+///
+/// Lowercasing can change a string's byte length per character (İ grows, ẞ
+/// shrinks), and the shifts can cancel out so that total lengths still agree.
+/// Byte offsets found in the lowercased copy are therefore never trusted
+/// against the original; instead every lowered byte carries a map back to the
+/// original character it came from, so a match located in lowered space is
+/// removed from the original along real character boundaries. The workspace
+/// fuzz suite (`tests/tests/fuzz_edits.rs`) found both the panic and a
+/// silent over-edit in the previous length-equality heuristic.
 fn replace_case_insensitive(haystack: &str, needle: &str, replacement: &str) -> Option<String> {
     if needle.is_empty() {
         return None;
     }
-    let hay_lower = haystack.to_lowercase();
     let needle_lower = needle.to_lowercase();
-    if !hay_lower.contains(&needle_lower) {
-        return None;
+
+    // origin[i] = byte offset in `haystack` of the character that produced
+    // lowered byte i. Adjacent lowered bytes from the same original char
+    // share an origin, which is also how expansion boundaries are detected.
+    let mut lowered = String::with_capacity(haystack.len());
+    let mut origin: Vec<usize> = Vec::with_capacity(haystack.len());
+    for (orig_start, ch) in haystack.char_indices() {
+        for lc in ch.to_lowercase() {
+            let start = lowered.len();
+            lowered.push(lc);
+            origin.extend(std::iter::repeat(orig_start).take(lowered.len() - start));
+        }
     }
 
-    // Only trust byte offsets when lowercasing preserved the layout of both
-    // strings; otherwise fall back to an exact-case replace to stay correct.
-    if hay_lower.len() != haystack.len() || needle_lower.len() != needle.len() {
-        return if haystack.contains(needle) {
-            Some(haystack.replace(needle, replacement))
-        } else {
-            None
-        };
-    }
+    // A lowered position is a real character boundary only when the original
+    // char changes there. A match that starts or ends mid-expansion (e.g.
+    // the combining dot that İ lowers into) is not a real occurrence.
+    let is_boundary =
+        |pos: usize| pos == 0 || pos == lowered.len() || origin[pos] != origin[pos - 1];
 
     let mut out = String::with_capacity(haystack.len());
+    let mut orig_cursor = 0;
     let mut cursor = 0;
-    while let Some(found) = hay_lower[cursor..].find(&needle_lower) {
+    let mut matched = false;
+    while let Some(found) = lowered[cursor..].find(&needle_lower) {
         let start = cursor + found;
-        out.push_str(&haystack[cursor..start]);
+        let end = start + needle_lower.len();
+        if !(is_boundary(start) && is_boundary(end)) {
+            // Partial-character match: step past it and keep scanning.
+            cursor = start + lowered[start..].chars().next().map_or(1, char::len_utf8);
+            continue;
+        }
+        let orig_start = origin[start];
+        let orig_end = if end == lowered.len() {
+            haystack.len()
+        } else {
+            origin[end]
+        };
+        out.push_str(&haystack[orig_cursor..orig_start]);
         out.push_str(replacement);
-        cursor = start + needle_lower.len();
+        orig_cursor = orig_end;
+        cursor = end;
+        matched = true;
     }
-    out.push_str(&haystack[cursor..]);
+    if !matched {
+        return None;
+    }
+    out.push_str(&haystack[orig_cursor..]);
     Some(out)
 }
 
