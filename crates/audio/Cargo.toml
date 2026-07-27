@@ -1,0 +1,23 @@
+[package]
+name = "audio"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Microphone capture, resampling, VAD, and speech segmentation for the recognizer pipeline"
+
+[features]
+default = []
+# Silero VAD via the vad-rs crate (pulls ONNX Runtime). Off by default so CI
+# and contributors without the ~50MB ort download still build and test the
+# whole segmenter state machine, which is VAD-implementation-agnostic.
+silero = ["dep:vad-rs"]
+
+[dependencies]
+anyhow = { workspace = true }
+cpal = "0.18"
+crossbeam-channel = "0.5"
+thiserror = "2"
+vad-rs = { version = "0.1", optional = true }
+
+[dev-dependencies]
+# Only used by ignored hardware tests; synthetic-audio tests need nothing.

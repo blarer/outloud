@@ -1,0 +1,15 @@
+[package]
+name = "asr"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Streaming speech recognition: trait, backends, two-stage pipeline, model manager"
+
+[dependencies]
+anyhow = { workspace = true }
+audio = { path = "../audio" }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+sha2 = "0.10"
+thiserror = "2"
+ureq = "2"
