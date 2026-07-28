@@ -25,11 +25,24 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 WORK="$(mktemp -d "${TMPDIR:-/tmp}/hexavoice-verify-head.XXXXXX")"
-# Always clean up the clone, including on failure: a stale multi-hundred-MB
-# target directory per invocation would be a nasty surprise.
+# Always clean up the clone, including on failure: a stale multi-gigabyte
+# target directory per invocation would fill the disk within a few runs.
 trap 'rm -rf "$WORK"' EXIT
 
 REF="${1:-HEAD}"
+
+# A from-scratch build of this workspace needs roughly 8GB for target/ alone.
+# Checking first turns "error: No space left on device" spraying out of six
+# parallel rustc jobs into one sentence naming the real problem, which matters
+# because that error reads like a compile failure and sends people debugging
+# the wrong thing entirely.
+AVAIL_KB="$(df -k "$WORK" | awk 'NR==2 {print $4}')"
+if [[ "$AVAIL_KB" -lt $((8 * 1024 * 1024)) ]]; then
+    echo "not enough disk to verify HEAD: $((AVAIL_KB / 1024 / 1024))GB free, need ~8GB" >&2
+    echo "a fresh clone builds its own target/ from nothing; free some space first" >&2
+    echo "(\`cargo clean\` in the working repo usually recovers several GB)" >&2
+    exit 2
+fi
 
 echo "==> Cloning $REF into a scratch directory"
 # --no-hardlinks so the clone cannot share objects with, and therefore cannot

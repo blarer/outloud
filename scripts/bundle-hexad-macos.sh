@@ -96,11 +96,33 @@ cat > "$APP_DIR/Contents/Info.plist" <<PLIST
 </plist>
 PLIST
 
-echo "==> Signing with a stable ad-hoc identity"
-# --identifier pins the designated requirement to the bundle id so the TCC
-# grant survives rebuilds; --force replaces the linker-signed signature.
+echo "==> Signing ad-hoc"
+# --identifier sets the bundle id. It does NOT make the TCC grant survive a
+# rebuild, and an earlier version of this comment claimed it did, which sent
+# a user chasing a permission bug that was really this:
+#
+#   $ codesign -d -r- dist/Hexavoice.app
+#   designated => cdhash H"19c2e3f9..."
+#
+# An ad-hoc signature has no signing identity, so the Designated Requirement
+# degenerates to the hash of one exact binary. Every rebuild is a different
+# app as far as macOS is concerned: it denies the new one and leaves the old
+# entry sitting in System Settings still switched on, which reads as
+# "already granted" while nothing works.
+#
+# The real fix is a Developer ID certificate, where the requirement becomes
+# the identity rather than a hash and grants persist. Until then, re-granting
+# after every rebuild is unavoidable, so the script clears the stale entries
+# for you rather than letting them accumulate and mislead.
 codesign --force --sign - --identifier "$BUNDLE_ID" "$APP_DIR"
 codesign --verify --verbose=2 "$APP_DIR" 2>&1 | sed 's/^/    /'
+
+if [[ "${HEXA_KEEP_TCC:-0}" != "1" ]]; then
+    # Best-effort: fails harmlessly when nothing was granted yet.
+    tccutil reset Accessibility "$BUNDLE_ID" >/dev/null 2>&1 || true
+    tccutil reset ListenEvent "$BUNDLE_ID" >/dev/null 2>&1 || true
+    echo "==> Cleared the stale permission entries this rebuild invalidated"
+fi
 
 cat <<EOF
 
@@ -119,6 +141,12 @@ is typing into). Look for its icon at the RIGHT END OF YOUR MENU BAR: a
 waveform when idle, a filled microphone while listening. Click it for
 status, settings, diagnostics, and Quit.
 
-Ad-hoc signing note: the grant is pinned to this build's cdhash, so after a
-rebuild run \`tccutil reset Accessibility $BUNDLE_ID\` and re-grant.
+Grant BOTH permissions. They are different, and each fails differently:
+  Input Monitoring  -> without it the hotkey never fires. Nothing happens
+  Accessibility     -> without it text lands via clipboard paste, not in place
+
+Ad-hoc signing note: the Designated Requirement is this build's cdhash, so
+EVERY REBUILD invalidates both grants. The stale entries have already been
+cleared for you; re-add the app in both panes. A Developer ID certificate is
+what makes this stop.
 EOF
