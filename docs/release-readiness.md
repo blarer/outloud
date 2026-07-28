@@ -1,6 +1,7 @@
 # Release readiness
 
-**Verdict: a release would NOT ship today.** One blocker, four majors.
+**Verdict: a release would NOT ship today.** One blocker, six majors (four of
+them now fixed).
 
 Produced by adversarial QA against `main` on 2026-07-28. Every finding below
 was reproduced by running the thing, not by reading it. Commands and their
@@ -26,6 +27,8 @@ owner instead of fixing it.
 | 7 | MINOR | `bundle-aquad-macos.sh` warns (not fails) when `swiftc` is absent | Reported |
 | 8 | INFO | Config defaults and edge cases behave correctly | Verified, regression net added (`0e81b08`) |
 | 9 | INFO | Latency claims in `docs/latency.md` hold up | Verified, 8-run measurement |
+| 10 | **MAJOR** | Every Linux build linked ALSA, including headless and musl | **PARTLY FIXED** (`a7c7b1b`), `capture` now optional |
+| 11 | **MAJOR** | 13 of 16 config settings are silently ignored | **FIXED** (`22f579b`), now detectable; wiring is separate |
 
 CI matrix as of run `30361756410`: **7 green, 7 red.** All 7 red are Linux or
 MSRV, and after finding 3 was fixed they share a **single root cause**
@@ -437,14 +440,160 @@ That agent was DM'd with the exact errors. It is **not** a defect in `main`;
 clean HEAD passes all 466 tests. It is recorded only so a future reader does
 not mistake a transient local failure for a release finding.
 
+---
+
+## 10. MAJOR (partly fixed): every Linux build linked ALSA, headless included
+
+Root-cause work on finding 1. `cpal` was an **unconditional** dependency of
+`crates/audio`, and it is the only thing in that crate needing a system audio
+library. That is why a clippy-only job needed `libasound2-dev`, and why the
+musl rows failed with a message no runner package can fix:
+
+```
+pkg-config has not been configured to support cross-compilation.
+```
+
+A statically linked headless daemon takes its audio from a WAV file or a
+socket and has no business linking an audio stack it never calls. Fixed in
+`a7c7b1b` by making capture optional (`capture` feature, on by default,
+mirroring the existing `display` gate in `text-target`/`overlay` rather than
+inventing a second convention). It landed on a seam the crate already had:
+capture was deliberately kept at the edge, so only the module declaration
+needed gating.
+
+Verified as a cargo-level fact against the target that was actually failing:
+
+```
+cargo tree -p audio -e normal --target x86_64-unknown-linux-musl
+    | grep -c -E 'cpal|alsa'                       -> 3
+cargo tree -p audio --no-default-features -e normal \
+    --target x86_64-unknown-linux-musl
+    | grep -c -E 'cpal|alsa'                       -> 0
+```
+
+`crates/audio/tests/capture_feature.rs` pins both halves of the contract and
+runs in both configurations (3 tests without the feature, 4 with).
+
+**Why "partly".** `cargo build --workspace` still enables default features, so
+the CI musl rows stay red until they build with `--no-default-features` (see
+appendix D). Related and worth someone's attention: **`crates/asr` depends on
+`audio` but never references it in code** — it defines its own `SAMPLE_RATE`
+const — so dropping that dependency would shrink the graph further. That crate
+is owned elsewhere, so it is reported rather than changed.
+
+---
+
+## 11. MAJOR (fixed): thirteen of sixteen config settings did nothing
+
+Found by lobster, who reproduced it against the bundled binary; confirmed here
+independently before fixing. A user could set `insertion.mode = "stream"`, get
+no error, observe no change, and reasonably conclude the feature was broken
+rather than unbuilt. The quickstart points users at this file.
+
+Confirmed two ways rather than assumed: it matches the `WIRED` gate dove
+already put in `crates/aquad/src/menubar.rs`, and grepping the daemon for each
+key shows the other thirteen appear only in menu-**display** code, never in the
+pipeline. The starkest case is `insertion.mode`, because `crates/aquad` has
+**no dependency on the `stream` crate at all**, so `"stream"` cannot possibly
+take effect regardless of what the file says. lobster's third case is the one
+most likely to generate support load: setting a nonexistent `microphone` logs
+`capturing from MacBook Pro Microphone` and never says the setting was ignored.
+
+The menu bar was already honest about this; the file had no equivalent
+protection. Fixed in `22f579b` by giving it one:
+
+- `KeySpec::wired`, deliberately **not** defaulted, so adding a schema row
+  forces an explicit answer to "does anything read this" while it is still
+  cheap to answer.
+- `Config::inert_settings()`, returning only unwired keys the user **actually
+  set**. A key at its default is a placeholder, not a broken promise; warning
+  about all thirteen every start would be noise, and noise is how a warning
+  stops being read.
+
+Config tests went 84 -> 89. **This does not wire anything up**: it makes the
+dishonesty visible and testable. The startup warning call site belongs in
+`crates/aquad`, which is owned by another agent this session.
+
+---
+
 ## What would make a release shippable
 
 1. Land the Linux system-deps step in `ci.yml` **and** `release.yml`
    (`.github/workflows/**` owner). Turns 5 of 7 red jobs green.
-2. Decide the musl/ALSA story: cross-pkg-config, or make `cpal` optional
-   (`crates/audio` owner). Turns the last 2 green.
+2. Build musl/headless rows with `--no-default-features` now that `capture`
+   is optional (finding 10). Turns the last 2 green.
 3. Remove `|| true` from the aarch64 headless release step, or drop the target.
 4. Fix the README's from-source build path (lobster).
 5. Optional but cheap: reap stale speech helpers at daemon startup.
 
 Items 1 and 2 are the blocker. Everything else is shippable-with-known-issues.
+
+---
+
+## Appendix: the exact YAML required
+
+Nobody in this session can edit `.github/workflows/**`, and the owner has not
+surfaced. Reproduced here as copy-pasteable blocks so whoever picks it up
+cannot get it subtly wrong. A draft of some of this is sitting **uncommitted**
+in the working tree's `ci.yml` and `Cross.toml`; it is unowned and unverified.
+
+### A. `ci.yml` — add to `check`, `msrv`, `repro`, and `build-matrix`
+
+Insert **after** `actions/checkout` and **before** `Swatinem/rust-cache`, in
+each of those four jobs:
+
+```yaml
+      - name: Install Linux system dependencies
+        if: runner.os == 'Linux'
+        run: scripts/ci-install-linux-deps.sh
+```
+
+For the `msrv` and `repro` jobs, which are Linux-only, the `if:` is optional
+but harmless. For `build-matrix`, it must additionally not run under `cross`
+(the container has its own package set), so use:
+
+```yaml
+      - name: Install Linux system dependencies
+        if: runner.os == 'Linux' && !matrix.use-cross
+        run: scripts/ci-install-linux-deps.sh
+```
+
+The script is already committed and executable (`0e81b08`, mode 100755). No
+other change is needed for the four glibc rows.
+
+### B. `release.yml` — the tag-time failure
+
+Add the **same step** to the `compliance`, `linux`, and `headless` jobs.
+`compliance` is the critical one: every other job declares `needs: compliance`,
+so without it a tag stops before building a single artifact.
+
+### C. `release.yml` — stop swallowing a failed architecture
+
+In the `headless` job, change:
+
+```yaml
+          scripts/build-headless.sh aarch64-unknown-linux-musl || true
+```
+
+to:
+
+```yaml
+          scripts/build-headless.sh aarch64-unknown-linux-musl
+```
+
+Either it builds or the release fails honestly. Publishing a `headless`
+artifact set silently missing an architecture is worse than publishing none.
+
+### D. musl rows: use the new `capture` feature
+
+`crates/audio`'s `capture` feature is now optional (finding 10), so the musl
+and headless rows should build without it rather than cross-compile ALSA:
+
+```yaml
+            cargo build --workspace --locked --no-default-features --target ${{ matrix.target }}
+```
+
+Note the caveat in finding 10: `--workspace` alone still enables default
+features, so this flag (or dropping the `audio` dependency from `asr`) is what
+actually removes ALSA from the musl graph.
+
