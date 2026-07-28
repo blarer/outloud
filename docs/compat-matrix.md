@@ -24,10 +24,27 @@ for why terminals invert it):
 |---|---|---|---|---|
 | TextEdit | AX | yes | yes | M0 verified. `AXSelectedText` settable, undo preserved |
 | Notes / Mail | AX | yes | yes | Standard AppKit `AXTextArea`; unverified in M0 only for window-Space reasons |
+| Messages (iMessage) | AX | yes | yes | Verified live. Compose field is an `AXTextField` with settable `AXValue` (11-30ms writes). Caveat: while EMPTY the field intermittently reports no `AXValue` at all, so delivery falls back to typing; that fallback must be the batched CGEvent path (~9ms), not per-character pacing (~40ms). See "Synthetic keystrokes: two speeds" below |
 | Safari (address bar) | AX | yes | yes | M0 verified, native chrome field |
 | Safari (web content) | AX | yes | yes | M0 verified: page `AXTextArea` with live contents, writable |
 | Pages / Keynote | AX | yes | partial | Complex text engines expose `AXValue` read; write support varies per container |
 | Xcode | AX | yes | yes | `AXTextArea` per editor pane; large buffers make timeouts matter |
+
+### Synthetic keystrokes: two speeds (macOS)
+
+The Keys tier has two deliberately different pacing modes, chosen per
+destination by `text_target::targets::keys::typing_strategy_for` (pure and
+unit-tested, keyed on the DESTINATION app, never on our own tty):
+
+| Mode | Mechanism | Cost for a sentence | Used for |
+|---|---|---|---|
+| `synthetic-keys-batched` | multi-character `CGEventKeyboardSetUnicodeString` payloads, 20 UTF-16 units per event, no pacing | ~9ms | GUI apps whose AX write was refused (Messages with an empty compose field, secure fields, canvas editors) |
+| `synthetic-keys-paced` | one character per event, ~0.7ms spin-paced | ~25-45ms | tty-backed apps (Terminal, iTerm2, WezTerm, kitty, Alacritty, Ghostty, ...), plus any field that reads but refuses writes, the scrollback signature of an unknown terminal |
+
+The split exists because a tty samples key events instead of reading the
+attached string: a 20-unit payload delivered "hello from cgevent" to
+Terminal.app as "bat". Batched into a terminal corrupts; paced into a GUI
+merely wastes 40ms, so unknown destinations default to paced.
 
 ## Browsers
 
