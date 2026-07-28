@@ -721,6 +721,13 @@ Being honest in both directions.
   a remedy, and a verdict that says "0 bug-class failure(s); only those belong
   in a GitHub issue". It correctly detected the responsible-process trap on
   this machine.
+- **The issue templates already ask the right questions.** `bug-report.yml`
+  makes doctor output mandatory and asks how the binary was launched and
+  whether it was rebuilt since granting, which are precisely the two questions
+  that separate a real bug from the environment. Refreshed here to name
+  `./scripts/doctor.sh` and `aquad --version` directly, both of which have
+  changed since the template was written, and to point at the README's new
+  known-limitations list before someone files a known issue.
 - **First-run config generation.** With no `~/.config/aqua`, the daemon starts
   clean and writes a fully commented file with every setting shown at its
   default and commented out. Deleting a line genuinely means "use the default".
@@ -778,7 +785,7 @@ Ordered by user pain per unit of effort.
 | 10 | Make `bundle-aquad-macos.sh` fail, not warn, without `swiftc` | 2 lines | Stops shipping a recognizer-less bundle |
 | 11 | Always rebuild the helper, or hash-check it | 2 lines | The staleness that hid blocker B1 |
 | 12 | `shell-bridge uninstall` | ~20 lines | Users should not need the sledgehammer script |
-| 13 | Issue template asking for doctor output and version | 20 min | Turns "it doesn't work" into a diagnosis |
+| 13 | ~~Issue template asking for doctor output and version~~ | done | Turns "it doesn't work" into a diagnosis |
 | 14 | Wire `migrate()` into the config load path | ~15 lines | Must exist before schema version 2, not after |
 | 15 | Buy the Developer ID certificate | 99 USD, days | Unblocks binary distribution and fixes cdhash pain |
 

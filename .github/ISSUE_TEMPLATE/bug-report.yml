@@ -6,19 +6,30 @@ body:
   - type: markdown
     attributes:
       value: |
-        Before filing: read the environmental gotchas in CONTRIBUTING.md.
-        Running from a shell instead of via LaunchServices, and rebuilding
-        without re-granting Accessibility, are the two most common
-        false bugs.
+        Before filing: read the environmental gotchas in CONTRIBUTING.md, and
+        the known limitations in the README. Running from a shell instead of
+        via LaunchServices, and rebuilding without re-granting Accessibility,
+        are the two most common false bugs.
+
+        The two commands this form asks for:
+
+        ```bash
+        ./scripts/doctor.sh                             # diagnoses, and says which failures are bugs
+        ./dist/Aqua.app/Contents/MacOS/Aqua --version   # or `aquad --version`
+        ```
+
+        The doctor classifies every check as permission, configuration,
+        environment, or bug, and ends with a verdict naming how many are
+        bug-class. If it reports zero, it has almost certainly also told you
+        the fix.
   - type: textarea
     id: doctor
     attributes:
       label: Doctor output
       description: >-
-        Paste the full output of the `doctor` command (or `spike-cli probe`
-        plus your macOS version and how you launched the binary, if doctor is
-        not yet available in your build). Reports without this will be sent
-        back for it.
+        Paste the full output of `./scripts/doctor.sh`. Reports without this
+        will be sent back for it: permission bugs are undiagnosable without
+        knowing which process macOS is actually checking.
       render: text
     validations:
       required: true
@@ -79,7 +90,10 @@ body:
     id: app-version
     attributes:
       label: Project version or commit
-      placeholder: "v0.3.1 or commit bfb4e47"
+      description: >-
+        From `aquad --version`. A commit hash is even better if you built
+        from source.
+      placeholder: "aquad 0.1.0, or commit bfb4e47"
     validations:
       required: true
   - type: textarea
