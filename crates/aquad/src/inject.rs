@@ -41,6 +41,45 @@ pub fn mode_from_snapshot(snap: Option<&TextSnapshot>) -> Mode {
     }
 }
 
+/// Read the focused destination at key-down and decide dictate-vs-edit,
+/// using whichever accessibility API this platform has.
+///
+/// Exists so the pipeline has ONE call for "what is selected right now"
+/// instead of a macOS-shaped call the other platforms cannot answer. On
+/// macOS this is the AX snapshot the M0 spike measured at ~134us warm; on
+/// Windows it is UI Automation's `TextPattern::GetSelection`. Everywhere
+/// else, and on any failure, the answer is dictation, which is the safe
+/// degradation: inserting text is never destructive, whereas guessing at
+/// an edit would rewrite something the user did not select.
+pub fn mode_at_keydown() -> Mode {
+    #[cfg(target_os = "macos")]
+    {
+        mode_from_snapshot(ax_edit::snapshot_focused().ok().as_ref())
+    }
+
+    #[cfg(all(target_os = "windows", feature = "display"))]
+    {
+        use text_target::targets::ax::UiaTarget;
+        // A fresh client per key-down: UIA connection setup is cheap
+        // relative to an utterance, and holding COM state across the
+        // pipeline's threads would need apartment marshalling for no gain.
+        match UiaTarget::new().and_then(|mut t| t.selected_text()) {
+            Ok(Some(selected)) => Mode::Edit { selected },
+            Ok(None) => Mode::Dictate,
+            Err(e) => {
+                // Logged, not silent: an elevated window in focus (UIPI)
+                // looks exactly like "nothing selected" otherwise, and the
+                // user deserves to know why edit-by-voice went quiet.
+                eprintln!("aquad: could not read the focused element ({e}); assuming dictation");
+                Mode::Dictate
+            }
+        }
+    }
+
+    #[cfg(not(any(target_os = "macos", all(target_os = "windows", feature = "display"))))]
+    Mode::Dictate
+}
+
 /// How one utterance ended, for the overlay and the log.
 #[derive(Debug)]
 pub enum Outcome {
@@ -67,6 +106,17 @@ pub fn deliver(mode: &Mode, transcript: &str) -> Outcome {
     if text.is_empty() {
         return Outcome::EmptyTranscript;
     }
+
+    // Non-macOS platforms have no ax-edit, so they take the platform-tier
+    // path below rather than the AX-specific splice logic. Keeping the two
+    // separate (instead of abstracting ax-edit away) means the macOS path,
+    // the only one measured end to end, is byte-for-byte what M0 proved.
+    #[cfg(not(target_os = "macos"))]
+    {
+        return deliver_via_tiers(mode, text);
+    }
+
+    #[cfg(target_os = "macos")]
     match mode {
         Mode::Dictate => insert_with_fallback(text),
         Mode::Edit { selected } => {
@@ -92,6 +142,127 @@ pub fn deliver(mode: &Mode, transcript: &str) -> Outcome {
     }
 }
 
+/// Delivery for platforms whose write path is a `text-target` tier rather
+/// than `ax-edit`: Windows today (UIA, then SendInput, then clipboard),
+/// and the shape any future Linux backend slots into.
+///
+/// The tier ladder is walked explicitly here instead of through
+/// `text_target::detect` because delivery needs the *fallback* behaviour on
+/// failure, and detect answers a different question ("what is best right
+/// now") with no retry semantics.
+#[cfg(not(target_os = "macos"))]
+fn deliver_via_tiers(mode: &Mode, text: &str) -> Outcome {
+    let payload = match mode {
+        Mode::Dictate => text.to_string(),
+        Mode::Edit { selected } => {
+            let command = text.trim_end_matches(['.', '!', '?', ',']);
+            let intent = edit_intent::parse(command);
+            if let EditIntent::Freeform { instruction } = &intent {
+                return Outcome::FreeformUnsupported {
+                    instruction: instruction.clone(),
+                };
+            }
+            match edit_intent::apply(selected, &intent) {
+                Some(rewritten) => rewritten,
+                None => {
+                    return Outcome::EditNoMatch {
+                        command: text.to_string(),
+                    }
+                }
+            }
+        }
+    };
+
+    #[cfg(all(target_os = "windows", feature = "display"))]
+    {
+        use text_target::targets::ax::UiaTarget;
+        use text_target::TextTarget;
+
+        // Tier 1: UI Automation. For an edit this is a true in-place
+        // rewrite of the field's value; for dictation it appends at the
+        // field's end, which is where a dictated sentence belongs.
+        let uia_err = match UiaTarget::new() {
+            Ok(mut t) => {
+                let res = match mode {
+                    Mode::Dictate => t.insert(&payload),
+                    Mode::Edit { .. } => t.replace(&payload),
+                };
+                match res {
+                    Ok(()) => {
+                        return Outcome::Wrote {
+                            text: payload,
+                            via: "windows-uia".into(),
+                        }
+                    }
+                    Err(e) => e.to_string(),
+                }
+            }
+            Err(e) => e.to_string(),
+        };
+        eprintln!("aquad: UI Automation write refused ({uia_err}); falling back");
+
+        // Tier 3: SendInput. Insert-only, so an edit that reaches here
+        // would APPEND the rewritten text next to the original rather than
+        // replacing it. That is a corruption, not a degradation, so edits
+        // stop at the clipboard (where the user pastes over their own
+        // selection deliberately) and only dictation types.
+        if matches!(mode, Mode::Dictate) {
+            use text_target::targets::keys::SendInputTarget;
+            let mut keys = SendInputTarget;
+            match keys.insert(&payload) {
+                Ok(()) => {
+                    return Outcome::Wrote {
+                        text: payload,
+                        via: "windows-sendinput".into(),
+                    }
+                }
+                Err(e) => eprintln!("aquad: SendInput refused ({e}); falling back to clipboard"),
+            }
+        }
+
+        // Tier 4: clipboard + Ctrl+V, which replaces a selection natively
+        // and so is the correct last resort for edits too.
+        use text_target::targets::clipboard::ClipboardTarget;
+        match ClipboardTarget::new() {
+            Ok(mut clip) => match clip.insert(&payload) {
+                Ok(()) => {
+                    // Let the target consume the paste before handing the
+                    // user's own clipboard back.
+                    std::thread::sleep(std::time::Duration::from_millis(150));
+                    let _ = clip.restore();
+                    Outcome::Wrote {
+                        text: payload,
+                        via: "clipboard-paste".into(),
+                    }
+                }
+                Err(e) => Outcome::Failed {
+                    situation_action: format!(
+                        "every write tier refused ({e}) -> your text is on the clipboard, \
+                         press Ctrl+V (an elevated window in focus blocks us: see UIPI in \
+                         docs/compat-matrix.md)"
+                    ),
+                },
+            },
+            Err(e) => Outcome::Failed {
+                situation_action: format!(
+                    "every write tier refused and no clipboard ({e}) -> focus a normal \
+                     (non-elevated) text field and try again"
+                ),
+            },
+        }
+    }
+
+    #[cfg(not(all(target_os = "windows", feature = "display")))]
+    {
+        Outcome::Failed {
+            situation_action: format!(
+                "no write transport on this platform/build for \"{payload}\" \
+                 -> use the terminal-native transports via spike-cli"
+            ),
+        }
+    }
+}
+
 /// Insert at the caret.
 ///
 /// Trap this function exists to defuse: with no selection,
@@ -102,6 +273,7 @@ pub fn deliver(mode: &Mode, transcript: &str) -> Outcome {
 /// selection in UTF-16 units), then writes the spliced whole value. When the
 /// field cannot be read or the caret cannot be mapped, we fall back to
 /// clipboard paste, which inserts natively and cannot destroy anything.
+#[cfg(target_os = "macos")]
 fn insert_with_fallback(text: &str) -> Outcome {
     match ax_edit::snapshot_focused() {
         Ok(snap) => {
@@ -124,6 +296,7 @@ fn insert_with_fallback(text: &str) -> Outcome {
 
 /// The spliced whole-field value for inserting `text` at the caret, or
 /// `None` when the snapshot does not pin down where the caret is.
+#[cfg(target_os = "macos")]
 fn spliced_at_caret(snap: &TextSnapshot, text: &str) -> Option<String> {
     let value = snap.value.as_deref()?;
     if value.is_empty() {
@@ -160,6 +333,7 @@ fn spliced_at_caret(snap: &TextSnapshot, text: &str) -> Option<String> {
 }
 
 /// One AX write with clipboard fallback, shared by both paths.
+#[cfg(target_os = "macos")]
 fn write_focused(text: &str) -> Outcome {
     match ax_edit::replace_focused(text) {
         Ok(strategy) => Outcome::Wrote {
@@ -176,6 +350,7 @@ fn write_focused(text: &str) -> Outcome {
 /// (the user held a key and spoke, they did not re-select). Verifying the
 /// selection is unchanged before writing is future work needing
 /// AXSelectedTextRange comparison in ax-edit.
+#[cfg(target_os = "macos")]
 fn replace_selection(rewritten: &str) -> Outcome {
     write_focused(rewritten)
 }
@@ -184,6 +359,7 @@ fn replace_selection(rewritten: &str) -> Outcome {
 /// synthesized paste; on failure the text is at least *on the clipboard*,
 /// and the outcome tells the user to press Cmd+V themselves: a named next
 /// action even at the bottom of the fallback chain.
+#[cfg(target_os = "macos")]
 fn clipboard_fallback(text: &str, ax_err: &AxError) -> Outcome {
     // Logged, not just folded into the outcome: the fallback usually
     // succeeds, and the AX refusal that caused it would otherwise vanish.

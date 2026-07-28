@@ -213,7 +213,11 @@ fn main() -> anyhow::Result<()> {
         })
     };
 
-    if args.no_overlay || !cfg!(all(target_os = "macos", feature = "display")) {
+    // Platforms with a real overlay backend. Everything else logs states to
+    // stderr, which is also what --no-overlay forces.
+    let has_overlay = cfg!(all(target_os = "macos", feature = "display"))
+        || cfg!(all(target_os = "windows", feature = "display"));
+    if args.no_overlay || !has_overlay {
         // No GUI: the pipeline owns the main thread; states go to stderr.
         let shared = shared;
         std::thread::Builder::new()
@@ -295,7 +299,50 @@ fn overlay_main(
     }
 }
 
-#[cfg(not(all(target_os = "macos", feature = "display")))]
+/// Windows + display: the overlay is a layered window that needs no run
+/// loop of its own (it paints via UpdateLayeredWindow and takes no input,
+/// see crates/overlay/src/windows.rs), so the render loop is a plain
+/// 30Hz sleep on the main thread with the pipeline behind it. This mirrors
+/// the macOS structure without AppKit's run-loop pumping.
+#[cfg(all(target_os = "windows", feature = "display"))]
+fn overlay_main(
+    shared: aquad::state::StatusShared,
+    run_pipeline: impl FnOnce() -> anyhow::Result<()> + Send + 'static,
+) -> anyhow::Result<()> {
+    let mut ov = overlay::platform_overlay()?;
+
+    let (done_tx, done_rx) = std::sync::mpsc::channel::<anyhow::Result<()>>();
+    std::thread::Builder::new()
+        .name("aquad-pipeline".into())
+        .spawn(move || {
+            let _ = done_tx.send(run_pipeline());
+        })?;
+
+    loop {
+        let frame = shared.snapshot();
+        // Render errors are logged, never fatal: the overlay is an
+        // indicator, and dictation must outlive its cosmetic failures.
+        if let Err(e) = ov.render(&frame) {
+            eprintln!("aquad: overlay render failed: {e}");
+        }
+        std::thread::sleep(std::time::Duration::from_millis(33));
+        match done_rx.try_recv() {
+            Ok(result) => {
+                let _ = ov.hide();
+                return result;
+            }
+            Err(std::sync::mpsc::TryRecvError::Empty) => {}
+            Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                anyhow::bail!("pipeline thread died without reporting")
+            }
+        }
+    }
+}
+
+#[cfg(not(any(
+    all(target_os = "macos", feature = "display"),
+    all(target_os = "windows", feature = "display")
+)))]
 fn overlay_main(
     _shared: aquad::state::StatusShared,
     run_pipeline: impl FnOnce() -> anyhow::Result<()> + Send + 'static,

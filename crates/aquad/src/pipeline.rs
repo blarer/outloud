@@ -165,9 +165,8 @@ pub async fn run(
                         // they speak. Warm AX read is ~134us (docs/latency.md),
                         // cheap enough for the event loop.
                         let span = recorder.start(Stage::Read);
-                        let snap = ax_edit::snapshot_focused().ok();
+                        let mode = inject::mode_at_keydown();
                         recorder.finish(span);
-                        let mode = inject::mode_from_snapshot(snap.as_ref());
                         if let Mode::Edit { selected } = &mode {
                             eprintln!("aquad: edit mode on selection: \"{selected}\"");
                         }

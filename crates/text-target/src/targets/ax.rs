@@ -158,6 +158,44 @@ mod windows_uia {
             unsafe { element.GetCurrentPatternAs::<IUIAutomationValuePattern>(UIA_ValuePatternId) }
                 .ok()
         }
+
+        /// The focused element's currently selected text, if any.
+        ///
+        /// This is what decides dictate-vs-edit at key-down time: the
+        /// Windows counterpart of `ax_edit::TextSnapshot::selected_text`.
+        /// A caret is a zero-length selection in UIA exactly as in AX, so
+        /// an empty selection and no selection give the same answer.
+        pub fn selected_text(&mut self) -> Result<Option<String>, TargetError> {
+            let element = self.focused()?;
+            let Some(tp) = Self::text_pattern(&element) else {
+                // ValuePattern-only controls expose no selection concept,
+                // so the honest answer is "none", which degrades to
+                // dictation rather than guessing at an edit.
+                return Ok(None);
+            };
+            unsafe {
+                let ranges = tp
+                    .GetSelection()
+                    .map_err(|e| com_err("TextPattern::GetSelection", e))?;
+                let count = ranges
+                    .Length()
+                    .map_err(|e| com_err("TextRangeArray::Length", e))?;
+                // Multi-range selections (column select in a grid) count as
+                // no selection: rewriting a discontiguous selection has no
+                // defined meaning, and dictation is the safe degradation.
+                if count != 1 {
+                    return Ok(None);
+                }
+                let range = ranges
+                    .GetElement(0)
+                    .map_err(|e| com_err("TextRangeArray::GetElement", e))?;
+                let text = range
+                    .GetText(-1)
+                    .map_err(|e| com_err("TextRange::GetText", e))?
+                    .to_string();
+                Ok(if text.is_empty() { None } else { Some(text) })
+            }
+        }
     }
 
     impl TextTarget for UiaTarget {
