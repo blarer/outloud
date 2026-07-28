@@ -18,12 +18,13 @@ output are quoted. Where something could not be reproduced, it says so.
 ## Recommendation: **CONDITIONAL GO**
 
 Go, for a **source-install beta on macOS 26+, capped at people who can run a
-shell command**, once the remaining items below are cleared. Two of the three
-blockers are already fixed; the third (single-instance) is about thirty lines.
+shell command**. All three blockers are now cleared: the broken install path and
+the undocumented Gatekeeper reality were fixed here, and the single-instance
+guard was implemented and tested here.
 
 Do **not** ship a downloadable `.app` yet. That path is blocked by
 notarization, which needs a paid Apple Developer account and cannot be worked
-around.
+around. The conditional in "conditional go" is that sentence and nothing else.
 
 The reason this is a GO rather than a NO-GO: the product's hard parts are
 genuinely done. Dictation, edit-by-voice, and terminal injection work, latency
@@ -191,7 +192,7 @@ beta honest. It does not make binary distribution possible.
 ### B3. No single-instance guard: two copies both go hot on one keypress
 
 **Severity: blocker. Frequency: high, because the failure mode is invisible
-until it bites. Status: NOT fixed, needs an owner.**
+until it bites. Status: FIXED in this assessment, with tests.**
 
 Nothing prevents two daemons running at once. Both bind the same hotkey and
 both open the microphone:
@@ -250,11 +251,73 @@ Error: afconvert failed
 Only affects `--say`, which is a test path, but it shows the same missing
 assumption.
 
-**Recommended fix:** an advisory lock on a pidfile at startup. If another
-instance holds it, print which pid owns it and exit non-zero. Roughly 30 lines.
-It belongs in `crates/aquad/src/main.rs`, which was being actively edited by
-the menu bar agent during this assessment, so it was not written here rather
-than risk a collision.
+**Fixed in this assessment.** `crates/aquad/src/instance.rs` takes an advisory
+`flock(LOCK_EX | LOCK_NB)` on a lock file in `$XDG_RUNTIME_DIR` (else the temp
+directory) before anything is bound or opened, so a refused start cannot
+disturb the daemon already running.
+
+`flock` rather than a pid file that gets parsed, deliberately. The obvious
+design, write our pid and have the next process check whether it is alive,
+fails in exactly the case that matters: a daemon killed with `SIGKILL` never
+cleans up, and the next launch finds a pid that is either dead or has since
+been reused, and has to guess. A `flock` is owned by the open file description
+and the kernel releases it however the process dies, so "is another daemon
+running?" has an authoritative answer. The pid is still written to the file,
+but only so the error message can name it.
+
+Before and after, same commands:
+
+```
+BEFORE
+$ ./target/release/aquad --asr mock --no-overlay &   # A
+$ ./target/release/aquad --asr mock --no-overlay &   # B
+$ pgrep -f 'release/aquad' | wc -l
+2                                    <- both running, both hot on one keypress
+
+AFTER
+$ ./target/release/aquad --asr mock --no-overlay &   # A
+$ ./target/release/aquad --asr mock --no-overlay     # B
+Error: aquad is already running (pid 17138). Quit it from the menu bar, or
+`kill 17138`, then start this one. Running two copies makes both record you
+and both type what you said.
+B exit code: 1
+$ pgrep -f 'release/aquad' | wc -l
+1
+```
+
+The three paths that a naive guard breaks were each verified rather than
+assumed:
+
+- **Restart after quit**: start, `pkill`, start again, reaches `state idle`.
+- **Restart after `SIGKILL`**: start, `kill -9`, start again, reaches
+  `state idle`. No stale lock, which is the whole reason for `flock`.
+- **Concurrent `--once`**: still allowed, because it is a measurement that
+  neither binds the hotkey nor stays resident, and benchmarks run several at
+  once. Both runs commit.
+
+Six unit tests cover acquire, contention with the pid reported, release on
+drop, file cleanup, a stale lock file from a dead process, and the wording of
+the refusal message. That last one is a test because the message *is* the
+feature: a daemon with no Dock icon that says only "already running" leaves the
+user with no way to act.
+
+**The `--say` collision is fixed too**, since it is the same missing
+assumption. `synthesize()` now writes to a per-process temp directory:
+
+```
+BEFORE (two concurrent --once runs)
+run 1: e2e: release->text 192ms ... | "Duplicate delivery test."
+run 2: Error: ExtAudioFileCreateWithURL failed (-48)
+       Error: afconvert failed
+
+AFTER
+run 1: e2e: release->text 411ms ... | "Concurrent one."
+run 2: e2e: release->text 283ms ... | "Concurrent too."
+```
+
+Windows is left unguarded on purpose: there is no `flock`, and the right
+mechanism there is a named mutex, which should be written when the Windows
+backends are first exercised on real hardware rather than guessed at now.
 
 ---
 
@@ -632,7 +695,8 @@ Landed in the README's "Known limitations" section in this commit:
 
 1. Unsigned and un-notarized; a copied or downloaded app will not open.
 2. `cargo build` alone does not produce a working recognizer.
-3. No single-instance guard; two copies both go hot on one keypress.
+3. ~~No single-instance guard.~~ Fixed; a second copy is refused and told
+   which pid to quit.
 4. ~~No `--version` on the daemon.~~ Fixed; `aquad --version` prints `aquad 0.1.0`.
 5. The Accessibility grant dies on every rebuild (cdhash pinning).
 6. Revoking a permission while running is not noticed until relaunch.
@@ -653,21 +717,21 @@ Ordered by user pain per unit of effort.
 | 2 | ~~State the Gatekeeper reality in the README~~ | done | Silent failure with `open` returning 0 |
 | 3 | ~~Ship `scripts/uninstall-macos.sh`~~ | done | Testers must be able to leave |
 | 4 | ~~Correct the latency claim~~ | done | A false number in a beta README burns trust |
-| 5 | Single-instance guard (pidfile + advisory lock) | ~30 lines | Two hot microphones is the worst remaining bug |
-| 6 | Reap stale helpers at daemon startup | ~20 lines | Kills M4's whole class without finding the trigger |
-| 7 | Poll accessibility trust once a second | ~25 lines | Turns a silent failure into a visible state |
-| 8 | Call `inert_settings()` at startup (detection landed in 22f579b, no caller yet) | ~4 lines | Twelve silent no-ops become one honest line |
-| 9 | Make `bundle-aquad-macos.sh` fail, not warn, without `swiftc` | 2 lines | Stops shipping a recognizer-less bundle |
-| 10 | Always rebuild the helper, or hash-check it | 2 lines | The staleness that hid blocker B1 |
-| 11 | `shell-bridge uninstall` | ~20 lines | Users should not need the sledgehammer script |
-| 12 | Issue template asking for doctor output and version | 20 min | Turns "it doesn't work" into a diagnosis |
-| 13 | Wire `migrate()` into the config load path | ~15 lines | Must exist before schema version 2, not after |
-| 14 | Buy the Developer ID certificate | 99 USD, days | Unblocks binary distribution and fixes cdhash pain |
+| 5 | ~~Single-instance guard (`flock` on a lock file)~~ | done | Two hot microphones was the worst remaining bug |
+| 6 | ~~`--version` on the daemon~~ | done | Blocked every bug report |
+| 7 | Reap stale helpers at daemon startup | ~20 lines | Kills M4's whole class without finding the trigger |
+| 8 | Poll accessibility trust once a second | ~25 lines | Turns a silent failure into a visible state |
+| 9 | Call `inert_settings()` at startup (detection landed in 22f579b, no caller yet) | ~4 lines | Twelve silent no-ops become one honest line |
+| 10 | Make `bundle-aquad-macos.sh` fail, not warn, without `swiftc` | 2 lines | Stops shipping a recognizer-less bundle |
+| 11 | Always rebuild the helper, or hash-check it | 2 lines | The staleness that hid blocker B1 |
+| 12 | `shell-bridge uninstall` | ~20 lines | Users should not need the sledgehammer script |
+| 13 | Issue template asking for doctor output and version | 20 min | Turns "it doesn't work" into a diagnosis |
+| 14 | Wire `migrate()` into the config load path | ~15 lines | Must exist before schema version 2, not after |
+| 15 | Buy the Developer ID certificate | 99 USD, days | Unblocks binary distribution and fixes cdhash pain |
 
-Items 5 through 8 are the beta-blocking remainder. All four are small and none
-requires a design decision. Items 1 through 4 landed with this document; items
-5' (`--version`) and the menu bar click fix landed alongside it from other
-agents.
+Items 1 through 6 landed during this assessment. Items 7 through 9 are the
+remaining quality work; none is a ship-stopper for a source beta, and none
+requires a design decision.
 
 ---
 

@@ -113,7 +113,12 @@ fn make_recognizer_factory(kind: &str) -> anyhow::Result<RecognizerFactory> {
 
 /// Synthesize `text` to a 16kHz WAV with the OS voice, for --say.
 fn synthesize(text: &str) -> anyhow::Result<std::path::PathBuf> {
-    let dir = std::env::temp_dir().join("aquad-say");
+    // Per-process directory. `--once` runs are deliberately allowed to run
+    // concurrently (benchmarks do), and a shared path made two of them fight
+    // over the same file: the loser died with `ExtAudioFileCreateWithURL
+    // failed (-48)`, which is `dupFNErr` and reads as a corrupt install
+    // rather than as two processes colliding.
+    let dir = std::env::temp_dir().join(format!("aquad-say-{}", std::process::id()));
     std::fs::create_dir_all(&dir)?;
     let aiff = dir.join("utterance.aiff");
     let wav = dir.join("utterance.wav");
@@ -142,6 +147,20 @@ fn synthesize(text: &str) -> anyhow::Result<std::path::PathBuf> {
 
 fn main() -> anyhow::Result<()> {
     let mut args = parse_args()?;
+
+    // Refuse to be the second daemon. Two copies both bind the hotkey and
+    // both open the microphone, so one keypress records the user twice and
+    // types their words twice into the field they are focused on. Taken
+    // before anything is bound or opened, so a refused start has no effect
+    // on the daemon that is already running.
+    //
+    // Skipped for --once, which is a one-shot measurement: it neither binds
+    // the hotkey nor stays resident, and benchmarks run several at a time.
+    let _instance = if args.once {
+        None
+    } else {
+        Some(aquad::instance::acquire().map_err(|e| anyhow::anyhow!("{e}"))?)
+    };
 
     let (engine, shared) = Engine::new();
 

@@ -79,6 +79,7 @@ dependencies = [
  "diag",
  "edit-intent",
  "hotkey",
+ "libc",
  "objc2",
  "objc2-app-kit",
  "objc2-foundation",

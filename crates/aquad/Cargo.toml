@@ -34,6 +34,12 @@ text-target = { path = "../text-target", default-features = false }
 # transcribing-elapsed ticker; sync for the watch/mpsc/oneshot channel set.
 tokio = { version = "1", features = ["rt-multi-thread", "sync", "time", "macros"] }
 
+# `flock`, for the single-instance guard. One libc call rather than a crate:
+# the alternative designs all reduce to parsing a pid file, which cannot
+# distinguish a live daemon from a dead one whose pid has been reused.
+[target.'cfg(unix)'.dependencies]
+libc = "0.2.189"
+
 # The overlay itself needs a main-thread AppKit run loop; the daemon hosts it.
 [target.'cfg(target_os = "macos")'.dependencies]
 objc2 = "0.6"

@@ -305,7 +305,7 @@ evidence in [`docs/beta-readiness.md`](docs/beta-readiness.md).
 |---|---|---|
 | Unsigned and un-notarized | An app copied or downloaded from another machine silently refuses to open. `spctl -a -t exec dist/Aqua.app` says `rejected` | Build it locally; local builds carry no quarantine flag |
 | `cargo build` alone is not enough | `recognizer failed to load (aqua-speech-helper not found...)` | Use `./scripts/bundle-aquad-macos.sh`, which compiles the Swift helper |
-| No single-instance guard | Two copies both bind the hotkey and both open the microphone; one utterance can be delivered twice | Check with `pgrep -fl Aqua` before launching, quit via the menu bar item |
+| Only one copy may run | A second launch exits with `aquad is already running (pid N)` | Quit the first from the menu bar, or `kill N` |
 | Accessibility grant dies on every rebuild | Toggle reads "on", every call fails | `tccutil reset Accessibility dev.aquaoss.aquad`, then re-grant |
 | Revoking a permission while running is not noticed | Dictation stops working until relaunch | Quit and relaunch after changing permissions |
 | macOS 13-25 has no bundled recognizer | `recognizer never becomes ready` | Only macOS 26+ has `SpeechTranscriber`; other backends are stubbed |

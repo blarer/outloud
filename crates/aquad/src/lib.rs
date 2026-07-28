@@ -34,6 +34,7 @@
 //! thread and state transitions are logged instead of drawn.
 
 pub mod inject;
+pub mod instance;
 pub mod menubar;
 pub mod menuhost;
 pub mod pipeline;
