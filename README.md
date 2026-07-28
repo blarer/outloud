@@ -406,6 +406,31 @@ evidence in [`docs/beta-readiness.md`](docs/beta-readiness.md).
 | Freeform edits are not wired up | "tighten this up" reports that it needs the language model | Use the literal commands listed above |
 | Linux does not work; Windows is unexercised | — | macOS only for now |
 
+### Dictating during a call
+
+This works. You can dictate into a Discord, FaceTime, Zoom, or Meet call while
+that app is using the microphone, and neither side loses audio: CoreAudio
+shares input devices between processes rather than granting one of them
+exclusive ownership.
+
+Two implementation choices keep it that way, and both are guarded by
+`crates/audio/tests/shared_device.rs` so they cannot be undone by accident:
+
+- We never take hog mode, which is the one call that *would* seize the device
+  and would knock a call app off the microphone the instant you pressed the
+  hotkey.
+- We accept whatever format the device is already running and resample to
+  16kHz ourselves, instead of demanding a sample rate and forcing a
+  reconfiguration on whoever got there first.
+
+The microphone is also only open while you hold the hotkey, so macOS's orange
+recording dot means exactly what it appears to mean.
+
+One caveat is specific to Bluetooth: a headset switched into its low-quality
+call profile is quieter and more compressed for everything using it, so
+recognition accuracy drops for the same reason the other participants sound
+worse. Wired and built-in microphones are unaffected.
+
 When something goes wrong, `./scripts/doctor.sh` classifies it as permission,
 configuration, or bug, and only the last belongs in an issue.
 
