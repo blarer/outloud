@@ -22,6 +22,16 @@ shell command**. All three blockers are now cleared: the broken install path and
 the undocumented Gatekeeper reality were fixed here, and the single-instance
 guard was implemented and tested here.
 
+**This verdict covers macOS only, and is not the whole picture.** The release QA
+assessment in [`release-readiness.md`](release-readiness.md) reaches a stricter
+conclusion on CI and Linux ("would not ship today": four glibc CI rows still
+need workflow changes and have no owner, and no Linux job has passed across this
+run of commits). Both can be true at once, because they answer different
+questions: whether a macOS user can install and use this, and whether the
+project's build and release machinery is trustworthy. A beta that ships macOS
+source installs to people who build locally does not depend on the Linux rows;
+anything wider does. Read both before deciding.
+
 Do **not** ship a downloadable `.app` yet. That path is blocked by
 notarization, which needs a paid Apple Developer account and cannot be worked
 around. The conditional in "conditional go" is that sentence and nothing else.
