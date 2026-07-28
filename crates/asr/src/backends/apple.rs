@@ -28,12 +28,13 @@
 //! - 12s multi-sentence input: finals arrive per sentence; the tail final
 //!   lands **~0.9s after EOF**. Well inside the 200ms/5s finalizer budget
 //!   when amortized, comfortably fast as a finalizer.
-//! - Caveat measured honestly: volatile partials arrived in *bursts at
-//!   sentence boundaries* (~4.3s in) rather than word-by-word on synthetic
-//!   TTS audio. Whether real microphone audio with natural pauses behaves
-//!   better is an open question for M1; until then treat this backend as an
-//!   excellent zero-install *finalizer* and keep the streamer slot for
-//!   Moonshine/Zipformer.
+//! - Volatile partials: with `.fastResults` in the transcriber's
+//!   reportingOptions, partials arrive progressively during speech (first
+//!   at ~1.4s of a 3.3s real-time-paced utterance, then in ~1.2s waves).
+//!   Without `.fastResults` the OS holds every hypothesis and releases all
+//!   of them in one ~10ms burst after end-of-input, which looked like a
+//!   frozen overlay followed by the whole sentence at once. See the
+//!   comment in `helper/transcriber.swift`.
 
 use std::io::{BufRead, BufReader, Write};
 use std::path::PathBuf;

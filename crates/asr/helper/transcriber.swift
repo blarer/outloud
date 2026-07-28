@@ -55,10 +55,23 @@ Task {
 
         // volatileResults gives us the fast partial hypotheses that the
         // two-stage pipeline paints as ghost text.
+        //
+        // fastResults is load-bearing, not an optimization. Without it,
+        // SpeechTranscriber holds every volatile hypothesis internally and
+        // releases all of them in one burst when input finishes: measured
+        // with real-time-paced audio, 17 partials arrived within 10ms of
+        // each other AFTER the whole utterance had been spoken, so the user
+        // watched a frozen overlay and then got the full sentence at once.
+        // With fastResults, the same audio produced partials spread across
+        // the utterance (first at ~1.3s of a 3.3s clip, then every ~1.3s),
+        // which is what "live ghost text" actually requires. Neither stdout
+        // buffering nor the stdin reader was the cause; instrumentation
+        // showed audio reaching the analyzer in real time while zero
+        // results came back until end-of-input.
         let transcriber = SpeechTranscriber(
             locale: transcriberLocale,
             transcriptionOptions: [],
-            reportingOptions: [.volatileResults],
+            reportingOptions: [.volatileResults, .fastResults],
             attributeOptions: []
         )
 

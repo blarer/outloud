@@ -71,10 +71,14 @@ f32le PCM on stdin and NDJSON events on stdout. Measured with
   final **~0.9s after end of input**.
 - The live `cargo test -p asr -- --ignored` round trip (synthesize, spawn,
   feed, finalize, assert text) completes in **1.12s**.
-- Honest caveat: volatile partials arrived in bursts at sentence boundaries
-  on TTS audio rather than word-by-word. Until verified against natural
-  microphone speech, treat SpeechTranscriber as a zero-install *finalizer*
-  and plan the streamer slot for Moonshine/Zipformer.
+- Volatile partials stream progressively **only with `.fastResults`** in the
+  transcriber's reportingOptions. Without it the OS batches every hypothesis
+  and releases all of them ~10ms apart *after* end-of-input (measured: 17
+  partials at t=4.79s for a 4.7s utterance fed at real-time pace), which the
+  user experiences as a frozen overlay followed by the whole sentence at
+  once. With `.fastResults` the same audio yields the first partial at
+  ~1.4s and further waves every ~1.2s during speech. The helper sets it;
+  do not remove it.
 
 Model assets are downloaded and owned by the OS (`AssetInventory`): zero app
 download, model RAM charged to the system.
