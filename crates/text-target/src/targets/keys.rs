@@ -50,12 +50,22 @@ impl TextTarget for CgEventTarget {
     }
 }
 
-/// Windows `SendInput` synthesis. Stub.
+/// Windows `SendInput` synthesis with `KEYEVENTF_UNICODE`.
 ///
-/// Needs: `SendInput` with `KEYEVENTF_UNICODE`, which delivers arbitrary
-/// UTF-16 without layout translation, the one platform where the unicode
-/// path is first-class. Blocked across integrity levels (cannot type into
-/// an elevated window from a normal process) and by some anti-cheat hooks.
+/// The one platform where the unicode path is first-class: each UTF-16 code
+/// unit rides a KEYBDINPUT with the UNICODE flag, so arbitrary text lands
+/// without layout translation (the layout-dependence trap in the module
+/// docs simply does not apply). Whole strings go in ONE SendInput call:
+/// the batch is atomic with respect to other input injection, which
+/// prevents interleaving with real user keystrokes mid-utterance.
+///
+/// Known blockers, both by design of the OS:
+/// - **UIPI**: injection into a window of higher integrity (an elevated
+///   app) is silently discarded; SendInput reports success. Documented in
+///   docs/compat-matrix.md rather than detected, because there is no
+///   supported way to ask "did the target accept it".
+/// - Anti-cheat and secure-desktop (UAC prompt, login screen) input paths
+///   ignore injected input entirely.
 pub struct SendInputTarget;
 
 impl TextTarget for SendInputTarget {
@@ -75,9 +85,60 @@ impl TextTarget for SendInputTarget {
         Err(TargetError::NotReadable("keystroke synthesis cannot read"))
     }
 
+    #[cfg(all(target_os = "windows", feature = "display"))]
+    fn insert(&mut self, text: &str) -> Result<(), TargetError> {
+        use windows::Win32::UI::Input::KeyboardAndMouse::{
+            SendInput, INPUT, INPUT_0, INPUT_KEYBOARD, KEYBDINPUT, KEYEVENTF_KEYUP,
+            KEYEVENTF_UNICODE, VIRTUAL_KEY,
+        };
+
+        // Two INPUTs per UTF-16 unit: down then up. Some applications
+        // (notably ones translating back through ToUnicode) drop unicode
+        // events that have no up transition, so both edges are sent even
+        // though the down alone usually suffices.
+        let mut inputs: Vec<INPUT> = Vec::with_capacity(text.encode_utf16().count() * 2);
+        for unit in text.encode_utf16() {
+            for flags in [KEYEVENTF_UNICODE, KEYEVENTF_UNICODE | KEYEVENTF_KEYUP] {
+                inputs.push(INPUT {
+                    r#type: INPUT_KEYBOARD,
+                    Anonymous: INPUT_0 {
+                        ki: KEYBDINPUT {
+                            // wVk must be zero for KEYEVENTF_UNICODE; the
+                            // code unit travels in wScan.
+                            wVk: VIRTUAL_KEY(0),
+                            wScan: unit,
+                            dwFlags: flags,
+                            time: 0,
+                            dwExtraInfo: 0,
+                        },
+                    },
+                });
+            }
+        }
+        if inputs.is_empty() {
+            return Ok(());
+        }
+        // SAFETY: `inputs` is a valid, correctly-sized INPUT array and
+        // SendInput does not retain the pointer past the call.
+        let sent = unsafe { SendInput(&inputs, std::mem::size_of::<INPUT>() as i32) };
+        if sent as usize != inputs.len() {
+            // Partial sends happen when input is blocked (UIPI, BlockInput,
+            // secure desktop). Partial TEXT is worse than none for the
+            // caller's retry logic, but there is no way to unsend; report
+            // honestly.
+            return Err(TargetError::Transport(format!(
+                "SendInput delivered {}/{} events (input blocked by UIPI or secure desktop?)",
+                sent,
+                inputs.len()
+            )));
+        }
+        Ok(())
+    }
+
+    #[cfg(not(all(target_os = "windows", feature = "display")))]
     fn insert(&mut self, _text: &str) -> Result<(), TargetError> {
         Err(TargetError::Unsupported(
-            "SendInput keystroke synthesis not yet implemented",
+            "SendInput exists only on Windows display builds",
         ))
     }
 

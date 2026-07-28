@@ -26,12 +26,23 @@ enum Backend {
     WlClipboard,
     /// X11 `xclip -selection clipboard`.
     Xclip,
+    /// Windows `clip.exe` for copy, PowerShell `Get-Clipboard` for paste.
+    /// Shelling out keeps the parity with the other platforms (no clipboard
+    /// crate, no window handle ownership) at the cost of PowerShell startup
+    /// on the read path, acceptable because reads happen once per edit to
+    /// save the user's clipboard, not in a hot loop.
+    WinClip,
 }
 
 impl Backend {
     fn detect() -> Option<Backend> {
         if cfg!(target_os = "macos") {
             return Some(Backend::Pasteboard);
+        }
+        if cfg!(target_os = "windows") {
+            // clip.exe ships with every Windows since Vista; PowerShell
+            // with every Windows since 7. No probe needed.
+            return Some(Backend::WinClip);
         }
         if std::env::var_os("WAYLAND_DISPLAY").is_some() && which("wl-copy") {
             return Some(Backend::WlClipboard);
@@ -51,6 +62,7 @@ impl Backend {
                 c.args(["-selection", "clipboard"]);
                 c
             }
+            Backend::WinClip => Command::new("clip.exe"),
         }
     }
 
@@ -65,6 +77,13 @@ impl Backend {
             Backend::Xclip => {
                 let mut c = Command::new("xclip");
                 c.args(["-selection", "clipboard", "-o"]);
+                c
+            }
+            Backend::WinClip => {
+                let mut c = Command::new("powershell.exe");
+                // -Raw: no trailing newline appended per line. NoProfile
+                // keeps startup out of the user's profile scripts.
+                c.args(["-NoProfile", "-Command", "Get-Clipboard -Raw"]);
                 c
             }
         }
@@ -155,10 +174,57 @@ impl ClipboardTarget {
                 "osascript paste keystroke failed (Accessibility grant?)".into(),
             ));
         }
+        #[cfg(all(target_os = "windows", feature = "display"))]
+        {
+            return send_ctrl_v();
+        }
+        #[allow(unreachable_code)]
         Err(TargetError::Unsupported(
             "paste keystroke synthesis needs the synthetic-keys tier on this platform",
         ))
     }
+}
+
+/// Ctrl+V through SendInput, all four edges in one atomic batch so a real
+/// keystroke cannot interleave and turn our paste into ctrl+shift+v.
+#[cfg(all(target_os = "windows", feature = "display"))]
+fn send_ctrl_v() -> Result<(), TargetError> {
+    use windows::Win32::UI::Input::KeyboardAndMouse::{
+        SendInput, INPUT, INPUT_0, INPUT_KEYBOARD, KEYBDINPUT, KEYEVENTF_KEYUP, VIRTUAL_KEY,
+    };
+    const VK_CONTROL: u16 = 0x11;
+    const VK_V: u16 = 0x56;
+
+    let key = |vk: u16, up: bool| INPUT {
+        r#type: INPUT_KEYBOARD,
+        Anonymous: INPUT_0 {
+            ki: KEYBDINPUT {
+                wVk: VIRTUAL_KEY(vk),
+                wScan: 0,
+                dwFlags: if up {
+                    KEYEVENTF_KEYUP
+                } else {
+                    Default::default()
+                },
+                time: 0,
+                dwExtraInfo: 0,
+            },
+        },
+    };
+    let inputs = [
+        key(VK_CONTROL, false),
+        key(VK_V, false),
+        key(VK_V, true),
+        key(VK_CONTROL, true),
+    ];
+    // SAFETY: fixed-size INPUT array, not retained past the call.
+    let sent = unsafe { SendInput(&inputs, std::mem::size_of::<INPUT>() as i32) };
+    if sent as usize != inputs.len() {
+        return Err(TargetError::Transport(
+            "SendInput(ctrl+V) was blocked (UIPI: elevated window in focus?)".into(),
+        ));
+    }
+    Ok(())
 }
 
 impl TextTarget for ClipboardTarget {

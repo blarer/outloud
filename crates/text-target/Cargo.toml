@@ -22,10 +22,22 @@ default = ["display"]
 # a runtime crash on the machine least able to report it. Gating the tiers
 # here means `--no-default-features` fails loudly at compile time in CI
 # instead of silently at runtime over SSH.
-display = ["dep:ax-edit"]
+display = ["dep:ax-edit", "dep:windows"]
 
 [dependencies]
 anyhow.workspace = true
 # Optional so a headless build links no accessibility framework at all.
 ax-edit = { path = "../ax-edit", optional = true }
 base64 = "0.22"
+
+# UI Automation, SendInput, and the COM plumbing they need. Target-gated so
+# no other platform ever downloads it, and display-gated for the same
+# correctness reason as ax-edit: a headless Windows build (SSH into a
+# Windows box) must not link user-interface libraries.
+[target.'cfg(target_os = "windows")'.dependencies]
+windows = { version = "0.62", optional = true, features = [
+    "Win32_Foundation",
+    "Win32_System_Com",
+    "Win32_UI_Accessibility",
+    "Win32_UI_Input_KeyboardAndMouse",
+] }

@@ -218,7 +218,7 @@ pub fn spawn(
     // The pre-compiled Matcher speaks macOS event vocabulary (CGEvent
     // types and NX flag bits) and is unused here; the Windows matcher is
     // compiled fresh from the chord.
-    drop(matcher);
+    let _ = matcher;
 
     let win_matcher = WinMatcher::new(chord).map_err(|e| HotkeyError::BadChord(e.to_string()))?;
 

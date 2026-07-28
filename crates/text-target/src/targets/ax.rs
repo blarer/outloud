@@ -70,17 +70,201 @@ impl TextTarget for AxTarget {
     }
 }
 
-/// Windows UIAutomation `TextPattern` target. Stub.
+/// Windows UI Automation target: the Windows equivalent of what `ax-edit`
+/// does on macOS, and the core Windows capability.
 ///
-/// The port needs: `IUIAutomation::GetFocusedElement`, then
-/// `ITextPattern::DocumentRange` for read and `ITextPattern2` /
-/// `ValuePattern::SetValue` for write. In-place replacement of a subrange
-/// goes through `ITextRange::Select` plus TSF or `ValuePattern`, and
-/// undo preservation matches the AX story: editing via the pattern keeps
-/// the app's undo, replacing the whole value usually does not. The
-/// `windows` crate exposes all of it; the work is COM lifetime plumbing.
+/// Strategy, mirroring ax-edit's tiered approach:
+///
+/// - **Read** via `TextPattern`: `IUIAutomationTextPattern::DocumentRange`
+///   gives the full text, `GetSelection` the selected range. Where the
+///   element only implements `ValuePattern` (simple Win32 edit boxes), the
+///   value string is the fallback read.
+/// - **Replace** prefers keystroke-free in-place edits. UIA has no direct
+///   "set this range's text" call (that is TSF's job), but two cooperating
+///   paths cover most fields:
+///   1. If there is a selection and the element supports `ValuePattern`
+///      and is not read-only, compose the new value string and
+///      `SetValue`. This bypasses the app's editing machinery, so undo is
+///      usually LOST for this path; the capability flags say so.
+///   2. With no better path, select-all + typed replacement belongs to the
+///      SendInput tier, not here; this target refuses rather than
+///      degrading silently, so the caller can choose.
+///
+/// UIPI trap (docs/build-and-release.md, docs/hotkeys.md): all of this
+/// silently fails against *elevated* windows. `GetFocusedElement` either
+/// errors or returns a proxy whose patterns refuse, because a
+/// medium-integrity process cannot drive a high-integrity UI. The error
+/// path here surfaces the HRESULT so the diagnosis is at least loggable.
+#[cfg(all(target_os = "windows", feature = "display"))]
+pub use self::windows_uia::UiaTarget;
+
+#[cfg(all(target_os = "windows", feature = "display"))]
+mod windows_uia {
+    use super::*;
+
+    use windows::core::BSTR;
+    use windows::Win32::System::Com::{
+        CoCreateInstance, CoInitializeEx, CLSCTX_INPROC_SERVER, COINIT_APARTMENTTHREADED,
+    };
+    use windows::Win32::UI::Accessibility::{
+        CUIAutomation, IUIAutomation, IUIAutomationElement, IUIAutomationTextPattern,
+        IUIAutomationValuePattern, UIA_TextPatternId, UIA_ValuePatternId,
+    };
+
+    /// One connected UI Automation session. Holds the COM automation object
+    /// for its lifetime; COM itself is initialized per-thread on creation.
+    pub struct UiaTarget {
+        automation: IUIAutomation,
+    }
+
+    fn com_err(what: &str, e: windows::core::Error) -> TargetError {
+        TargetError::Transport(format!("{what}: {e}"))
+    }
+
+    impl UiaTarget {
+        /// Connect to UI Automation. Initializes COM (apartment-threaded,
+        /// the model UIA clients are documented for) on the calling thread;
+        /// "already initialized" is success, not an error, so embedding in
+        /// a host that owns COM works.
+        pub fn new() -> Result<Self, TargetError> {
+            unsafe {
+                // S_FALSE (already initialized) is Ok(_) in windows-rs's
+                // HRESULT mapping; RPC_E_CHANGED_MODE is a real conflict
+                // worth surfacing.
+                CoInitializeEx(None, COINIT_APARTMENTTHREADED)
+                    .ok()
+                    .map_err(|e| com_err("CoInitializeEx", e))?;
+                let automation: IUIAutomation =
+                    CoCreateInstance(&CUIAutomation, None, CLSCTX_INPROC_SERVER)
+                        .map_err(|e| com_err("CoCreateInstance(CUIAutomation)", e))?;
+                Ok(UiaTarget { automation })
+            }
+        }
+
+        fn focused(&self) -> Result<IUIAutomationElement, TargetError> {
+            unsafe {
+                self.automation
+                    .GetFocusedElement()
+                    .map_err(|e| com_err("GetFocusedElement (elevated window in focus?)", e))
+            }
+        }
+
+        fn text_pattern(element: &IUIAutomationElement) -> Option<IUIAutomationTextPattern> {
+            unsafe { element.GetCurrentPatternAs::<IUIAutomationTextPattern>(UIA_TextPatternId) }
+                .ok()
+        }
+
+        fn value_pattern(element: &IUIAutomationElement) -> Option<IUIAutomationValuePattern> {
+            unsafe { element.GetCurrentPatternAs::<IUIAutomationValuePattern>(UIA_ValuePatternId) }
+                .ok()
+        }
+    }
+
+    impl TextTarget for UiaTarget {
+        fn name(&self) -> &'static str {
+            "windows-uia"
+        }
+
+        fn tier(&self) -> Tier {
+            Tier::Accessibility
+        }
+
+        fn capabilities(&self) -> Capabilities {
+            Capabilities {
+                can_read: true,
+                can_write_in_place: true,
+                // The write path is ValuePattern::SetValue, which replaces
+                // the control's value wholesale outside its edit machinery.
+                // Unlike macOS AXSelectedText there is no honest
+                // undo-preserving claim to make, so this is false until a
+                // TSF text service exists (targets/ime.rs).
+                preserves_undo: false,
+                is_headless: false,
+            }
+        }
+
+        fn read(&mut self) -> Result<Snapshot, TargetError> {
+            let element = self.focused()?;
+
+            if let Some(tp) = Self::text_pattern(&element) {
+                let text = unsafe {
+                    let range = tp
+                        .DocumentRange()
+                        .map_err(|e| com_err("TextPattern::DocumentRange", e))?;
+                    // -1: the whole range, unbounded.
+                    range
+                        .GetText(-1)
+                        .map_err(|e| com_err("TextRange::GetText", e))?
+                        .to_string()
+                };
+                // Selection byte offsets would need per-range character
+                // index math (UIA ranges are endpoint-relative, not
+                // index-addressed); a wrong mapping is worse than none.
+                return Ok(Snapshot {
+                    text,
+                    selection: None,
+                });
+            }
+
+            if let Some(vp) = Self::value_pattern(&element) {
+                let text = unsafe {
+                    vp.CurrentValue()
+                        .map_err(|e| com_err("ValuePattern::CurrentValue", e))?
+                        .to_string()
+                };
+                return Ok(Snapshot {
+                    text,
+                    selection: None,
+                });
+            }
+
+            Err(TargetError::NotReadable(
+                "focused element implements neither TextPattern nor ValuePattern",
+            ))
+        }
+
+        fn insert(&mut self, text: &str) -> Result<(), TargetError> {
+            // Insert-at-caret without keystrokes needs TSF; through UIA the
+            // only whole-value write is SetValue. Appending to the current
+            // value is the closest approximation and matches what dictation
+            // needs (text lands at the end of the field being dictated
+            // into). Fields that reject SetValue (read-only, no pattern)
+            // fall through to the SendInput tier via the error.
+            let element = self.focused()?;
+            let vp = Self::value_pattern(&element).ok_or(TargetError::Unsupported(
+                "focused element has no ValuePattern; use the SendInput tier",
+            ))?;
+            unsafe {
+                let current = vp
+                    .CurrentValue()
+                    .map_err(|e| com_err("ValuePattern::CurrentValue", e))?
+                    .to_string();
+                let combined = format!("{current}{text}");
+                vp.SetValue(&BSTR::from(combined))
+                    .map_err(|e| com_err("ValuePattern::SetValue", e))
+            }
+        }
+
+        fn replace(&mut self, text: &str) -> Result<(), TargetError> {
+            let element = self.focused()?;
+            let vp = Self::value_pattern(&element).ok_or(TargetError::Unsupported(
+                "focused element has no ValuePattern; in-place replace needs TSF or SendInput",
+            ))?;
+            unsafe {
+                vp.SetValue(&BSTR::from(text))
+                    .map_err(|e| com_err("ValuePattern::SetValue", e))
+            }
+        }
+    }
+}
+
+/// Non-Windows builds (and headless Windows builds) keep a stub with the
+/// same name so cross-platform callers compile; every call says why it
+/// cannot work, matching how `AxTarget` behaves off macOS.
+#[cfg(not(all(target_os = "windows", feature = "display")))]
 pub struct UiaTarget;
 
+#[cfg(not(all(target_os = "windows", feature = "display")))]
 impl TextTarget for UiaTarget {
     fn name(&self) -> &'static str {
         "windows-uia"
@@ -94,26 +278,26 @@ impl TextTarget for UiaTarget {
         Capabilities {
             can_read: true,
             can_write_in_place: true,
-            preserves_undo: true,
+            preserves_undo: false,
             is_headless: false,
         }
     }
 
     fn read(&mut self) -> Result<Snapshot, TargetError> {
         Err(TargetError::Unsupported(
-            "Windows UIAutomation backend not yet implemented",
+            "UI Automation exists only on Windows display builds",
         ))
     }
 
     fn insert(&mut self, _text: &str) -> Result<(), TargetError> {
         Err(TargetError::Unsupported(
-            "Windows UIAutomation backend not yet implemented",
+            "UI Automation exists only on Windows display builds",
         ))
     }
 
     fn replace(&mut self, _text: &str) -> Result<(), TargetError> {
         Err(TargetError::Unsupported(
-            "Windows UIAutomation backend not yet implemented",
+            "UI Automation exists only on Windows display builds",
         ))
     }
 }

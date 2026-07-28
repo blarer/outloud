@@ -96,6 +96,14 @@ impl Env for SystemEnv {
             return std::env::var_os("SSH_CONNECTION").is_none()
                 || std::env::var_os("DISPLAY").is_some();
         }
+        if cfg!(target_os = "windows") {
+            // Interactive Windows sessions always have a desktop; the
+            // headless case (SSH into Windows, a service session) is
+            // approximated the same way as macOS: no SSH marker means a
+            // desktop. Window-station probing (GetProcessWindowStation)
+            // would be exact and is noted as follow-up.
+            return std::env::var_os("SSH_CONNECTION").is_none();
+        }
         std::env::var_os("WAYLAND_DISPLAY").is_some() || std::env::var_os("DISPLAY").is_some()
     }
 
@@ -168,6 +176,18 @@ pub fn select(env: &dyn Env) -> Selection {
     // one would be a promise the binary cannot keep. Skipping them here keeps
     // selection and construction in agreement, which is what makes the
     // `unreachable!` in detect_with_env sound.
+    // Windows: UI Automation is the accessibility tier and needs no trust
+    // grant (any process may be a UIA client; only elevation boundaries
+    // apply, see docs/compat-matrix.md). The clipboard fallback below still
+    // applies when UIA construction fails at runtime.
+    #[cfg(all(feature = "display", target_os = "windows"))]
+    if env.has_display() {
+        return Selection {
+            name: "windows-uia",
+            reason: "Windows UI Automation: in-place read and write of the focused element",
+        };
+    }
+
     #[cfg(feature = "display")]
     if env.has_display() && env.ax_trusted() {
         return Selection {
@@ -209,6 +229,8 @@ pub fn detect_with_env(env: &dyn Env) -> Result<Box<dyn TextTarget>, TargetError
         "osc52" => Box::new(Osc52Target::new()),
         #[cfg(feature = "display")]
         "macos-ax" => Box::new(AxTarget),
+        #[cfg(all(feature = "display", target_os = "windows"))]
+        "windows-uia" => Box::new(crate::targets::ax::UiaTarget::new()?),
         #[cfg(feature = "display")]
         "clipboard-paste" => Box::new(ClipboardTarget::new()?),
         "daemon-socket" => Box::new(crate::targets::headless::DaemonTarget::new(
