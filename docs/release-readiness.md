@@ -28,7 +28,7 @@ owner instead of fixing it.
 | 8 | INFO | Config defaults and edge cases behave correctly | Verified, regression net added (`0e81b08`) |
 | 9 | INFO | Latency claims in `docs/latency.md` hold up | Verified, 8-run measurement |
 | 10 | **MAJOR** | Every Linux build linked ALSA, including headless and musl | **PARTLY FIXED** (`a7c7b1b`), `capture` now optional |
-| 11 | **MAJOR** | 13 of 16 config settings are silently ignored | **FIXED** (`22f579b`), now detectable; wiring is separate |
+| 11 | **MAJOR** | 13 of 16 config settings are silently ignored | **FIXED** (`22f579b` + `ed5425f`), verified end to end |
 
 CI matrix as of run `30361756410`: **7 green, 7 red.** All 7 red are Linux or
 MSRV, and after finding 3 was fixed they share a **single root cause**
@@ -310,6 +310,32 @@ signal-death does not cause it. The robust fix does not require knowing the
 trigger: **reap stale helpers at daemon startup.** That can live on the aquad
 side rather than in the off-limits `crates/asr`.
 
+### Postscript: a related scare that turned out to be our own clicks
+
+A separate report claimed the daemon wrote `enabled = false` into a user's
+config on its own. That would be severe: `enabled` is one of the three wired
+settings, so a daemon could silently ignore the hotkey forever, across
+restarts, with no visible cause.
+
+Audited on request. `crates/config` can be ruled out entirely: there is exactly
+one non-test filesystem write in the crate (`paths.rs:63`), it is reachable
+only on `ErrorKind::NotFound`, and what it writes is `starter_file()`, in which
+every setting is **commented out** — so it cannot emit an uncommented
+`enabled = false` even on the path where it does write. `layers.rs`,
+`migrate.rs`, and `profile.rs` are pure with no I/O at all.
+
+dove independently traced both sightings to their own verification clicks by
+file mtime, and an unattended daemon left running with a device change left the
+file byte-identical to a pristine backup. Consistent with the AppKit finding
+that AX presses activate menu items: an AX press on the Pause row *is* a real
+click as far as the code is concerned. **Not a defect.**
+
+The chase was still worth it: it surfaced a real adjacent bug, since an earlier
+Pause row wrote the *current* value rather than the negation, persisting a key
+while changing nothing. Fixed, and `write_setting` now skips writes that would
+not change the file. `nothing_but_a_click_writes_the_config` pins the passive
+paths shut.
+
 ---
 
 ## 7. MINOR: the bundle script degrades quietly without `swiftc`
@@ -510,9 +536,40 @@ protection. Fixed in `22f579b` by giving it one:
   about all thirteen every start would be noise, and noise is how a warning
   stops being read.
 
-Config tests went 84 -> 89. **This does not wire anything up**: it makes the
-dishonesty visible and testable. The startup warning call site belongs in
-`crates/aquad`, which is owned by another agent this session.
+Config tests went 84 -> 89. The remaining half, the call site that actually
+reaches a user, landed as `ed5425f` (dove), routed to **two** surfaces rather
+than the one I asked for: stderr for a terminal launch, and a menu row for a
+bundled launch, because `Aqua.app` sets `LSUIElement` and has no terminal at
+all, which makes stderr invisible for exactly the users the quickstart sends
+to the config file.
+
+Verified end to end against the release binary, including both negative cases,
+because a warning that fires on everything is as useless as one that fires on
+nothing:
+
+```
+===== two inert keys set (expect BOTH named) =====
+aquad: config sets "microphone" but nothing reads it yet; it has no effect
+aquad: config sets "model" but nothing reads it yet; it has no effect
+
+===== only a WIRED key set (expect NO warning) =====
+(no inert warnings)
+
+===== nothing set (expect silence) =====
+(no inert warnings)
+```
+
+**Trap worth knowing**, recorded so nobody later "discovers" this is broken and
+chases a ghost: `--once` does **not** construct a `MenuHost` (`main.rs:157`,
+`(!args.once).then(...)`, so a one-shot measurement neither creates nor mutates
+menu state), and therefore never prints this warning. That is defensible, but
+`--once` is the path used by every scripted check in this repo, including the
+latency measurements above. A first pass at verifying this feature reported
+"no warnings" in all three cases for exactly that reason; the test was wrong,
+not the feature.
+
+Note this fix makes the settings *honest*, not *implemented*. Thirteen settings
+still do nothing; the user is now told so instead of being left to guess.
 
 ---
 
