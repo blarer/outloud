@@ -473,11 +473,12 @@ starter file. That converts thirteen silent no-ops into one honest line of
 output. The alternative, wiring all thirteen, is real work and not beta-
 blocking; being honest about them is.
 
-### M7. A stray `enabled = false` write, not reproduced
+### M7. The daemon writes `enabled = false` into the user's config on its own
 
-**Frequency: unknown. Reported for completeness, not confirmed.**
+**Frequency: twice in one session, unprompted. Mechanism unknown.**
 
-Once during config testing, the daemon appended a key the user never set:
+Twice during this assessment the daemon appended a key the user never set. The
+first time, during config testing:
 
 ```
 --- before ---            --- after ---
@@ -486,13 +487,46 @@ hotkey = "fn"             hotkey = "fn"
                           enabled = false     <- appeared on its own
 ```
 
-Four attempts to reproduce failed. The one difference in the run that produced
-it: the audio input device changed mid-run ("capture: input device changed (was
-Jessie's AirPods #2); rebuilding stream"). If real, it is unpleasant, because
-`enabled = false` is the master switch and persisting it silently disables
-dictation across restarts. Reported to the menu bar agent, whose files were
-mid-edit at the time; the write path is likely there rather than in the config
-crate.
+Four immediate attempts to reproduce failed, so it was originally recorded as a
+one-off. It then happened **again**, independently, to the real user config,
+which had been restored from backup and not touched for fourteen minutes:
+
+```
+$ md5 ~/.config/aqua/config.toml /tmp/lobster-backup/config-aqua/config.toml
+MD5 (~/.config/aqua/config.toml)                  = 3448fd2134f76d9facaee3da442c8724
+MD5 (.../lobster-backup/config-aqua/config.toml)  = 7765b6776ec919e26a0a517df228197e
+
+$ head -8 ~/.config/aqua/config.toml
+# Aqua configuration. Every setting below is shown at its built-in
+...
+schema-version = 1
+enabled = false          <- again
+```
+
+Two independent sightings makes it a real defect rather than a test artifact.
+It is a write from the running daemon, not from file generation: the starter
+file deliberately writes nothing uncommented except `schema-version`, and
+`the_starter_file_is_valid_and_changes_nothing` in `crates/config/src/paths.rs`
+asserts exactly that.
+
+**This is more serious than it first appears.** `enabled` is the master switch
+and one of only three keys that are actually wired, so unlike the twelve inert
+settings in M6, this one takes effect. A user whose config silently acquires
+`enabled = false` gets a daemon that starts normally, shows its menu bar icon,
+reports `state idle`, and never responds to the hotkey, persisting across
+restarts, with nothing explaining why. That presents as "the product is
+broken", not as "a setting is off", which is the most expensive possible shape
+for a beta bug.
+
+No mechanism is claimed, because none was proven. Both sightings occurred on a
+machine that was switching audio devices repeatedly, and the first coincided
+with a logged device change ("capture: input device changed (was Jessie's
+AirPods #2); rebuilding stream"), so a persistence path reachable from
+device-change handling is one hypothesis among several. Reported to the agent
+who owns the menu bar and settings write path.
+
+**This should be understood before beta**, not merely documented. It is the one
+open item in this assessment that can silently disable the product.
 
 ---
 
@@ -541,8 +575,10 @@ Landed in the README's "Known limitations" section in this commit:
 6. Revoking a permission while running is not noticed until relaunch.
 7. macOS 13-25 has no bundled recognizer; only 26+ has `SpeechTranscriber`.
 8. Most config settings are accepted but not yet read by anything.
-9. Freeform edits are not wired to the language model.
-10. Linux does not work; Windows compiles but has never been run.
+9. The daemon has twice written `enabled = false` into a config on its own,
+   which silently disables dictation until you remove that line.
+10. Freeform edits are not wired to the language model.
+11. Linux does not work; Windows compiles but has never been run.
 
 ---
 
@@ -556,20 +592,22 @@ Ordered by user pain per unit of effort.
 | 2 | ~~State the Gatekeeper reality in the README~~ | done | Silent failure with `open` returning 0 |
 | 3 | ~~Ship `scripts/uninstall-macos.sh`~~ | done | Testers must be able to leave |
 | 4 | ~~Correct the latency claim~~ | done | A false number in a beta README burns trust |
-| 5 | Single-instance guard (pidfile + advisory lock) | ~30 lines | Two hot microphones is the worst remaining bug |
-| 6 | `--version` on `aquad`, `shell-bridge`, `spike-cli` | ~10 lines | Blocks every bug report |
-| 7 | Reap stale helpers at daemon startup | ~20 lines | Kills M4's whole class without finding the trigger |
-| 8 | Poll accessibility trust once a second | ~25 lines | Turns a silent failure into a visible state |
-| 9 | Warn once for settings the user set that nothing reads | ~20 lines | Thirteen silent no-ops become one honest line |
-| 10 | Make `bundle-aquad-macos.sh` fail, not warn, without `swiftc` | 2 lines | Stops shipping a recognizer-less bundle |
-| 11 | Always rebuild the helper, or hash-check it | 2 lines | The staleness that hid blocker B1 |
-| 12 | `shell-bridge uninstall` | ~20 lines | Users should not need the sledgehammer script |
-| 13 | Issue template asking for doctor output and version | 20 min | Turns "it doesn't work" into a diagnosis |
-| 14 | Wire `migrate()` into the config load path | ~15 lines | Must exist before schema version 2, not after |
-| 15 | Buy the Developer ID certificate | 99 USD, days | Unblocks binary distribution and fixes cdhash pain |
+| 5 | Find the `enabled = false` self-write (M7) | investigation | The only open item that can silently disable the product |
+| 6 | Single-instance guard (pidfile + advisory lock) | ~30 lines | Two hot microphones is the worst remaining bug |
+| 7 | `--version` on `aquad`, `shell-bridge`, `spike-cli` | ~10 lines | Blocks every bug report |
+| 8 | Reap stale helpers at daemon startup | ~20 lines | Kills M4's whole class without finding the trigger |
+| 9 | Poll accessibility trust once a second | ~25 lines | Turns a silent failure into a visible state |
+| 10 | Warn once for settings the user set that nothing reads | ~20 lines | Twelve silent no-ops become one honest line |
+| 11 | Make `bundle-aquad-macos.sh` fail, not warn, without `swiftc` | 2 lines | Stops shipping a recognizer-less bundle |
+| 12 | Always rebuild the helper, or hash-check it | 2 lines | The staleness that hid blocker B1 |
+| 13 | `shell-bridge uninstall` | ~20 lines | Users should not need the sledgehammer script |
+| 14 | Issue template asking for doctor output and version | 20 min | Turns "it doesn't work" into a diagnosis |
+| 15 | Wire `migrate()` into the config load path | ~15 lines | Must exist before schema version 2, not after |
+| 16 | Buy the Developer ID certificate | 99 USD, days | Unblocks binary distribution and fixes cdhash pain |
 
-Items 5 through 9 are the beta-blocking remainder. All five are small and none
-requires a design decision. Items 1 through 4 landed with this document.
+Items 5 through 10 are the beta-blocking remainder. Item 5 is the only one
+needing investigation rather than implementation, which is why it is first.
+Items 1 through 4 landed with this document.
 
 ---
 

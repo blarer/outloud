@@ -311,6 +311,7 @@ evidence in [`docs/beta-readiness.md`](docs/beta-readiness.md).
 | Revoking a permission while running is not noticed | Dictation stops working until relaunch | Quit and relaunch after changing permissions |
 | macOS 13-25 has no bundled recognizer | `recognizer never becomes ready` | Only macOS 26+ has `SpeechTranscriber`; other backends are stubbed |
 | Most config settings are not read yet | Changing them has no effect and no warning | Only `hotkey`, `enabled`, and `overlay.position` are wired today |
+| `enabled = false` can appear on its own | Everything looks normal and the hotkey does nothing | Check `~/.config/aqua/config.toml` and delete that line. Seen twice; cause not yet found |
 | Freeform edits are not wired up | "tighten this up" reports that it needs the language model | Use the literal commands listed above |
 | Linux does not work; Windows is unexercised | — | macOS only for now |
 
