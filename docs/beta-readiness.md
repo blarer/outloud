@@ -435,8 +435,26 @@ menu bar renders it, but nothing drives a transition into it after launch.
 
 Worse in the other direction: a user who follows the quickstart's advice to
 grant permission *while the daemon is running* sees no change, concludes the
-grant did not work, and files a bug. The fix is a low-frequency poll (once a
-second is ample) that publishes `NoPermission` on transition.
+grant did not work, and files a bug. That is the direction that will actually
+generate support mail, because granting-while-running is what the documentation
+tells people to do.
+
+**Left open deliberately, with the design written down.** The fix touches
+`runtime.rs`, `menubar.rs`, and the run loop in `main.rs` simultaneously, all of
+which were in flight with the menu bar agent, and it degrades rather than
+breaks, so it was handed over rather than half-built across someone else's
+files. The shape:
+
+- `Runtime` gains `accessibility_blocked: bool` beside the existing
+  `microphone_blocked`, whose comment ("Distinct from 'no Accessibility':
+  different pane, different fix") already anticipates it.
+- `RuntimeShared` gains a setter mirroring `set_microphone_blocked`, including
+  the recovery behaviour that `recovery_clears_the_blocked_warning` pins.
+- The 30Hz run loop polls `ax_edit::is_trusted(false)` on a decimated tick,
+  once a second being ample. That variant never prompts, so it is safe to call
+  repeatedly.
+- `menubar.rs` already has the `microphone_blocked` row to copy for the message
+  and the deep link into the correct Settings pane.
 
 ### M4. Stale ASR helper process, trigger unidentified
 
