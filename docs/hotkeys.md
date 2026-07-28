@@ -136,7 +136,9 @@ probe. The reasoning, since RegisterHotKey looks like the obvious API:
 - What it IS good at: registration fails with
   `ERROR_HOTKEY_ALREADY_REGISTERED` when any other process holds the
   chord, which is more reliable conflict detection than macOS offers. So
-  we register, record the result, and unregister immediately.
+  we register, record the result, and unregister immediately. The finding
+  flows through `conflict::check_chord` into `HotkeyManager::conflicts()`
+  like every other conflict source, so callers surface it the same way.
 
 The hook's own traps:
 
@@ -144,10 +146,14 @@ The hook's own traps:
   `LowLevelHooksTimeout` (default 300ms, `HKCU\Control Panel\Desktop`) is
   removed by the OS with no notification, the exact analogue of
   `kCGEventTapDisabledByTimeout` except *without the courtesy event*. The
-  callback is therefore allocation-free and never blocks; a periodic
-  liveness self-check that re-installs and resets state is the remaining
-  follow-up (a reset matters because a swallowed key-up otherwise leaves
-  the mic hot).
+  callback is therefore allocation-free and never blocks, and a watchdog on
+  the pump thread verifies liveness every 2s. Detecting removal is itself a
+  trap: no API answers "is my hook installed", so the watchdog uses the one
+  observable side effect, that unhooking an already-removed hook FAILS. On
+  detection it reinstalls and RESETS the matcher and state machine, because
+  a key-up swallowed while dead would otherwise leave the machine stuck in
+  "pressed" with the microphone hot forever, and emits `TapRecovered` so the
+  UI can flip its warning glyph, exactly as the macOS tap does.
 - **UIPI (the elevation trap).** When an elevated (admin) window has
   focus, a non-elevated process's hook does not see its keys, and
   SendInput into it is silently discarded: User Interface Privilege
@@ -172,7 +178,7 @@ The hook's own traps:
 | Bare modifier binding (right Option) | yes (flagsChanged + device bits) | yes (VK_RMENU etc.) | XI2 raw events, not XGrabKey | compositor-dependent |
 | Fn/Globe key | yes, with traps above | no standard Fn visibility (vendor drivers) | keyboard-dependent (XF86Fn rarely delivered) | no |
 | Conflict detection | symbolichotkeys + static table; other apps invisible | RegisterHotKey fails on collision (reliable) | XGrabKey BadAccess on collision (reliable) | compositor UI owns conflicts |
-| Silent-death mode | tap disabled on timeout: **handled, re-enabled** | hook silently removed on timeout: watchdog is follow-up | X server grab persists | portal session can be revoked |
+| Silent-death mode | tap disabled on timeout: **handled, re-enabled** | hook silently removed on timeout: **handled, 2s watchdog reinstalls + resets** | X server grab persists | portal session can be revoked |
 | Permission required | Accessibility (already required) | none for hook (but AV heuristics flag it) | none | user consent dialog |
 
 ## Verifying on a real machine

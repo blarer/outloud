@@ -43,13 +43,20 @@ TARGET="${1:-x86_64-pc-windows-msvc}"   # or aarch64-pc-windows-msvc
 VERSION="$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)"
 OUT="dist/windows/$TARGET"
 BIN="target/$TARGET/release/spike-cli.exe"
+# The dictation daemon: the thing a user actually runs. It is a separate
+# artifact from the spike harness because they answer different questions
+# ("does this machine work" vs "dictate for me"), and shipping only the
+# harness, as this script did while the Windows backends were stubs, would
+# mean a Windows release that cannot dictate.
+DAEMON="target/$TARGET/release/aquad.exe"
 
 echo "==> Building $TARGET"
 rustup target add "$TARGET"
-cargo build --release --locked --package spike-cli --target "$TARGET"
+cargo build --release --locked --package spike-cli --package aquad --target "$TARGET"
 
 mkdir -p "$OUT"
 cp "$BIN" "$OUT/aqua-spike.exe"
+cp "$DAEMON" "$OUT/aquad.exe"
 
 sign() {
     local file="$1"
@@ -68,9 +75,10 @@ sign() {
 }
 
 sign "$OUT/aqua-spike.exe"
+sign "$OUT/aquad.exe"
 
 echo "==> Portable zip"
-(cd "$OUT" && 7z a -tzip "aqua-spike-$VERSION-$TARGET.zip" aqua-spike.exe >/dev/null)
+(cd "$OUT" && 7z a -tzip "aqua-spike-$VERSION-$TARGET.zip" aqua-spike.exe aquad.exe >/dev/null)
 
 if command -v makensis >/dev/null 2>&1; then
     echo "==> NSIS installer"
@@ -88,12 +96,14 @@ RequestExecutionLevel user   ; per-user install: no UAC prompt, no admin
 Section "Install"
     SetOutPath "\$INSTDIR"
     File "aqua-spike.exe"
+    File "aquad.exe"
     WriteUninstaller "\$INSTDIR\\uninstall.exe"
     WriteRegStr HKCU "Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\AquaSpike" "DisplayName" "Aqua OSS Spike"
     WriteRegStr HKCU "Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\AquaSpike" "UninstallString" "\$INSTDIR\\uninstall.exe"
 SectionEnd
 Section "Uninstall"
     Delete "\$INSTDIR\\aqua-spike.exe"
+    Delete "\$INSTDIR\\aquad.exe"
     Delete "\$INSTDIR\\uninstall.exe"
     RMDir "\$INSTDIR"
     DeleteRegKey HKCU "Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\AquaSpike"
@@ -122,9 +132,14 @@ if command -v wix >/dev/null 2>&1; then
           <RegistryValue Root="HKCU" Key="Software\\AquaSpike" Name="installed"
                          Type="integer" Value="1" KeyPath="yes" />
         </Component>
+        <Component Id="DaemonExe">
+          <File Source="aquad.exe" />
+          <RegistryValue Root="HKCU" Key="Software\\AquaSpike" Name="daemon"
+                         Type="integer" Value="1" KeyPath="yes" />
+        </Component>
       </Directory>
     </StandardDirectory>
-    <Feature Id="Main"><ComponentRef Id="MainExe" /></Feature>
+    <Feature Id="Main"><ComponentRef Id="MainExe" /><ComponentRef Id="DaemonExe" /></Feature>
   </Package>
 </Wix>
 WXS

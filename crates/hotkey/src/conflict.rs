@@ -335,7 +335,49 @@ pub fn read_system_hotkeys() -> Vec<SymbolicHotkey> {
 
 /// Convenience: live check of one chord against everything we can see.
 pub fn check_chord(chord: &Chord) -> Vec<Conflict> {
-    find_conflicts(chord, &read_system_hotkeys())
+    let mut out = find_conflicts(chord, &read_system_hotkeys());
+    out.extend(platform_probe(chord));
+    out
+}
+
+/// Platform-native conflict probes that are not table lookups.
+///
+/// Windows has the best conflict detection of the three platforms:
+/// `RegisterHotKey` FAILS with `ERROR_HOTKEY_ALREADY_REGISTERED` when any
+/// other process holds the chord, which is real knowledge rather than the
+/// macOS situation (other apps' Carbon registrations are invisible). We
+/// register, note the answer, and unregister immediately; the actual
+/// binding is the low-level hook, so this leaves no state behind.
+///
+/// Bare modifiers are skipped because `RegisterHotKey` cannot express them,
+/// and a probe that always fails would report a phantom conflict on the
+/// product's default binding.
+#[cfg(target_os = "windows")]
+fn platform_probe(chord: &Chord) -> Vec<Conflict> {
+    let Some(key) = chord.key else {
+        return Vec::new();
+    };
+    if key.is_bare_modifier() {
+        return Vec::new();
+    }
+    let Some(vk) = crate::winmatch::vk_for_key(key) else {
+        return Vec::new();
+    };
+    if crate::backend::windows::chord_already_registered(vk, chord) {
+        vec![Conflict {
+            severity: Severity::Claimed,
+            owner: "another running application (RegisterHotKey reports the chord is \
+                    already held; both it and we will act on every press)"
+                .to_string(),
+        }]
+    } else {
+        Vec::new()
+    }
+}
+
+#[cfg(not(target_os = "windows"))]
+fn platform_probe(_chord: &Chord) -> Vec<Conflict> {
+    Vec::new()
 }
 
 #[cfg(test)]

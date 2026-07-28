@@ -25,10 +25,10 @@
 //!   Windows silently removes the hook. No notification exists. Mitigation
 //!   one: the callback is allocation-free and never blocks (state is under
 //!   a try_lock; a miss drops one observation instead of stalling input).
-//!   Mitigation two, follow-up work noted in docs/hotkeys.md: a periodic
-//!   liveness self-check that re-installs the hook if the OS dropped it and
-//!   resets the matcher/state machine, because a swallowed key-up would
-//!   otherwise leave the mic hot (the worst trust failure available).
+//!   Mitigation two: the pump thread runs a 2s liveness watchdog
+//!   (`pump_with_watchdog`) that reinstalls the hook if the OS dropped it
+//!   and resets the matcher/state machine, because a swallowed key-up
+//!   would otherwise leave the mic hot (the worst trust failure available).
 //! - **UIPI.** When an *elevated* (admin) window has focus, a non-elevated
 //!   process's hook does not see its keystrokes at all: User Interface
 //!   Privilege Isolation blocks input observation and injection across
@@ -75,6 +75,9 @@ mod ffi {
     pub const WM_KEYUP: usize = 0x0101;
     pub const WM_SYSKEYDOWN: usize = 0x0104;
     pub const WM_SYSKEYUP: usize = 0x0105;
+    /// PeekMessage removes the message it returns.
+    pub const PM_REMOVE: u32 = 0x0001;
+    pub const WM_QUIT: u32 = 0x0012;
 
     /// KBDLLHOOKSTRUCT (winuser.h). Layout is ABI, not a guess.
     #[repr(C)]
@@ -115,7 +118,7 @@ mod ffi {
         ) -> HHOOK;
         pub fn UnhookWindowsHookEx(hhk: HHOOK) -> i32;
         pub fn CallNextHookEx(hhk: HHOOK, code: i32, w_param: WPARAM, l_param: LPARAM) -> LRESULT;
-        pub fn GetMessageW(msg: *mut MSG, hwnd: HWND, min: u32, max: u32) -> i32;
+        pub fn PeekMessageW(msg: *mut MSG, hwnd: HWND, min: u32, max: u32, remove: u32) -> i32;
         pub fn RegisterHotKey(hwnd: HWND, id: i32, modifiers: u32, vk: u32) -> i32;
         pub fn UnregisterHotKey(hwnd: HWND, id: i32) -> i32;
         pub fn GetLastError() -> u32;
@@ -209,6 +212,18 @@ fn probe_mods(chord: &crate::chord::Chord) -> u32 {
     m
 }
 
+/// Is this chord already held by another process? The public entry point
+/// for [`crate::conflict::check_chord`], so probe results reach
+/// `HotkeyManager::conflicts()` like every other conflict source instead of
+/// only reaching stderr.
+pub fn chord_already_registered(vk: u32, chord: &crate::chord::Chord) -> bool {
+    probe_conflict(vk, probe_mods(chord))
+}
+
+/// How often the watchdog verifies the hook is still installed. Well under
+/// any human's tolerance for a dead hotkey, and cheap: one API call.
+const WATCHDOG_INTERVAL: std::time::Duration = std::time::Duration::from_secs(2);
+
 pub fn spawn(
     chord: &crate::chord::Chord,
     matcher: Matcher,
@@ -221,23 +236,6 @@ pub fn spawn(
     let _ = matcher;
 
     let win_matcher = WinMatcher::new(chord).map_err(|e| HotkeyError::BadChord(e.to_string()))?;
-
-    // Advisory conflict probe (keyed chords only; RegisterHotKey cannot
-    // express bare modifiers). The result is currently only logged: wiring
-    // it into HotkeyManager::conflicts requires plumbing a return value
-    // through spawn and is noted in docs/hotkeys.md as follow-up.
-    if let Some(k) = chord.key {
-        if !k.is_bare_modifier() {
-            if let Some(vk) = crate::winmatch::vk_for_key(k) {
-                if probe_conflict(vk, probe_mods(chord)) {
-                    eprintln!(
-                        "hotkey: warning: '{chord}' is already registered by another \
-                         application (RegisterHotKey probe); both will act on it"
-                    );
-                }
-            }
-        }
-    }
 
     *STATE.lock().unwrap() = Some(HookState {
         matcher: win_matcher,
@@ -264,18 +262,7 @@ pub fn spawn(
             }
             let _ = ready_tx.send(Ok(()));
 
-            // Classic message pump. GetMessageW blocks; the hook callback
-            // is dispatched to this thread while it waits. The loop runs
-            // for the process lifetime, matching the manager's documented
-            // drop semantics (backend thread outlives the manager).
-            let mut msg: ffi::MSG = unsafe { std::mem::zeroed() };
-            loop {
-                let rc = unsafe { ffi::GetMessageW(&mut msg, std::ptr::null_mut(), 0, 0) };
-                if rc <= 0 {
-                    break; // WM_QUIT or error: tear down.
-                }
-            }
-            unsafe { ffi::UnhookWindowsHookEx(hook) };
+            pump_with_watchdog(hook);
         })
         .map_err(|e| HotkeyError::Backend(format!("failed to spawn hook thread: {e}")))?;
 
@@ -285,5 +272,84 @@ pub fn spawn(
         Err(_) => Err(HotkeyError::Backend(
             "hook thread died before confirming installation".into(),
         )),
+    }
+}
+
+/// Message pump plus the liveness watchdog.
+///
+/// Windows removes a hook whose callback exceeded `LowLevelHooksTimeout`
+/// and tells nobody: there is no event, no error, no callback. The macOS
+/// event tap at least delivers `kCGEventTapDisabledByTimeout` as an event,
+/// so the Windows recovery has to be *polled*. `PeekMessageW` with a
+/// timeout would be the tidy shape, but a plain timed wait is enough
+/// because this thread's only job is to exist for hook dispatch.
+///
+/// On detecting a dead hook we reinstall AND reset the matcher and state
+/// machine: while unhooked we may have missed a key-UP, and a state machine
+/// stuck in "pressed" keeps the microphone hot forever, which is the worst
+/// trust failure this crate can produce.
+fn pump_with_watchdog(mut hook: ffi::HHOOK) {
+    let mut msg: ffi::MSG = unsafe { std::mem::zeroed() };
+    loop {
+        // PeekMessage drains anything queued without blocking, so the
+        // watchdog tick below is never starved by message traffic. The
+        // hook callback itself is delivered during these calls.
+        while unsafe { ffi::PeekMessageW(&mut msg, std::ptr::null_mut(), 0, 0, ffi::PM_REMOVE) }
+            != 0
+        {
+            if msg.message == ffi::WM_QUIT {
+                unsafe { ffi::UnhookWindowsHookEx(hook) };
+                return;
+            }
+        }
+
+        std::thread::sleep(WATCHDOG_INTERVAL);
+
+        // The liveness question: is our HHOOK still in the chain? There is
+        // no "is it installed" API, so we use the one observable side
+        // effect: unhooking a hook the OS already removed fails.
+        // Unhook-then-reinstall unconditionally would drop events during
+        // the gap on every tick, so we only act when the unhook fails.
+        if unsafe { ffi::UnhookWindowsHookEx(hook) } == 0 {
+            let fresh = unsafe {
+                ffi::SetWindowsHookExW(ffi::WH_KEYBOARD_LL, hook_proc, std::ptr::null_mut(), 0)
+            };
+            if fresh.is_null() {
+                eprintln!(
+                    "hotkey: the keyboard hook was removed by the OS and could not be \
+                     reinstalled (error {}); the hotkey is DEAD until restart",
+                    unsafe { ffi::GetLastError() }
+                );
+                return;
+            }
+            hook = fresh;
+            // Pessimistic reset: a swallowed key-up would otherwise leave
+            // capture running with no way to stop it.
+            if let Ok(mut guard) = STATE.lock() {
+                if let Some(state) = guard.as_mut() {
+                    state.matcher.reset();
+                    for e in state.machine.reset() {
+                        let _ = state.sender.send(e);
+                    }
+                    let _ = state.sender.send(HotkeyEvent::TapRecovered);
+                }
+            }
+            eprintln!("hotkey: keyboard hook was removed by the OS and has been reinstalled");
+        } else {
+            // The unhook SUCCEEDED, which means the hook was alive and we
+            // just removed it ourselves. Put it straight back.
+            let fresh = unsafe {
+                ffi::SetWindowsHookExW(ffi::WH_KEYBOARD_LL, hook_proc, std::ptr::null_mut(), 0)
+            };
+            if fresh.is_null() {
+                eprintln!(
+                    "hotkey: failed to reinstall the keyboard hook after a liveness check \
+                     (error {}); the hotkey is DEAD until restart",
+                    unsafe { ffi::GetLastError() }
+                );
+                return;
+            }
+            hook = fresh;
+        }
     }
 }

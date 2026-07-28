@@ -7,8 +7,10 @@ text, speak a change, and it is rewritten in place.
 Nothing leaves your machine.
 
 **Status: working prototype.** Dictation, edit-by-voice, and shell command-line
-editing are verified end to end on macOS. Windows and Linux backends are
-designed and stubbed but not implemented. See [what works](#what-works-today).
+editing are verified end to end on macOS. Windows backends (UI Automation,
+keyboard hook, layered overlay) are implemented and compile in CI on real
+Windows runners, but have not been exercised on Windows hardware. Linux is
+still designed and stubbed. See [what works](#what-works-today).
 
 ## Why this exists
 
@@ -49,13 +51,40 @@ Recognition is Apple's on-device `SpeechTranscriber` (macOS 26+), which needs no
 model download. Parakeet TDT and whisper.cpp backends are stubbed with
 documented model URLs for platforms without it.
 
-Not yet built: Windows and Linux transports, streaming partial injection wired
-into the daemon, and a settings UI. See [`docs/planning/00-roadmap.md`](docs/planning/00-roadmap.md).
+Not yet built: Linux transports, a Windows shell integration (the unix-socket
+bridge needs a named-pipe plus PSReadLine equivalent), streaming partial
+injection wired into the daemon, and a settings UI. See
+[`docs/planning/00-roadmap.md`](docs/planning/00-roadmap.md).
+
+### Windows status, precisely
+
+Every Windows backend is implemented and compiles on real `windows-2025` CI
+runners for both x86_64 and aarch64; none has been *run* on Windows hardware,
+because CI compiles but cannot exercise GUI or input code. Treat it as
+untested, not as unwritten:
+
+| Piece | Mechanism | State |
+|---|---|---|
+| Hotkey | `WH_KEYBOARD_LL` hook, `RegisterHotKey` conflict probe | implemented, untested on hardware |
+| Read + in-place write | UI Automation `TextPattern` / `ValuePattern` | implemented, no undo preservation (needs TSF) |
+| Typing fallback | `SendInput` with `KEYEVENTF_UNICODE` | implemented |
+| Clipboard fallback | `clip.exe` / `Get-Clipboard` + synthetic Ctrl+V | implemented |
+| Overlay | layered, click-through, topmost, non-activating window | implemented |
+| Terminal | ConPTY bracketed paste (owned pseudoconsole) | implemented; foreign console needs a helper process |
+| Shell integration | unix-socket bridge | **not ported** (needs named pipe + PSReadLine module) |
+
+The trap that will bite first: **UIPI**. A non-elevated process cannot see keys
+typed into, or inject text into, an *elevated* window. Dictation goes silent
+while an admin app has focus and recovers when focus moves. Details in
+[`docs/hotkeys.md`](docs/hotkeys.md) and
+[`docs/compat-matrix.md`](docs/compat-matrix.md).
 
 ## Install
 
 Requires macOS 13 or newer (26+ for the zero-install recognizer) and a Rust
-toolchain. Windows and Linux do not work yet.
+toolchain. Windows builds and installs (`scripts/build-windows.sh` ships
+`aquad.exe` and `aqua-spike.exe`) but is untested on hardware; Linux does not
+work yet.
 
 ```bash
 git clone https://github.com/blarer/aqua-oss
