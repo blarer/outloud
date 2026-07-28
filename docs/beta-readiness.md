@@ -473,6 +473,27 @@ starter file. That converts thirteen silent no-ops into one honest line of
 output. The alternative, wiring all thirteen, is real work and not beta-
 blocking; being honest about them is.
 
+**Update, partially landed.** The release QA agent implemented the detection
+half in `22f579b`: `KeySpec` now carries a `wired` flag and
+`Config::inert_settings()` returns the unwired keys **the user actually set**,
+correctly staying silent about unwired defaults. It is tested.
+
+The warning does not reach the user yet, because nothing calls it. Verified
+against a fresh build with two inert keys set:
+
+```
+$ printf 'schema-version = 1\nformatting.casing = "upper"\nlanguage = "fr"\n' > config.toml
+$ ./target/release/aquad --asr mock --no-overlay
+aquad: state model-loading
+aquad: hold right-option to dictate
+aquad: recognizer ready: mock
+aquad: state idle
+aquad: capturing from MacBook Pro Microphone
+```
+
+Still no warning. The remaining work is a single call site, whose natural home
+is `crates/aquad/src/main.rs` or `menuhost.rs`. This item stays open.
+
 ### M7. The daemon writes `enabled = false` into the user's config on its own
 
 **Frequency: twice in one session, unprompted. Mechanism unknown.**
@@ -597,7 +618,7 @@ Ordered by user pain per unit of effort.
 | 7 | `--version` on `aquad`, `shell-bridge`, `spike-cli` | ~10 lines | Blocks every bug report |
 | 8 | Reap stale helpers at daemon startup | ~20 lines | Kills M4's whole class without finding the trigger |
 | 9 | Poll accessibility trust once a second | ~25 lines | Turns a silent failure into a visible state |
-| 10 | Warn once for settings the user set that nothing reads | ~20 lines | Twelve silent no-ops become one honest line |
+| 10 | Call `inert_settings()` at startup (detection landed in 22f579b, no caller yet) | ~4 lines | Twelve silent no-ops become one honest line |
 | 11 | Make `bundle-aquad-macos.sh` fail, not warn, without `swiftc` | 2 lines | Stops shipping a recognizer-less bundle |
 | 12 | Always rebuild the helper, or hash-check it | 2 lines | The staleness that hid blocker B1 |
 | 13 | `shell-bridge uninstall` | ~20 lines | Users should not need the sledgehammer script |
