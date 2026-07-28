@@ -1,6 +1,7 @@
-//! The macOS overlay: a glowing orb pinned to the bottom of the screen with
-//! a rolling window of transcribed words above it, drawn in a borderless,
-//! non-activating `NSPanel` (design: `docs/overlay-redesign.md`).
+//! The macOS overlay: an animated skull pinned to the bottom of the screen
+//! with a rolling window of transcribed words above it, drawn in a
+//! borderless, non-activating `NSPanel` (design: `docs/overlay-redesign.md`;
+//! skull geometry/motion: [`crate::skull`]).
 //!
 //! The four properties that make this correct, in one place so they can be
 //! audited together:
@@ -25,18 +26,28 @@
 //!
 //! The host pushes [`OverlayFrame`]s at its own cadence (~30 Hz poll of the
 //! pipeline's status slot). Those frames carry *inputs* — state, mic level,
-//! the current hypothesis — not animation. Animation (word bloom/fade, orb
-//! glow, shimmer) needs a faster, steadier clock than the host's poll, so
-//! the overlay owns a 60 Hz `NSTimer` that exists **only while the panel is
-//! on screen**. Hidden means the timer is invalidated: an idle dictation
-//! daemon schedules nothing and costs ~zero CPU, which matters for a tool
-//! that runs all day. While visible, a settled frame (a static error line,
-//! say) skips `setNeedsDisplay` entirely, so the timer's only cost is the
-//! model step.
+//! the current hypothesis — not animation. Animation (jaw, breath, word
+//! bloom/fade, shimmer) needs a faster, steadier clock than the host's
+//! poll, so the overlay owns a **`CADisplayLink`** (via
+//! `NSView.displayLinkWithTarget:selector:`, macOS 14+) that exists **only
+//! while the panel is on screen**. A display link fires on the display's
+//! actual refresh (vsync), so motion is sampled exactly once per shown
+//! frame — a sleep-based `NSTimer` at nominally 60 Hz drifts against vsync
+//! and beats visibly. On the off chance the selector is unavailable the
+//! code falls back to the old 60 Hz `NSTimer`, which is worse but not
+//! wrong. Hidden means the clock is invalidated: an idle dictation daemon
+//! schedules nothing and costs ~zero CPU, which matters for a tool that
+//! runs all day. While visible, a settled frame (a static error line under
+//! Reduce Motion, say) skips `setNeedsDisplay` entirely.
+//!
+//! Set `OVERLAY_FRAMESTATS=1` to get measured tick-interval and draw-time
+//! percentiles on stderr every ~4 s — measured, because this project does
+//! not estimate (`docs/latency.md`).
 //!
 //! The rolling-window model itself ([`crate::layout::RollingWindow`]) is
-//! pure Rust in `layout.rs`, unit-tested headlessly; this file only
-//! measures text, feeds the model, and paints it.
+//! pure Rust in `layout.rs`, unit-tested headlessly, and the skull's
+//! geometry and animator are pure Rust in `skull.rs`; this file only
+//! measures text, feeds the models, and paints them.
 
 use std::cell::RefCell;
 use std::time::Instant;
@@ -45,7 +56,7 @@ use block2::RcBlock;
 use objc2::rc::Retained;
 use objc2::runtime::AnyObject;
 use objc2::{
-    class, define_class, msg_send, DefinedClass, MainThreadMarker, MainThreadOnly, Message,
+    class, define_class, msg_send, sel, DefinedClass, MainThreadMarker, MainThreadOnly, Message,
 };
 use objc2_app_kit::{
     NSBackingStoreType, NSBezierPath, NSColor, NSFont, NSFontAttributeName,
@@ -57,6 +68,7 @@ use objc2_foundation::{
 };
 
 use crate::layout::{self, RollingWindow, Size};
+use crate::skull::{self, SkullAnimator, SkullPose};
 use crate::state::OverlayState;
 use crate::theme;
 use crate::{Overlay, OverlayFrame};
@@ -76,32 +88,52 @@ const ANCHOR_X: f64 = PANEL_SIZE.width / 2.0 + 40.0;
 /// Text lane baseline (top-left/flipped coords) and font size.
 const LANE_Y: f64 = 52.0;
 const WORD_FONT: f64 = 17.0;
-/// Orb geometry: core radius and how far the glow field reaches.
-const ORB_R: f64 = 21.0;
-const GLOW_R: f64 = 78.0;
-const ORB_CX: f64 = PANEL_SIZE.width / 2.0;
-const ORB_CY: f64 = PANEL_SIZE.height - 88.0;
+/// The skull's bounding box in panel points. The unit-square geometry from
+/// [`crate::skull`] is mapped into this box, so one constant scales the
+/// whole mascot for any panel or Retina factor.
+const SKULL_SIZE: f64 = 132.0;
+const SKULL_X: f64 = (PANEL_SIZE.width - SKULL_SIZE) / 2.0;
+const SKULL_Y: f64 = PANEL_SIZE.height - SKULL_SIZE - 10.0;
+/// The glow field behind the skull, reusing the orb's Gaussian-ring
+/// technique: centre and reach in panel points.
+const GLOW_CX: f64 = PANEL_SIZE.width / 2.0;
+const GLOW_CY: f64 = SKULL_Y + SKULL_SIZE * 0.52;
+const GLOW_R: f64 = 86.0;
 /// Gap from the panel's bottom edge to the screen's visible-frame bottom.
 const BOTTOM_GAP: f64 = 8.0;
-/// Animation clock while visible. 0 Hz while hidden (timer invalidated).
-const FRAME_HZ: f64 = 60.0;
+/// Fallback animation clock when `CADisplayLink` is unavailable. 0 Hz
+/// while hidden (clock invalidated).
+const FALLBACK_HZ: f64 = 60.0;
 
 /// Everything `drawRect:` reads. One snapshot struct, so a frame is
 /// coherent or absent, never partially updated.
 struct Model {
     state: OverlayState,
-    /// Displayed mic level, eased toward `target_level` so the glow
+    /// Displayed mic level, eased toward `target_level` so the eye glow
     /// breathes smoothly even though the host only pushes ~30 Hz.
     level: f64,
     target_level: f64,
+    /// Optional per-band levels from the host (see
+    /// [`crate::Overlay::set_audio_bands`]). All-zero means "no band data",
+    /// and the jaw falls back to the broadband level.
+    bands: [f32; 4],
     /// The rolling window of words (pure model; see layout.rs).
     words: RollingWindow,
+    /// The skull's motion state and its latest pose (pure; see skull.rs).
+    animator: SkullAnimator,
+    pose: SkullPose,
     /// State-specific one-liner (an error's situation → action). Rendered
     /// as a single static line in place of the word lane.
     detail: String,
     /// Seconds since the overlay was created; the shimmer/pulse phase.
     now: f64,
+    /// `now` at the previous animation tick, for dt.
+    last_tick: f64,
+    /// Zero point for `now`. Lives in the model so the view's own tick
+    /// callback and the host's render path read the same clock.
+    epoch: Instant,
     reduce_motion: bool,
+    stats: FrameStats,
 }
 
 impl Default for Model {
@@ -110,11 +142,74 @@ impl Default for Model {
             state: OverlayState::Idle,
             level: 0.0,
             target_level: 0.0,
+            bands: [0.0; 4],
             words: RollingWindow::new(),
+            animator: SkullAnimator::new(),
+            pose: SkullPose::at_rest(),
             detail: String::new(),
             now: 0.0,
+            last_tick: 0.0,
+            epoch: Instant::now(),
             reduce_motion: false,
+            stats: FrameStats::default(),
         }
+    }
+}
+
+/// Measured frame health: tick intervals (the vsync cadence we actually
+/// got) and draw durations (what a frame costs). This project measures
+/// instead of estimating (`docs/latency.md`); enabling
+/// `OVERLAY_FRAMESTATS=1` prints percentiles on stderr every ~4 s.
+#[derive(Default)]
+struct FrameStats {
+    tick_intervals_ms: Vec<f64>,
+    draw_ms: Vec<f64>,
+    last_report: f64,
+}
+
+fn stats_enabled() -> bool {
+    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ON.get_or_init(|| std::env::var_os("OVERLAY_FRAMESTATS").is_some_and(|v| v != "0"))
+}
+
+impl FrameStats {
+    fn record_tick(&mut self, interval_ms: f64) {
+        if stats_enabled() {
+            self.tick_intervals_ms.push(interval_ms);
+        }
+    }
+
+    fn record_draw(&mut self, ms: f64) {
+        if stats_enabled() {
+            self.draw_ms.push(ms);
+        }
+    }
+
+    fn maybe_report(&mut self, now: f64) {
+        if !stats_enabled() || now - self.last_report < 4.0 || self.tick_intervals_ms.len() < 30 {
+            return;
+        }
+        let pct = |v: &mut Vec<f64>, p: f64| -> f64 {
+            v.sort_by(|a, b| a.total_cmp(b));
+            v[((v.len() - 1) as f64 * p) as usize]
+        };
+        let n = self.tick_intervals_ms.len();
+        let (t50, t95, tmax) = (
+            pct(&mut self.tick_intervals_ms, 0.5),
+            pct(&mut self.tick_intervals_ms, 0.95),
+            pct(&mut self.tick_intervals_ms, 1.0),
+        );
+        let (d50, d95) = if self.draw_ms.is_empty() {
+            (0.0, 0.0)
+        } else {
+            (pct(&mut self.draw_ms, 0.5), pct(&mut self.draw_ms, 0.95))
+        };
+        eprintln!(
+            "overlay-framestats: {n} ticks | interval p50 {t50:.2}ms p95 {t95:.2}ms max {tmax:.2}ms | draw p50 {d50:.2}ms p95 {d95:.2}ms"
+        );
+        self.tick_intervals_ms.clear();
+        self.draw_ms.clear();
+        self.last_report = now;
     }
 }
 
@@ -142,7 +237,8 @@ define_class!(
 
 define_class!(
     /// The single content view. Flipped so its coordinates match the
-    /// crate's top-left-origin convention.
+    /// crate's top-left-origin convention. Also the display link's target:
+    /// `aquaTick:` is the per-refresh animation step.
     #[unsafe(super(NSView))]
     #[thread_kind = MainThreadOnly]
     #[name = "AquaOverlayView"]
@@ -157,13 +253,45 @@ define_class!(
 
         #[unsafe(method(drawRect:))]
         fn draw_rect(&self, _dirty: NSRect) {
+            let t0 = Instant::now();
             self.draw();
+            let ms = t0.elapsed().as_secs_f64() * 1e3;
+            self.ivars().borrow_mut().stats.record_draw(ms);
+        }
+
+        /// One animation frame, fired by the `CADisplayLink` at the
+        /// display's real refresh (or by the fallback `NSTimer`).
+        #[unsafe(method(aquaTick:))]
+        fn aqua_tick(&self, _sender: &AnyObject) {
+            self.step_animation();
         }
     }
 );
 
 fn ns_color(c: theme::Color, alpha_scale: f64) -> Retained<NSColor> {
     NSColor::colorWithSRGBRed_green_blue_alpha(c.r, c.g, c.b, c.a * alpha_scale)
+}
+
+/// Fill one skull polygon, mapping the unit-square geometry into the
+/// panel's SKULL box. The mapping lives here — not in `skull.rs` — so the
+/// pure geometry stays resolution-free and the same points serve any panel
+/// size or Retina factor (NSBezierPath is drawn in points; AppKit handles
+/// the backing scale).
+fn fill_poly(poly: &[crate::layout::Point], color: &NSColor) {
+    if poly.len() < 3 {
+        return;
+    }
+    let map = |p: &crate::layout::Point| {
+        NSPoint::new(SKULL_X + p.x * SKULL_SIZE, SKULL_Y + p.y * SKULL_SIZE)
+    };
+    let path = NSBezierPath::bezierPath();
+    path.moveToPoint(map(&poly[0]));
+    for p in &poly[1..] {
+        path.lineToPoint(map(p));
+    }
+    path.closePath();
+    color.setFill();
+    path.fill();
 }
 
 /// Measure a word's width in points with the lane font. Points, not
@@ -217,7 +345,7 @@ impl OverlayView {
 
     fn draw(&self) {
         let model = self.ivars().borrow();
-        self.draw_orb(&model);
+        self.draw_skull(&model);
         if model.detail.is_empty() {
             self.draw_words(&model);
         } else {
@@ -225,60 +353,114 @@ impl OverlayView {
         }
     }
 
-    /// The orb: a soft radial glow around a bright core, drawn as
-    /// concentric circles with a Gaussian alpha falloff — visually a radial
-    /// gradient at this size, without adding a quartz-core dependency
-    /// (design §6).
-    fn draw_orb(&self, model: &Model) {
-        let accent = theme::accent(model.state);
-        let (glow_gain, core_alpha) = orb_dynamics(model);
+    /// One animation step: advance the pure models with a real dt, then
+    /// schedule a repaint only if something visibly moved. Called by the
+    /// display link (vsync) or the fallback timer.
+    fn step_animation(&self) {
+        let mut repaint = false;
+        {
+            let mut model = self.ivars().borrow_mut();
+            let now = model.epoch.elapsed().as_secs_f64();
+            let dt = (now - model.last_tick).max(0.0);
+            if model.last_tick > 0.0 {
+                model.stats.record_tick(dt * 1e3);
+            }
+            model.last_tick = now;
+            model.now = now;
+            model.reduce_motion = reduce_motion();
+            let rm = model.reduce_motion;
 
+            // Ease the displayed broadband level toward the host's target
+            // so glow breathes smoothly between 30 Hz host pushes. Under
+            // Reduce Motion the level snaps: no oscillation.
+            let level_target = layout::shape_level(model.target_level as f32) as f64;
+            if rm {
+                repaint |= (level_target - model.level).abs() > 0.01;
+                model.level = level_target;
+            } else {
+                let ease = 1.0 - (-dt / layout::EASE_TAU).exp();
+                let delta = (level_target - model.level) * ease;
+                if delta.abs() > 0.002 {
+                    model.level += delta;
+                    repaint = true;
+                }
+            }
+
+            // The jaw prefers the low/mid band envelope when the host
+            // supplies bands (speech energy lives there); an all-zero array
+            // means no band data and falls back to the broadband level.
+            let jaw_drive = if model.bands.iter().any(|&b| b > 0.0) {
+                layout::shape_level(model.bands[0].max(model.bands[1])) as f64
+            } else {
+                model.level
+            };
+            let state = model.state;
+            let pose = model.animator.step(now, dt, state, jaw_drive, rm);
+            if pose.visibly_differs(&model.pose) {
+                model.pose = pose;
+                repaint = true;
+            }
+            repaint |= model.words.step(now, dt, rm);
+            repaint |= state_self_animates(model.state, rm);
+            model.stats.maybe_report(now);
+        }
+        if repaint {
+            self.setNeedsDisplay(true);
+        }
+    }
+
+    /// The skull: pure posed geometry from [`crate::skull`], mapped into
+    /// the panel's SKULL box and filled with NSBezierPath polygons. Behind
+    /// it, the orb's old Gaussian-ring glow survives as the skull's aura —
+    /// still a radial gradient without a quartz-core dependency.
+    fn draw_skull(&self, model: &Model) {
+        let accent = theme::accent(model.state);
+        let geo = skull::posed_geometry(&model.pose);
+        // Aura first, so the skull draws over it. Reduced motion drops the
+        // aura entirely: it exists to flicker with the voice.
         if !model.reduce_motion {
-            let reach = GLOW_R * (0.72 + 0.28 * glow_gain);
+            let gain = model.pose.eye_glow;
+            let reach = GLOW_R * (0.72 + 0.28 * gain);
             let rings = 20usize;
             for i in (0..rings).rev() {
                 let f = i as f64 / rings as f64; // 0 center .. 1 edge
-                let r = ORB_R + (reach - ORB_R) * f;
+                let r = 18.0 + (reach - 18.0) * f;
                 // Gaussian falloff reads as light, not as banded disks.
-                let a = (-3.2 * f * f).exp() * 0.16 * (0.55 + 0.45 * glow_gain);
+                let a = (-3.2 * f * f).exp() * 0.10 * (0.55 + 0.45 * gain);
                 ns_color(accent, a).setFill();
                 let rect = NSRect::new(
-                    NSPoint::new(ORB_CX - r, ORB_CY - r),
+                    NSPoint::new(GLOW_CX - r, GLOW_CY - r),
                     NSSize::new(r * 2.0, r * 2.0),
                 );
                 NSBezierPath::bezierPathWithOvalInRect(rect).fill();
             }
-        } else if model.state == OverlayState::Listening {
-            // Reduced motion: the mic level is shown by ring thickness, a
-            // per-frame static quantity, not an oscillation. A stroked
-            // circle (not a filled disk) so the level reads as a gauge.
-            let thick = 2.0 + 6.0 * model.level;
-            let r_mid = ORB_R + 6.0 + thick / 2.0;
-            let ring_rect = NSRect::new(
-                NSPoint::new(ORB_CX - r_mid, ORB_CY - r_mid),
-                NSSize::new(r_mid * 2.0, r_mid * 2.0),
-            );
-            ns_color(accent, 0.8).setStroke();
-            let ring = NSBezierPath::bezierPathWithOvalInRect(ring_rect);
-            ring.setLineWidth(thick);
-            ring.stroke();
         }
 
-        // The core: a filled ball with a bright top highlight so a flat
-        // circle reads as a sphere.
-        ns_color(accent, core_alpha).setFill();
-        let core = NSRect::new(
-            NSPoint::new(ORB_CX - ORB_R, ORB_CY - ORB_R),
-            NSSize::new(ORB_R * 2.0, ORB_R * 2.0),
-        );
-        NSBezierPath::bezierPathWithOvalInRect(core).fill();
-        let hi_r = ORB_R * 0.62;
-        NSColor::colorWithSRGBRed_green_blue_alpha(1.0, 1.0, 1.0, 0.34).setFill();
-        let hi = NSRect::new(
-            NSPoint::new(ORB_CX - hi_r - 3.0, ORB_CY - hi_r - 5.0),
-            NSSize::new(hi_r * 2.0, hi_r * 1.6),
-        );
-        NSBezierPath::bezierPathWithOvalInRect(hi).fill();
+        // Bone: near-paper white with a hint of the accent, dark features.
+        // The skull reads on light and dark desktops because bone is light
+        // and every feature is a dark cutout — self-contrast, no theme
+        // branch needed.
+        let bone = ns_color(theme::palette::PAPER, 0.96);
+        let bone_shade = ns_color(theme::palette::PAPER.alpha(0.80), 0.96);
+        let dark = ns_color(theme::palette::INK, 0.94);
+
+        fill_poly(&geo.mouth, &dark);
+        fill_poly(&geo.cranium, &bone);
+        fill_poly(&geo.jaw, &bone_shade);
+        for socket in &geo.sockets {
+            fill_poly(socket, &dark);
+        }
+        // Eye glow: the state's accent inside the sockets, alpha from the
+        // pose (listening brightens with the voice, transcribing shimmers,
+        // loading pulses, errors stare).
+        let glow = ns_color(accent, 0.25 + 0.75 * model.pose.eye_glow);
+        for eye in &geo.eyes {
+            fill_poly(eye, &glow);
+        }
+        fill_poly(&geo.nose, &dark);
+        for tooth in &geo.teeth {
+            fill_poly(tooth, &bone);
+        }
     }
 
     /// The rolling window. The newest word's left edge is pinned at
@@ -318,48 +500,22 @@ impl OverlayView {
     }
 }
 
-/// Per-state orb motion: (glow gain, core alpha), from the 8-state table in
-/// design §4 — which is `docs/ux/05-settings-and-states.md`'s table, not a
-/// new state machine.
-fn orb_dynamics(model: &Model) -> (f64, f64) {
-    if model.reduce_motion {
-        // No oscillation of any kind under Reduce Motion.
-        let core = match model.state {
-            OverlayState::ModelLoading => 0.5,
-            OverlayState::Transcribing => 1.0,
-            _ => 0.9,
-        };
-        return (0.0, core);
-    }
-    match model.state {
-        // Glow breathes with the shaped mic level: the orb replaces the bar
-        // meter as the "is it hearing me?" surface.
-        OverlayState::Listening => (model.level, 0.95),
-        // No level input exists; a slow constant shimmer says "machine
-        // working, not hung" (UX principle 2).
-        OverlayState::Transcribing => {
-            let s = (model.now * std::f64::consts::TAU / 1.2).sin() * 0.5 + 0.5;
-            (0.3 + 0.4 * s, 1.0)
-        }
-        // The state table's "pulsing" glyph.
-        OverlayState::ModelLoading => {
-            let s = (model.now * std::f64::consts::TAU * theme::PULSE_HZ).sin() * 0.5 + 0.5;
-            (s, 0.5 + 0.4 * s)
-        }
-        // Errors get stillness: motion soothes or celebrates, and an error
-        // line should do neither. NoPermission likewise.
-        _ => (0.15, 0.9),
-    }
+/// Whether a state's skull oscillates on its own (needs repaints even when
+/// the word model is settled and the level is steady). With motion on, the
+/// answer is every state: breath, sway and blink never stop — the mascot
+/// must never look frozen. Under Reduce Motion nothing self-animates.
+fn state_self_animates(_state: OverlayState, reduce_motion: bool) -> bool {
+    !reduce_motion
 }
 
-/// Whether a state's orb oscillates on its own (needs repaints even when
-/// the word model is settled and the level is steady).
-fn state_self_animates(state: OverlayState, reduce_motion: bool) -> bool {
-    !reduce_motion
-        && matches!(
-            state,
-            OverlayState::Transcribing | OverlayState::ModelLoading
-        )
+/// The animation clock. Vsync when the OS provides it, a plain timer when
+/// not; both are invalidated the moment the panel hides.
+enum Clock {
+    /// `CADisplayLink` from `NSView.displayLinkWithTarget:selector:`
+    /// (macOS 14+), held type-erased so this crate needs no quartz-core
+    /// dependency for one object it only ever sends `invalidate` to.
+    DisplayLink(Retained<AnyObject>),
+    Timer(Retained<NSTimer>),
 }
 
 /// The macOS implementation of [`Overlay`].
@@ -368,10 +524,11 @@ pub struct MacOverlay {
     view: Retained<OverlayView>,
     mtm: MainThreadMarker,
     visible: bool,
-    /// The 60 Hz animation clock. `Some` exactly while visible; hidden
+    /// The animation clock. `Some` exactly while visible; hidden
     /// invalidates it so an idle daemon schedules nothing (battery).
-    timer: Option<Retained<NSTimer>>,
-    /// Zero point for `Model::now` (shimmer phase, stale-decay clocks).
+    clock: Option<Clock>,
+    /// Zero point for `Model::now`, copied from the model so the host
+    /// render path and the view's tick share one clock.
     epoch: Instant,
     /// State of the previous frame, to detect utterance boundaries.
     last_state: OverlayState,
@@ -403,10 +560,10 @@ impl MacOverlay {
                 NSWindowCollectionBehavior::CanJoinAllSpaces
                     | NSWindowCollectionBehavior::FullScreenAuxiliary,
             );
-            // The panel is a fully transparent container; the orb and words
-            // are the only pixels. No shadow: a shadow would draw a
-            // rectangle around what should read as a free-floating orb and
-            // loose glowing words.
+            // The panel is a fully transparent container; the skull and
+            // words are the only pixels. No shadow: a shadow would draw a
+            // rectangle around what should read as a free-floating mascot
+            // and loose glowing words.
             panel.setOpaque(false);
             panel.setBackgroundColor(Some(&NSColor::clearColor()));
             panel.setHasShadow(false);
@@ -418,20 +575,22 @@ impl MacOverlay {
         }
         let view = OverlayView::new(mtm);
         panel.setContentView(Some(&view));
+        // One clock for the host path and the tick: the model's epoch.
+        let epoch = view.ivars().borrow().epoch;
         Ok(MacOverlay {
             panel,
             view,
             mtm,
             visible: false,
-            timer: None,
-            epoch: Instant::now(),
+            clock: None,
+            epoch,
             last_state: OverlayState::Idle,
         })
     }
 
     /// Bottom-center of the main screen's visible frame (clears the Dock),
-    /// the placement the design pins the orb to. `mainScreen` is the screen
-    /// with the key window, i.e. wherever the user is working.
+    /// the placement the design pins the skull to. `mainScreen` is the
+    /// screen with the key window, i.e. wherever the user is working.
     fn place_panel(&self) {
         if let Some(screen) = NSScreen::mainScreen(self.mtm) {
             let vf = screen.visibleFrame();
@@ -442,70 +601,78 @@ impl MacOverlay {
     }
 
     /// Start the animation clock. Idempotent; only ever called while
-    /// visible. The timer holds a retained view pointer, an epoch, and its
-    /// own dt bookkeeping — no reference back to `MacOverlay`, so there is
-    /// no cycle to break beyond invalidating the timer.
-    fn start_timer(&mut self) {
-        if self.timer.is_some() {
+    /// visible.
+    ///
+    /// Preferred clock: a `CADisplayLink` targeting the view's `aquaTick:`,
+    /// created by `NSView.displayLinkWithTarget:selector:` so it is bound
+    /// to the screen the view is actually on — ticks arrive on the real
+    /// vsync (120 Hz on ProMotion, 60 Hz elsewhere) instead of a sleep
+    /// loop's approximation of one. Fallback for pre-14 systems: the old
+    /// 60 Hz repeating `NSTimer` driving the same selector path.
+    fn start_clock(&mut self) {
+        if self.clock.is_some() {
+            return;
+        }
+        // Reset dt bookkeeping so the first tick after a re-show does not
+        // integrate the hidden gap as one giant step.
+        {
+            let mut model = self.view.ivars().borrow_mut();
+            model.last_tick = model.epoch.elapsed().as_secs_f64();
+        }
+        let view_obj: &AnyObject = self.view.as_ref();
+        let supported: bool = unsafe {
+            msg_send![view_obj, respondsToSelector: sel!(displayLinkWithTarget:selector:)]
+        };
+        if supported {
+            let link: Retained<AnyObject> = unsafe {
+                msg_send![
+                    view_obj,
+                    displayLinkWithTarget: view_obj,
+                    selector: sel!(aquaTick:),
+                ]
+            };
+            unsafe {
+                // Common modes so animation continues during menu tracking,
+                // same rationale as the old timer.
+                let run_loop = NSRunLoop::currentRunLoop();
+                let _: () = msg_send![
+                    &*link,
+                    addToRunLoop: &*run_loop,
+                    forMode: NSRunLoopCommonModes,
+                ];
+            }
+            self.clock = Some(Clock::DisplayLink(link));
             return;
         }
         let view = self.view.retain();
-        let epoch = self.epoch;
-        let last = RefCell::new(epoch.elapsed().as_secs_f64());
         let tick = RcBlock::new(move |_timer: std::ptr::NonNull<NSTimer>| {
-            let now = epoch.elapsed().as_secs_f64();
-            let dt = (now - *last.borrow()).max(0.0);
-            *last.borrow_mut() = now;
-            let mut repaint = false;
-            {
-                let mut model = view.ivars().borrow_mut();
-                model.now = now;
-                model.reduce_motion = reduce_motion();
-                // Ease the displayed level toward the host's target so the
-                // glow breathes smoothly between 30 Hz host pushes. Under
-                // Reduce Motion the level snaps: no oscillation, and the
-                // ring gauge is a static per-frame quantity.
-                let level_target = layout::shape_level(model.target_level as f32) as f64;
-                if model.reduce_motion {
-                    repaint |= (level_target - model.level).abs() > 0.01;
-                    model.level = level_target;
-                } else {
-                    let ease = 1.0 - (-dt / layout::EASE_TAU).exp();
-                    let delta = (level_target - model.level) * ease;
-                    if delta.abs() > 0.002 {
-                        model.level += delta;
-                        repaint = true;
-                    }
-                }
-                let rm = model.reduce_motion;
-                repaint |= model.words.step(now, dt, rm);
-                repaint |= state_self_animates(model.state, rm);
-            }
-            if repaint {
-                view.setNeedsDisplay(true);
-            }
+            view.step_animation();
         });
         let timer = unsafe {
-            let timer = NSTimer::timerWithTimeInterval_repeats_block(1.0 / FRAME_HZ, true, &tick);
-            // Common modes so animation continues during menu tracking.
+            let timer =
+                NSTimer::timerWithTimeInterval_repeats_block(1.0 / FALLBACK_HZ, true, &tick);
             NSRunLoop::currentRunLoop().addTimer_forMode(&timer, NSRunLoopCommonModes);
             timer
         };
-        self.timer = Some(timer);
+        self.clock = Some(Clock::Timer(timer));
     }
 
-    fn stop_timer(&mut self) {
-        if let Some(timer) = self.timer.take() {
-            timer.invalidate();
+    fn stop_clock(&mut self) {
+        match self.clock.take() {
+            Some(Clock::DisplayLink(link)) => unsafe {
+                let _: () = msg_send![&*link, invalidate];
+            },
+            Some(Clock::Timer(timer)) => timer.invalidate(),
+            None => {}
         }
     }
 }
 
 impl Drop for MacOverlay {
     fn drop(&mut self) {
-        // An invalidated timer is removed from the run loop; without this a
-        // dropped overlay would leave a 60 Hz callback running forever.
-        self.stop_timer();
+        // An invalidated clock is removed from the run loop; without this a
+        // dropped overlay would leave a per-vsync callback running forever.
+        self.stop_clock();
     }
 }
 
@@ -550,12 +717,15 @@ impl Overlay for MacOverlay {
                 && self.last_state == OverlayState::Listening
             {
                 model.words.finalize(now);
+                // The skull's commit gesture: jaw shuts through its release
+                // envelope, plus one damped-spring pop (the settle).
+                model.animator.trigger_settle(now);
             }
         }
         self.last_state = frame.state;
 
         // A host push always repaints once: state/detail/level changed, and
-        // the 60 Hz timer only repaints what it knows moved.
+        // the animation clock only repaints what it knows moved.
         self.view.setNeedsDisplay(true);
 
         if !self.visible {
@@ -565,13 +735,13 @@ impl Overlay for MacOverlay {
             self.panel.orderFrontRegardless();
             self.visible = true;
         }
-        self.start_timer();
+        self.start_clock();
         Ok(())
     }
 
     fn hide(&mut self) -> anyhow::Result<()> {
-        // Hidden = zero cost: no timer, no scheduled work of any kind.
-        self.stop_timer();
+        // Hidden = zero cost: no clock, no scheduled work of any kind.
+        self.stop_clock();
         if self.visible {
             self.panel.orderOut(None);
             self.visible = false;
@@ -584,5 +754,9 @@ impl Overlay for MacOverlay {
 
     fn is_visible(&self) -> bool {
         self.visible
+    }
+
+    fn set_audio_bands(&mut self, bands: [f32; 4]) {
+        self.view.ivars().borrow_mut().bands = bands;
     }
 }

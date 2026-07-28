@@ -37,6 +37,10 @@ pub mod layout;
 pub mod mark;
 pub mod menu;
 pub mod pixel;
+/// The animated skull mascot: pure vector geometry plus a pure animator.
+/// Platform-neutral for the same reason [`mark`] is: headless CI asserts
+/// its motion properties, and every backend renders the same points.
+pub mod skull;
 pub mod state;
 /// The visual language (palette, radii, type scale, motion) as pure data.
 /// Platform-neutral on purpose: it must compile in the headless build, and
@@ -118,6 +122,13 @@ pub trait Overlay {
 
     /// Whether the surface is currently on screen.
     fn is_visible(&self) -> bool;
+
+    /// Optional richer audio signal for backends that animate with it:
+    /// four linear `0.0..=1.0` bands, low to high (~0–300Hz, 300–1k,
+    /// 1k–3k, 3k–8k), updated per audio chunk. A default no-op so hosts
+    /// without band data need no changes, and so the pipeline crate can
+    /// start supplying bands without a lockstep overlay change.
+    fn set_audio_bands(&mut self, _bands: [f32; 4]) {}
 }
 
 /// Construct the overlay for this platform and build.
