@@ -1,7 +1,8 @@
 # Release readiness
 
-**Verdict: a release would NOT ship today.** One blocker, six majors (four of
-them now fixed).
+**Verdict: a release would NOT ship today.** One blocker, six majors (five of
+them now fixed). The remaining blocker is four CI jobs needing a workflow
+change nobody in this session may make.
 
 Produced by adversarial QA against `main` on 2026-07-28. Every finding below
 was reproduced by running the thing, not by reading it. Commands and their
@@ -27,7 +28,7 @@ owner instead of fixing it.
 | 7 | MINOR | `bundle-aquad-macos.sh` warns (not fails) when `swiftc` is absent | Reported |
 | 8 | INFO | Config defaults and edge cases behave correctly | Verified, regression net added (`0e81b08`) |
 | 9 | INFO | Latency claims in `docs/latency.md` hold up | Verified, 8-run measurement |
-| 10 | **MAJOR** | Every Linux build linked ALSA, including headless and musl | **PARTLY FIXED** (`a7c7b1b`), `capture` now optional |
+| 10 | **MAJOR** | Every Linux build linked ALSA, including headless and musl | **FIXED** (`a7c7b1b` + `af852d6`), musl rows no longer need CI plumbing |
 | 11 | **MAJOR** | 13 of 16 config settings are silently ignored | **FIXED** (`22f579b` + `ed5425f`), verified end to end |
 
 CI matrix as of run `30361756410`: **7 green, 7 red.** All 7 red are Linux or
@@ -532,16 +533,16 @@ cargo tree -p audio --no-default-features -e normal \
 `crates/audio/tests/capture_feature.rs` pins both halves of the contract and
 runs in both configurations (3 tests without the feature, 4 with).
 
-**Why "partly".** Making `capture` optional was necessary but is **not
-sufficient**, and I initially assumed it was. `cargo build --workspace
---no-default-features` still yields three ALSA crates on the musl target,
-because `aquad` and `asr` both take `audio = { path = "../audio" }` with
-default features **on**, so that dependency edge re-enables capture whatever
-the CI command passes. Gating both edges does reach zero (tested, then
-reverted since both files are owned by others), but it additionally requires
-cfg-gating `spawn_mic` in `crates/aquad/src/source.rs`, which uses
-`audio::capture` unconditionally. Full measurements, the exact compile errors,
-and the required edits are in appendix D.
+**Now fully fixed** (`af852d6`). Making `capture` optional was necessary but
+not sufficient: `aquad` and `asr` took the `audio` dependency with default
+features on, so that edge re-enabled capture whatever the build command said.
+Deleting the unused `asr` edge, gating the `aquad` edge behind `display`, and
+cfg-gating `spawn_mic` closes it. Measured 0 cpal/alsa crates headless and 3
+with defaults, and both configurations compile and pass tests from a clean
+clone. Full numbers and the runtime checks are in appendix D.
+
+The practical result is better than the CI fix originally proposed: **the two
+musl rows no longer need workflow plumbing at all.**
 
 Related and worth someone's attention: **`crates/asr` depends on `audio` but
 never references it in code** — it defines its own `SAMPLE_RATE` const — so
@@ -618,13 +619,14 @@ still do nothing; the user is now told so instead of being left to guess.
 
 1. Land the Linux system-deps step in `ci.yml` **and** `release.yml`
    (`.github/workflows/**` owner). Turns 5 of 7 red jobs green.
-2. Build musl/headless rows with `--no-default-features` now that `capture`
-   is optional (finding 10). Turns the last 2 green.
+2. Build musl/headless rows with `--no-default-features` (finding 10, landed).
+   No workflow *plumbing* needed for these two, just the flag.
 3. Remove `|| true` from the aarch64 headless release step, or drop the target.
 4. Fix the README's from-source build path (lobster).
 5. Optional but cheap: reap stale speech helpers at daemon startup.
 
-Items 1 and 2 are the blocker. Everything else is shippable-with-known-issues.
+Item 1 is the blocker and needs an owner. Everything else is
+shippable-with-known-issues.
 
 ---
 
@@ -682,59 +684,85 @@ to:
 Either it builds or the release fails honestly. Publishing a `headless`
 artifact set silently missing an architecture is worse than publishing none.
 
-### D. musl rows: what it actually takes (tested, not guessed)
+### D. musl rows: LANDED (`af852d6`), no workflow change needed
 
-Making `capture` optional (finding 10) was necessary but is **not sufficient**,
-and an earlier revision of this appendix was wrong to imply a workflow flag
-alone would do it. Measured:
+Originally written up as work to hand over; ownership was transferred and it is
+now done. The reasoning is kept because an earlier revision of this appendix was
+**wrong**, and how it was wrong is the instructive part: making `capture`
+optional (finding 10) was necessary but not sufficient, and I generalised a
+single-crate measurement to the whole workspace without testing it.
 
-```
-cargo tree --workspace --no-default-features -e normal \
-    --target x86_64-unknown-linux-musl | grep -c -E 'cpal|alsa'    -> 3
-```
+`--no-default-features` applies to the workspace *members*, but `aquad` and
+`asr` each took `audio = { path = "../audio" }` with default features **on**,
+so that dependency edge re-enabled capture regardless of the build command.
 
-Still three. `--no-default-features` applies to the *workspace members*, but
-`aquad` and `asr` both declare `audio = { path = "../audio" }` with default
-features **on**, so that dependency edge re-enables `capture` regardless of
-what the CI command passes.
+Three changes, one per layer of the problem:
 
-What actually works, verified by experiment (applied, measured, then reverted,
-because both files are owned by other agents):
+1. **`crates/asr`: deleted the `audio` dependency** rather than defusing it.
+   That crate has zero `audio::` references and defines its own `SAMPLE_RATE`,
+   so the edge was dead weight. An unused dependency kept only to be switched
+   off is worse than none: the next person has to work out whether it matters.
+2. **`crates/aquad`: `default-features = false` on the audio edge**, with
+   `audio/capture` hung off the existing `display` feature. Those two answer
+   the same question (is there a human at this machine), so tying them
+   together means nobody can build a "headless" daemon that still links ALSA.
+3. **`crates/aquad/src/source.rs`: cfg-gated `spawn_mic`**, which used
+   `audio::capture` unconditionally, with a headless counterpart returning an
+   error that names `--wav` rather than capturing nothing silently.
 
-1. In `crates/aquad` and `crates/asr`, take the dependency as
-   `audio = { path = "../audio", default-features = false }`.
-2. In `crates/aquad`, add `audio/capture` to the existing `display` feature, so
-   a desktop build still gets a microphone.
-
-Result with both edges gated:
-
-```
-workspace, --no-default-features, musl target  -> 0 cpal/alsa crates
-workspace, default features,      musl target  -> 3 (desktop keeps the mic)
-```
-
-**One more change is then required**, and it is the reason this is not a
-one-line fix: `crates/aquad/src/source.rs` uses `audio::capture` unconditionally,
-so the headless build stops compiling:
+Verified, and deliberately not by dependency counts alone, since counts are
+exactly where the previous claim broke:
 
 ```
-error[E0433]: cannot find `capture` in `audio`
-   --> crates/aquad/src/source.rs:115:20
-error[E0433]: cannot find `capture` in `audio`
-   --> crates/aquad/src/source.rs:108:13
-error[E0422]: cannot find struct, variant or union type `Started` in this scope
-   --> crates/aquad/src/source.rs:117:13
+cargo tree --workspace --no-default-features ... musl | grep -c 'cpal|alsa' -> 0
+cargo tree --workspace                       ... musl | grep -c 'cpal|alsa' -> 3
+
+cargo check --workspace --no-default-features   -> compiles (was E0433/E0422)
+cargo clippy --workspace --all-targets [--no-default-features] -D warnings -> clean
+cargo test --workspace                          -> 0 failures
+cargo deny check                                -> ok
+cargo +1.85.0 build --workspace --locked        -> exit 0 (MSRV pin survives)
+
+desktop build, real dictation:  RC=0, "Testing the WAV input path."
+headless build, mic requested:  RC=1, error names --wav
+headless build, --once --wav:   RC=0, so the error's own advice works
 ```
 
-All of it is inside `spawn_mic` (`source.rs:105-162`), which needs a
-`#[cfg(feature = ...)]` gate and a headless counterpart that returns an error
-naming `--wav`. That is a contained change, but it is a **code** change in
-`crates/aquad` (dove's) and `crates/asr` (off-limits), not CI plumbing, which
-is why it is written up here rather than done.
+That last line matters: an error recommending a path which is itself broken is
+worse than no advice, so the recommendation was executed, not assumed.
 
-Only after that does the workflow change make sense:
+Re-verified from a **clean clone of committed HEAD**, not the working tree,
+after a cross-agent race briefly left committed `main.rs` calling a
+`Result`-returning `spawn_mic` whose committed `source.rs` half did not yet
+return one. A working tree holding both halves compiles and hides exactly that
+class of break:
 
-```yaml
-            cargo build --workspace --locked --no-default-features --target ${{ matrix.target }}
+```
+== default features ==      Finished dev profile in 28.44s
+== no-default-features ==   Finished dev profile in 33.51s
+== full test suite ==       43 suites ok, no failures
 ```
 
+**Consequence for CI:** the two musl rows no longer need workflow plumbing at
+all. They need the build command to pass `--no-default-features`, which is a
+better outcome than cross-compiling an audio library the binary never calls.
+The **four glibc rows still need step A**, which still has no owner.
+
+---
+
+## Shelf life of this report
+
+A product rename is queued (bundle id `dev.aquaoss.aquad` becomes
+`dev.hexavoice.hexad`, and the app bundle is renamed to match). When it lands
+it **invalidates two green ticks above**, which must be re-run rather than
+inherited:
+
+- the **codesign Designated Requirement** check on the bundled app, because the
+  DR is written against the old bundle id; and
+- any **TCC/permission** state, because a new bundle id voids every existing
+  Accessibility and Microphone grant. Every current tester will look like a
+  first-run user, and a grant that silently stops applying is the most
+  confusing failure this product can present.
+
+The CI, MSRV, dependency-graph, reproducibility, and licence findings are
+rename-independent and stay valid.
