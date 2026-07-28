@@ -21,13 +21,23 @@ default-target = "x86_64-unknown-linux-gnu"
 [build.env]
 # Reproducibility variables must cross the container boundary or the
 # container build and the host build stop being comparable.
-passthrough = ["SOURCE_DATE_EPOCH", "RUSTFLAGS", "CARGO_INCREMENTAL"]
+passthrough = ["SOURCE_DATE_EPOCH", "RUSTFLAGS", "CARGO_INCREMENTAL", "PKG_CONFIG_ALLOW_CROSS", "PKG_CONFIG_PATH"]
 
 [target.aarch64-unknown-linux-gnu]
 # Ubuntu 20.04-based image => glibc 2.31 floor for shipped aarch64 binaries.
 # That covers Debian 11+, Ubuntu 20.04+, RHEL 9+. Raising this floor is a
 # user-visible compatibility change; treat like an MSRV bump.
 image = "ghcr.io/cross-rs/aarch64-unknown-linux-gnu:0.2.5"
+# alsa-sys needs the *target-arch* ALSA headers/libs inside the container.
+# The image is x86_64 Ubuntu 20.04; arm64 packages live on ports.ubuntu.com,
+# which is not in the default sources, so it is added here for arm64 only.
+pre-build = [
+    "dpkg --add-architecture arm64",
+    "sed -i 's/^deb http/deb [arch=amd64] http/' /etc/apt/sources.list",
+    "echo 'deb [arch=arm64] http://ports.ubuntu.com/ubuntu-ports focal main universe' >> /etc/apt/sources.list",
+    "echo 'deb [arch=arm64] http://ports.ubuntu.com/ubuntu-ports focal-updates main universe' >> /etc/apt/sources.list",
+    "apt-get update && apt-get install -y libasound2-dev:arm64 pkg-config",
+]
 
 [target.aarch64-unknown-linux-musl]
 # Musl target is fully static (see .cargo/config.toml), so the image choice

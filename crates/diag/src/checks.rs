@@ -62,7 +62,7 @@ impl Check for AccessibilityPermission {
                 return CheckOutcome::warn(
                     "trusted, but launched from a shell: the grant in effect is the terminal's",
                     ErrorClass::Configuration,
-                    "launch via LaunchServices (`open -a dist/AquaSpike.app` or scripts/doctor.sh) \
+                    "launch via LaunchServices (`open -a dist/OutLoud.app` or scripts/doctor.sh) \
                      so the app is judged against its own grant",
                 );
             }
@@ -75,7 +75,7 @@ impl Check for AccessibilityPermission {
                 ErrorClass::Permission,
                 "either grant your terminal Accessibility in System Settings > Privacy & \
                  Security > Accessibility, or (better) relaunch through LaunchServices: \
-                 `open -a dist/AquaSpike.app` / scripts/doctor.sh",
+                 `open -a dist/OutLoud.app` / scripts/doctor.sh",
             );
         }
         CheckOutcome::fail(
@@ -276,7 +276,7 @@ impl Check for BundleLaunch {
                  to grant against",
                 ErrorClass::Configuration,
                 "package with scripts/bundle-macos.sh and launch the bundle (`open -a \
-                 dist/AquaSpike.app` or scripts/doctor.sh)",
+                 dist/OutLoud.app` or scripts/doctor.sh)",
             )
         }
     }
@@ -1048,7 +1048,7 @@ mod tests {
     #[test]
     fn bundle_path_detection() {
         assert!(path_is_in_bundle(Path::new(
-            "/x/dist/AquaSpike.app/Contents/MacOS/AquaSpike"
+            "/x/dist/OutLoud.app/Contents/MacOS/AquaSpike"
         )));
         assert!(!path_is_in_bundle(Path::new("/x/target/debug/doctor")));
     }

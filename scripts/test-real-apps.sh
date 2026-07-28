@@ -25,7 +25,7 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 # identity, and a bare target/release binary is judged against the terminal.
 BIN=""
 for candidate in \
-    "$ROOT/dist/AquaSpike.app/Contents/MacOS/AquaSpike" \
+    "$ROOT/dist/OutLoud.app/Contents/MacOS/OutLoud" \
     "$ROOT/target/release/spike-cli"; do
     [[ -x "$candidate" ]] && BIN="$candidate" && break
 done

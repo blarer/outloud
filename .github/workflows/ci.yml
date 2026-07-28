@@ -44,6 +44,9 @@ jobs:
       - uses: actions/checkout@v4
       # rustup reads rust-toolchain.toml automatically; no toolchain action
       # needed for the default case, which is one less pinned dependency.
+      - name: Install Linux system dependencies
+        if: runner.os == 'Linux'
+        run: scripts/ci-install-linux-deps.sh
       - uses: Swatinem/rust-cache@v2
         with:
           # One shared cache per OS for check+test; the build matrix below
@@ -51,21 +54,36 @@ jobs:
           shared-key: check
       - run: scripts/ci-check.sh
         shell: bash
+      - name: Attribute failure
+        if: failure()
+        run: echo "::error title=check failed on ${{ matrix.os }}::scripts/ci-check.sh (fmt/clippy/test) failed on ${{ matrix.os }}. Search the step log above for the first 'error' line."
 
   # MSRV is validated with its own toolchain and WITHOUT --locked semantics
   # being violated: same lockfile, older compiler. If this fails, either fix
   # the code or bump the documented MSRV in a deliberate PR.
+  #
+  # MSRV is 1.86: the icu_* crates (transitive via idna/url) declare
+  # rust-version 1.86 and refuse to build on 1.85. Full rationale in
+  # docs/build-and-release.md#msrv-policy. Keep this version in sync with
+  # that doc and the rust-toolchain.toml comment.
   msrv:
     runs-on: ubuntu-24.04
+    env:
+      MSRV: "1.86.0"
     steps:
       - uses: actions/checkout@v4
+      - name: Install Linux system dependencies
+        run: scripts/ci-install-linux-deps.sh
       - name: Install MSRV toolchain
-        run: rustup toolchain install 1.85.0 --profile minimal
+        run: rustup toolchain install "$MSRV" --profile minimal
       - uses: Swatinem/rust-cache@v2
         with:
           shared-key: msrv
       - name: Build with MSRV
-        run: cargo +1.85.0 build --workspace --locked
+        run: cargo +"$MSRV" build --workspace --locked
+      - name: Attribute failure
+        if: failure()
+        run: echo "::error title=MSRV build failed::Workspace does not build with Rust $MSRV. Either fix the code or bump the documented MSRV (docs/build-and-release.md#msrv-policy) in a deliberate PR."
 
   # Licence + CVE gate. Runs on PRs (catches a bad dep at review time) and
   # is additionally scheduled nightly by audit-nightly below, because new
@@ -74,6 +92,8 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
+      - name: Install Linux system dependencies
+        run: scripts/ci-install-linux-deps.sh
       - uses: Swatinem/rust-cache@v2
         with:
           shared-key: compliance
@@ -126,20 +146,36 @@ jobs:
       - name: Add target
         if: ${{ !matrix.use-cross }}
         run: rustup target add ${{ matrix.target }}
+      - name: Install Linux system dependencies
+        if: runner.os == 'Linux' && !matrix.use-cross
+        run: scripts/ci-install-linux-deps.sh
       - name: Install musl tools
         if: contains(matrix.target, 'musl') && !matrix.use-cross
         run: sudo apt-get update && sudo apt-get install -y musl-tools
+      # Prebuilt binary instead of `cargo install cross`: same pinned version,
+      # seconds instead of ~2 minutes of compiling cross from source per run.
       - name: Install cross
         if: matrix.use-cross
-        run: cargo install cross --locked
-      - name: Build
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cross@0.2.5
+      - name: Build (${{ matrix.target }})
         shell: bash
         run: |
           if [ "${{ matrix.use-cross }}" = "true" ]; then
+            # alsa-sys uses the pkg-config crate, which refuses to run when
+            # host != target unless explicitly allowed. The arm64 .pc files
+            # are installed by the Cross.toml pre-build hook.
+            export PKG_CONFIG_ALLOW_CROSS=1
+            export PKG_CONFIG_PATH=/usr/lib/aarch64-linux-gnu/pkgconfig
             cross build --workspace --locked --target ${{ matrix.target }}
           else
             cargo build --workspace --locked --target ${{ matrix.target }}
           fi
+      - name: Attribute failure
+        if: failure()
+        shell: bash
+        run: echo "::error title=build failed for ${{ matrix.target }}::Workspace does not compile for ${{ matrix.target }} on ${{ matrix.os }} (cross: ${{ matrix.use-cross || 'false' }}). The first 'error' line in the Build step above names the crate at fault."
 
   # Headless build: proves the daemon path stays display-free. Runs on a
   # plain ubuntu container with no X/Wayland present, which IS the deployment
@@ -161,7 +197,7 @@ jobs:
         # Explicitly unset every display variable; if the binary needed a
         # display to even start, this is where it dies.
         run: |
-          env -u DISPLAY -u WAYLAND_DISPLAY dist/headless/aqua-spiked-x86_64-unknown-linux-musl dry-run "change hello to goodbye"
+          env -u DISPLAY -u WAYLAND_DISPLAY dist/headless/outloud-spiked-x86_64-unknown-linux-musl dry-run "change hello to goodbye"
 
   # Reproducibility tripwire: double-build on Linux and require identical
   # hashes. Only x86_64-linux (the cheapest runner) because determinism bugs
@@ -173,7 +209,12 @@ jobs:
         with:
           # build-repro.sh derives SOURCE_DATE_EPOCH from git history.
           fetch-depth: 1
+      - name: Install Linux system dependencies
+        run: scripts/ci-install-linux-deps.sh
       # NOTE: no rust-cache here on purpose. A cache-restored target dir
       # defeats the point of proving a clean double-build is deterministic.
       - name: Double build and compare hashes
         run: REPRO_VERIFY=1 scripts/build-repro.sh
+      - name: Attribute failure
+        if: failure()
+        run: echo "::error title=repro job failed::Either the workspace failed to compile on x86_64 Linux (see the first 'error' line above) or the double build produced different hashes; the script prints both hashes and suggests diffoscope."

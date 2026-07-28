@@ -46,7 +46,16 @@ fi
 
 echo "==> Assembling $APP_DIR"
 rm -rf "$APP_DIR"
-mkdir -p "$APP_DIR/Contents/MacOS"
+mkdir -p "$APP_DIR/Contents/MacOS" "$APP_DIR/Contents/Resources"
+
+# The icon is generated from the same SVG the README renders, so the app and
+# the project page can never drift apart. Failure here is a warning rather than
+# an error: an iconless build is worth shipping, a broken build is not.
+if "$ROOT/scripts/make-icon.sh" "$APP_DIR/Contents/Resources/OutLoud.icns" >/dev/null 2>&1; then
+    echo "==> icon rendered from docs/assets/logo.svg"
+else
+    echo "==> WARNING: could not render the icon; the bundle will use the generic one"
+fi
 cp "$ROOT/target/release/outloud" "$APP_DIR/Contents/MacOS/$APP_NAME"
 # NOT renamed with the product: crates/asr's find_helper() looks for this
 # exact filename, and that crate is owned elsewhere. Renaming here alone
@@ -75,6 +84,8 @@ cat > "$APP_DIR/Contents/Info.plist" <<PLIST
     <string>$BUNDLE_ID</string>
     <key>CFBundleExecutable</key>
     <string>$APP_NAME</string>
+    <key>CFBundleIconFile</key>
+    <string>OutLoud</string>
     <key>CFBundlePackageType</key>
     <string>APPL</string>
     <key>CFBundleVersion</key>

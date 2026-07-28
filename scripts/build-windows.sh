@@ -88,7 +88,7 @@ if command -v makensis >/dev/null 2>&1; then
 !include "MUI2.nsh"
 Name "OutLoud Spike"
 OutFile "outloud-spike-$VERSION-$TARGET-setup.exe"
-InstallDir "\$LOCALAPPDATA\\AquaSpike"
+InstallDir "\$LOCALAPPDATA\\OutLoud"
 RequestExecutionLevel user   ; per-user install: no UAC prompt, no admin
 !insertmacro MUI_PAGE_DIRECTORY
 !insertmacro MUI_PAGE_INSTFILES
@@ -98,15 +98,15 @@ Section "Install"
     File "outloud-spike.exe"
     File "outloud.exe"
     WriteUninstaller "\$INSTDIR\\uninstall.exe"
-    WriteRegStr HKCU "Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\AquaSpike" "DisplayName" "OutLoud Spike"
-    WriteRegStr HKCU "Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\AquaSpike" "UninstallString" "\$INSTDIR\\uninstall.exe"
+    WriteRegStr HKCU "Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\OutLoud" "DisplayName" "OutLoud Spike"
+    WriteRegStr HKCU "Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\OutLoud" "UninstallString" "\$INSTDIR\\uninstall.exe"
 SectionEnd
 Section "Uninstall"
     Delete "\$INSTDIR\\outloud-spike.exe"
     Delete "\$INSTDIR\\outloud.exe"
     Delete "\$INSTDIR\\uninstall.exe"
     RMDir "\$INSTDIR"
-    DeleteRegKey HKCU "Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\AquaSpike"
+    DeleteRegKey HKCU "Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\OutLoud"
 SectionEnd
 NSIS
     (cd "$OUT" && makensis installer.nsi)
@@ -126,15 +126,15 @@ if command -v wix >/dev/null 2>&1; then
            UpgradeCode="7f9b2a44-1c3e-4d5f-9a8b-0e6f31c25a10" Scope="perUser">
     <MajorUpgrade DowngradeErrorMessage="A newer version is already installed." />
     <StandardDirectory Id="LocalAppDataFolder">
-      <Directory Id="INSTALLFOLDER" Name="AquaSpike">
+      <Directory Id="INSTALLFOLDER" Name="OutLoud">
         <Component Id="MainExe">
           <File Source="outloud-spike.exe" />
-          <RegistryValue Root="HKCU" Key="Software\\AquaSpike" Name="installed"
+          <RegistryValue Root="HKCU" Key="Software\\OutLoud" Name="installed"
                          Type="integer" Value="1" KeyPath="yes" />
         </Component>
         <Component Id="DaemonExe">
           <File Source="outloud.exe" />
-          <RegistryValue Root="HKCU" Key="Software\\AquaSpike" Name="daemon"
+          <RegistryValue Root="HKCU" Key="Software\\OutLoud" Name="daemon"
                          Type="integer" Value="1" KeyPath="yes" />
         </Component>
       </Directory>

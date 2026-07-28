@@ -15,7 +15,7 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-APP_DIR="$ROOT/dist/AquaSpike.app"
+APP_DIR="$ROOT/dist/OutLoud.app"
 LOG="${TMPDIR:-/tmp}/outloud-spike-$$.log"
 
 if [[ ! -d "$APP_DIR" ]]; then

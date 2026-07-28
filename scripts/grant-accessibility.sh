@@ -10,14 +10,14 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-APP_DIR="$ROOT/dist/AquaSpike.app"
+APP_DIR="$ROOT/dist/OutLoud.app"
 
 if [[ ! -d "$APP_DIR" ]]; then
     echo "App bundle not found. Building it first."
     "$ROOT/scripts/bundle-macos.sh"
 fi
 
-BIN="$APP_DIR/Contents/MacOS/AquaSpike"
+BIN="$APP_DIR/Contents/MacOS/OutLoud"
 
 # Ask the binary itself whether it already holds the permission, so a repeat run
 # is a no-op rather than a pointless trip through Settings.
@@ -29,7 +29,7 @@ fi
 echo "Accessibility permission is required."
 echo
 echo "Opening the Accessibility pane and revealing the app in Finder."
-echo "Drag AquaSpike.app from the Finder window into the Accessibility list,"
+echo "Drag OutLoud.app from the Finder window into the Accessibility list,"
 echo "then make sure its toggle is on."
 echo
 
