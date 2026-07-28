@@ -304,6 +304,19 @@ fn deliver_via_tiers(mode: &Mode, text: &str) -> Outcome {
 fn insert_with_fallback(text: &str) -> Outcome {
     match ax_edit::snapshot_focused() {
         Ok(snap) => {
+            // A read-only field is not a text destination we can write, and
+            // trying anyway is actively destructive rather than merely
+            // useless. Terminal.app is the case that matters: it exposes its
+            // *scrollback* as an AXTextArea with a caret, so the code below
+            // happily spliced a transcript into 1300 characters of scrollback
+            // and wrote the result back. Dictating into a terminal produced a
+            // screenful of mangled history instead of the sentence.
+            //
+            // Checked before the selection branch as well as the caret one,
+            // because AXSelectedText is refused on the same elements.
+            if is_read_only(&snap) {
+                return deliver_without_ax(text, &AxError::NotSettable);
+            }
             // A non-empty selection at commit time: typing replaces it, so
             // dictation does too. replace_focused takes the undo-preserving
             // AXSelectedText path here.
@@ -314,11 +327,23 @@ fn insert_with_fallback(text: &str) -> Outcome {
                 Some(new_value) => write_focused(&new_value),
                 // Field readable but caret unknown/unmappable: paste inserts
                 // at the caret without us knowing where it is.
-                None => clipboard_fallback(text, &AxError::NoTextValue),
+                None => deliver_without_ax(text, &AxError::NoTextValue),
             }
         }
-        Err(e) => clipboard_fallback(text, &e),
+        Err(e) => deliver_without_ax(text, &e),
     }
+}
+
+/// Whether the focused element refuses every write the AX tier has.
+///
+/// Split out from [`insert_with_fallback`] so the rule is testable without
+/// a live accessibility tree, because the case it guards is destructive
+/// rather than merely unhelpful: Terminal.app exposes its scrollback as a
+/// readable `AXTextArea` with a caret, and writing a spliced value back
+/// replaces the visible history with mangled text.
+#[cfg(target_os = "macos")]
+fn is_read_only(snap: &TextSnapshot) -> bool {
+    !snap.value_settable && !snap.selected_text_settable
 }
 
 /// The spliced whole-field value for inserting `text` at the caret, or
@@ -367,7 +392,7 @@ fn write_focused(text: &str) -> Outcome {
             text: text.to_string(),
             via: strategy.to_string(),
         },
-        Err(e) => clipboard_fallback(text, &e),
+        Err(e) => deliver_without_ax(text, &e),
     }
 }
 
@@ -382,15 +407,55 @@ fn replace_selection(rewritten: &str) -> Outcome {
     write_focused(rewritten)
 }
 
-/// The last-resort transport. On success the text is on screen via a
-/// synthesized paste; on failure the text is at least *on the clipboard*,
-/// and the outcome tells the user to press Cmd+V themselves: a named next
-/// action even at the bottom of the fallback chain.
+/// The last-resort transport, for destinations with no writable
+/// accessibility field. Terminals are the whole reason it exists: a
+/// terminal's "field" is a character grid owned by the program running
+/// inside it, so AX reads and writes nothing there.
+///
+/// Order matters, and it is not the tier order:
+///
+/// 1. **Synthesized keystrokes** (`ax_edit::synth`). Preferred despite being
+///    a lower tier than the clipboard, because it does not touch the user's
+///    clipboard at all, and because in a terminal it is the *only* thing
+///    that works: text typed at a shell prompt is exactly what the line
+///    editor expects, so history, editing, and undo all behave normally.
+/// 2. **Clipboard paste.** Atomic, so it stays the better choice for very
+///    long text, and it is the fallback when synthesis is refused.
+/// 3. **Clipboard only**, with the user told to press Cmd+V. A named next
+///    action even at the bottom of the chain.
+///
+/// The previous implementation went straight to the clipboard and
+/// synthesized Cmd+V by shelling out to `osascript`. That fails on a
+/// correctly-configured machine, because System Events keystroke synthesis
+/// is TCC-gated against *osascript*, not against us:
+///
+/// ```text
+/// System Events got an error: osascript is not allowed to send keystrokes. (1002)
+/// ```
+///
+/// So dictation into a terminal delivered nothing at all, not even to the
+/// clipboard, since the paste failure aborted the whole outcome. We already
+/// hold the Accessibility grant that keystroke synthesis needs, so posting
+/// the events ourselves is both more reliable and a smaller ask of the user
+/// than granting a general-purpose scripting interpreter blanket input
+/// synthesis.
 #[cfg(target_os = "macos")]
-fn clipboard_fallback(text: &str, ax_err: &AxError) -> Outcome {
+fn deliver_without_ax(text: &str, ax_err: &AxError) -> Outcome {
     // Logged, not just folded into the outcome: the fallback usually
     // succeeds, and the AX refusal that caused it would otherwise vanish.
-    eprintln!("aquad: AX write path refused ({ax_err}); falling back to clipboard paste");
+    eprintln!("aquad: AX write path refused ({ax_err}); typing it instead");
+
+    // Tier 1: type it. Leaves the clipboard alone entirely.
+    match ax_edit::synth::type_text(text) {
+        Ok(()) => {
+            return Outcome::Wrote {
+                text: text.to_string(),
+                via: "synthetic-keys".into(),
+            }
+        }
+        Err(e) => eprintln!("aquad: keystroke synthesis refused ({e}); falling back to clipboard"),
+    }
+
     #[cfg(feature = "display")]
     {
         use text_target::targets::clipboard::ClipboardTarget;
@@ -407,10 +472,13 @@ fn clipboard_fallback(text: &str, ax_err: &AxError) -> Outcome {
                         via: "clipboard-paste".into(),
                     }
                 }
+                // The paste keystroke failed, but the text IS on the
+                // clipboard, and deliberately left there rather than
+                // restored: the user's next action is to paste it.
                 Err(paste_err) => Outcome::Failed {
                     situation_action: format!(
-                        "write refused ({ax_err}) and paste failed ({paste_err}) \
-                         -> your text is on the clipboard, press Cmd+V"
+                        "write refused ({ax_err}), typing refused, and paste failed \
+                         ({paste_err}) -> your text is on the clipboard, press Cmd+V"
                     ),
                 },
             },
@@ -509,6 +577,44 @@ mod tests {
             value_settable: true,
             selected_text_settable: false,
         }
+    }
+
+    /// The Terminal.app regression: a readable-but-unwritable text area with
+    /// a caret must be treated as read-only, so delivery goes to synthesized
+    /// keystrokes instead of splicing a transcript into the scrollback and
+    /// writing it back.
+    #[test]
+    fn read_only_scrollback_is_not_a_write_target() {
+        let mut s = caret_snap("$ echo hello\nhello\n$ ", Some(21));
+        s.value_settable = false;
+        s.selected_text_settable = false;
+        assert!(is_read_only(&s));
+
+        // The splice itself is still well-defined; the point is that the
+        // caller must never get as far as writing it back.
+        assert!(
+            spliced_at_caret(&s, "some dictated text").is_some(),
+            "guard must be the settability check, not a splice failure"
+        );
+    }
+
+    /// Either writable attribute is enough: some applications expose only
+    /// AXSelectedText, others only AXValue.
+    #[test]
+    fn either_settable_attribute_makes_it_writable() {
+        let mut s = caret_snap("hello", Some(5));
+
+        s.value_settable = true;
+        s.selected_text_settable = false;
+        assert!(!is_read_only(&s));
+
+        s.value_settable = false;
+        s.selected_text_settable = true;
+        assert!(!is_read_only(&s));
+
+        s.value_settable = true;
+        s.selected_text_settable = true;
+        assert!(!is_read_only(&s));
     }
 
     #[test]

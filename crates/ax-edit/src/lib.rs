@@ -123,6 +123,11 @@ impl fmt::Display for RewriteStrategy {
 #[cfg(target_os = "macos")]
 mod macos;
 
+/// Synthesized keyboard input, for destinations (terminals above all) that
+/// expose no writable accessibility field.
+#[cfg(target_os = "macos")]
+pub mod synth;
+
 /// Whether this process is trusted for accessibility.
 ///
 /// When `prompt` is true and the process is untrusted, macOS shows the system
