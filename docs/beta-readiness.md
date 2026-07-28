@@ -58,14 +58,14 @@ Do **not** ship a downloadable `.app` yet. That path is blocked by
 notarization, which needs a paid Apple Developer account and cannot be worked
 around. The conditional in "conditional go" is that sentence and nothing else.
 
-Every blocker and every major except two were closed during this assessment,
-most of them in code rather than in prose. The two open items are M6 (settings
-accepted but not read, detection built and tested, waiting on a call site) and
-M8, which is a sequencing decision rather than a bug: the pending rename to
-Hexavoice changes the bundle identifier, and TCC keys grants by identifier, so
-every permission an existing tester has granted stops applying. That one costs
-nothing if the rename lands before any stranger installs, and is entirely
-self-inflicted if it lands after.
+Every blocker and every major except one were closed during this assessment,
+most of them in code rather than in prose. The remaining open item is M8, which
+is a sequencing decision rather than a bug: the rename to Hexavoice changes the
+bundle identifier, and TCC keys grants by identifier, so every permission an
+existing tester has granted stops applying. That costs nothing if the rename
+lands before any stranger installs, and is entirely self-inflicted if it lands
+after. One smaller gap is noted under M6: config *validation* problems still
+reach the menu but not stderr.
 
 The reason this is a GO rather than a NO-GO: the product's hard parts are
 genuinely done. Dictation, edit-by-voice, and terminal injection work, latency
@@ -79,14 +79,14 @@ walked start to finish on a clean clone, following the corrected README
 verbatim with no other steps:
 
 ```
-$ git clone <repo> && cd aqua-oss
-$ ./scripts/bundle-aquad-macos.sh
-==> Building aquad (release)
+$ git clone <repo> && cd hexavoice
+$ ./scripts/bundle-hexad-macos.sh
+==> Building hexad (release)
 ==> Building the speech helper
-    dist/Aqua.app: valid on disk
-Built: dist/Aqua.app
+    dist/Hexavoice.app: valid on disk
+Built: dist/Hexavoice.app
 
-$ ./dist/Aqua.app/Contents/MacOS/Aqua --once --say "hello from a local dictation daemon" --no-overlay
+$ ./dist/Hexavoice.app/Contents/MacOS/Hexavoice --once --say "hello from a local dictation daemon" --no-overlay
 e2e: release->text 383ms (finalize 326ms, inject 56.6ms) via synthetic-keys | "Hello from a local dictation demon."
 RC=0
 ```
@@ -113,30 +113,30 @@ the Swift speech helper, so the recognizer is absent.
 Reproduction, from a genuinely fresh clone:
 
 ```
-$ git clone /Users/blare/aqua-oss-spike /tmp/lobster-fresh && cd /tmp/lobster-fresh
+$ git clone /Users/blare/hexavoice-spike /tmp/lobster-fresh && cd /tmp/lobster-fresh
 $ cargo build --release
     Finished `release` profile [optimized] target(s) in 39.86s
 
-$ ./target/release/aquad --once --say "the rain in spain falls mainly on the plain" --no-overlay
-aquad: state model-loading
-Error: recognizer failed to load (aqua-speech-helper not found; build it with `swiftc -O crates/asr/helper/transcriber.swift -o aqua-speech-helper` or set AQUA_SPEECH_HELPER) -> build the speech helper (see crates/asr/helper) or run with --asr mock
+$ ./target/release/hexad --once --say "the rain in spain falls mainly on the plain" --no-overlay
+hexad: state model-loading
+Error: recognizer failed to load (hexavoice-speech-helper not found; build it with `swiftc -O crates/asr/helper/transcriber.swift -o hexavoice-speech-helper` or set HEXA_SPEECH_HELPER) -> build the speech helper (see crates/asr/helper) or run with --asr mock
 RC=1
 ```
 
 The plain daemon, which is the README's "Using it" step, dies the same way:
 
 ```
-$ ./target/release/aquad --no-overlay
-aquad: state model-loading
-aquad: hold right-option to dictate
-aquad: state error (recognizer failed to load (aqua-speech-helper not found ...))
+$ ./target/release/hexad --no-overlay
+hexad: state model-loading
+hexad: hold right-option to dictate
+hexad: state error (recognizer failed to load (hexavoice-speech-helper not found ...))
 RC=1
 ```
 
-Cause: `crates/asr/helper/aqua-speech-helper` is a compiled artifact and is
+Cause: `crates/asr/helper/hexavoice-speech-helper` is a compiled artifact and is
 gitignored, there is no `build.rs` anywhere in the workspace (`find crates -name
 build.rs` returns nothing), and the only thing that ever invokes `swiftc` is
-`scripts/bundle-aquad-macos.sh`. The README pointed at `scripts/bundle-macos.sh`,
+`scripts/bundle-hexad-macos.sh`. The README pointed at `scripts/bundle-macos.sh`,
 which packages `spike-cli`, not the daemon. This stayed invisible to the team
 because every development tree already has a stale helper binary in the
 gitignored path.
@@ -144,13 +144,13 @@ gitignored path.
 The correct script does work, from the same fresh clone:
 
 ```
-$ ./scripts/bundle-aquad-macos.sh
+$ ./scripts/bundle-hexad-macos.sh
 ==> Building the speech helper
 ...
-$ ls dist/Aqua.app/Contents/MacOS/
-Aqua                 aqua-speech-helper
+$ ls dist/Hexavoice.app/Contents/MacOS/
+Hexavoice                 hexavoice-speech-helper
 
-$ ./dist/Aqua.app/Contents/MacOS/Aqua --once --say "the rain in spain falls mainly on the plain" --no-overlay
+$ ./dist/Hexavoice.app/Contents/MacOS/Hexavoice --once --say "the rain in spain falls mainly on the plain" --no-overlay
 e2e: release->text 193ms (finalize 145ms, inject 48.0ms) via synthetic-keys | "The rain in Spain falls mainly on the plain."
 ```
 
@@ -158,14 +158,14 @@ Independently reproduced by release QA, which also confirmed the packaged path
 transcribes correctly. That is the severity-limiting fact: the artifact works,
 only the documented from-source path was broken.
 
-**Fixed here** by pointing the README at `bundle-aquad-macos.sh`, naming the
+**Fixed here** by pointing the README at `bundle-hexad-macos.sh`, naming the
 Xcode Command Line Tools prerequisite, and changing the "Using it" examples to
 run the bundled binary.
 
 **Not fixed, and should be before beta:** two ways this still bites.
 
-1. `bundle-aquad-macos.sh` warns rather than fails when `swiftc` is missing
-   ("aquad will start but cannot transcribe"). A release process can scroll
+1. `bundle-hexad-macos.sh` warns rather than fails when `swiftc` is missing
+   ("hexad will start but cannot transcribe"). A release process can scroll
    past that and ship a bundle with no recognizer.
 2. The helper is rebuilt only when the source is newer than the binary
    (`[[ ! -x "$HELPER_BIN" || "$HELPER_SRC" -nt "$HELPER_BIN" ]]`), so a stale
@@ -176,13 +176,13 @@ non-hermetic external compiler in the build graph and threaten the `repro`
 job's byte-identical guarantee. The scripts-and-docs fix is the right one.
 
 **B1 regressed once and was re-fixed.** The Hexavoice rename renamed
-`bundle-aquad-macos.sh` to `bundle-hexad-macos.sh` but left the README pointing
+`bundle-hexad-macos.sh` to `bundle-hexad-macos.sh` but left the README pointing
 at the old name, so the documented install broke again in exactly the same
 place:
 
 ```
-$ ./scripts/bundle-aquad-macos.sh
-bash: ./scripts/bundle-aquad-macos.sh: No such file or directory
+$ ./scripts/bundle-hexad-macos.sh
+bash: ./scripts/bundle-hexad-macos.sh: No such file or directory
 ```
 
 Re-fixed and re-verified end to end on the renamed tree:
@@ -215,8 +215,8 @@ this commit.**
 The bundle is ad-hoc signed with no team identifier:
 
 ```
-$ codesign -dv --verbose=2 dist/Aqua.app
-Identifier=dev.aquaoss.aquad
+$ codesign -dv --verbose=2 dist/Hexavoice.app
+Identifier=dev.hexavoice.hexad
 CodeDirectory v=20400 size=5322 flags=0x2(adhoc) hashes=160+3 location=embedded
 Signature=adhoc
 TeamIdentifier=not set
@@ -225,12 +225,12 @@ TeamIdentifier=not set
 Gatekeeper rejects it:
 
 ```
-$ spctl -a -vvv -t exec dist/Aqua.app
-dist/Aqua.app: rejected
+$ spctl -a -vvv -t exec dist/Hexavoice.app
+dist/Hexavoice.app: rejected
 RC=3
 
-$ stapler validate dist/Aqua.app
-Aqua.app does not have a ticket stapled to it.
+$ stapler validate dist/Hexavoice.app
+Hexavoice.app does not have a ticket stapled to it.
 ```
 
 Simulating a browser download by applying the quarantine flag, then
@@ -270,20 +270,20 @@ Nothing prevents two daemons running at once. Both bind the same hotkey and
 both open the microphone:
 
 ```
-$ ./target/release/aquad --asr mock --no-overlay &   # instance A
-$ ./target/release/aquad --asr mock --no-overlay &   # instance B
-$ pgrep -fl 'target/release/aquad'
-91059 ./target/release/aquad --asr mock --no-overlay
-91072 ./target/release/aquad --asr mock --no-overlay
+$ ./target/release/hexad --asr mock --no-overlay &   # instance A
+$ ./target/release/hexad --asr mock --no-overlay &   # instance B
+$ pgrep -fl 'target/release/hexad'
+91059 ./target/release/hexad --asr mock --no-overlay
+91072 ./target/release/hexad --asr mock --no-overlay
 ```
 
 Both logs report a successful bind and an open capture device:
 
 ```
 === A ===                                    === B ===
-aquad: hold right-option to dictate          aquad: hold right-option to dictate
-aquad: recognizer ready: mock                aquad: recognizer ready: mock
-aquad: capturing from Jessie's AirPods #2    aquad: capturing from Jessie's AirPods #2
+hexad: hold right-option to dictate          hexad: hold right-option to dictate
+hexad: recognizer ready: mock                hexad: recognizer ready: mock
+hexad: capturing from Jessie's AirPods #2    hexad: capturing from Jessie's AirPods #2
 ```
 
 Neither warns. Neither mentions the other.
@@ -294,9 +294,9 @@ the default right-option), then a single press and release:
 
 ```
 === A ===                        === B ===
-aquad: state idle                aquad: state idle
-aquad: state listening    <---   aquad: state listening    <--- both hot
-aquad: state idle                aquad: state idle
+hexad: state idle                hexad: state idle
+hexad: state listening    <---   hexad: state listening    <--- both hot
+hexad: state idle                hexad: state idle
 ```
 
 Both entered `listening` from the same keypress, meaning **two processes had
@@ -306,7 +306,7 @@ would inject their transcript into the focused field.
 This is realistic, not contrived. A user starts the `.app`, forgets, and later
 runs the daemon from a terminal to see logs. Or launch-at-login starts one and
 they start another. The quickstart actively encourages the second case: "To
-watch the logs instead of running detached: `./target/release/aquad --no-overlay`".
+watch the logs instead of running detached: `./target/release/hexad --no-overlay`".
 
 There is also a related crash with no guard at all. Two `--once` runs at the
 same time collide on a shared temp file:
@@ -319,11 +319,11 @@ Error: ExtAudioFileCreateWithURL failed (-48)
 Error: afconvert failed
 ```
 
-`-48` is `dupFNErr`. Both processes write `$TMPDIR/aquad-say/utterance.aiff`.
+`-48` is `dupFNErr`. Both processes write `$TMPDIR/hexad-say/utterance.aiff`.
 Only affects `--say`, which is a test path, but it shows the same missing
 assumption.
 
-**Fixed in this assessment.** `crates/aquad/src/instance.rs` takes an advisory
+**Fixed in this assessment.** `crates/hexad/src/instance.rs` takes an advisory
 `flock(LOCK_EX | LOCK_NB)` on a lock file in `$XDG_RUNTIME_DIR` (else the temp
 directory) before anything is bound or opened, so a refused start cannot
 disturb the daemon already running.
@@ -341,19 +341,19 @@ Before and after, same commands:
 
 ```
 BEFORE
-$ ./target/release/aquad --asr mock --no-overlay &   # A
-$ ./target/release/aquad --asr mock --no-overlay &   # B
-$ pgrep -f 'release/aquad' | wc -l
+$ ./target/release/hexad --asr mock --no-overlay &   # A
+$ ./target/release/hexad --asr mock --no-overlay &   # B
+$ pgrep -f 'release/hexad' | wc -l
 2                                    <- both running, both hot on one keypress
 
 AFTER
-$ ./target/release/aquad --asr mock --no-overlay &   # A
-$ ./target/release/aquad --asr mock --no-overlay     # B
-Error: aquad is already running (pid 17138). Quit it from the menu bar, or
+$ ./target/release/hexad --asr mock --no-overlay &   # A
+$ ./target/release/hexad --asr mock --no-overlay     # B
+Error: hexad is already running (pid 17138). Quit it from the menu bar, or
 `kill 17138`, then start this one. Running two copies makes both record you
 and both type what you said.
 B exit code: 1
-$ pgrep -f 'release/aquad' | wc -l
+$ pgrep -f 'release/hexad' | wc -l
 1
 ```
 
@@ -404,10 +404,10 @@ Will not stop a beta, but will generate support load.
 Before the fix:
 
 ```
-$ ./target/release/aquad --version
+$ ./target/release/hexad --version
 Error: unknown argument --version (try --help)
 RC=1
-$ ./target/release/aquad -V
+$ ./target/release/hexad -V
 Error: unknown argument -V (try --help)
 RC=1
 ```
@@ -415,10 +415,10 @@ RC=1
 After, verified against a rebuilt binary:
 
 ```
-$ ./target/release/aquad --version
-aquad 0.1.0
+$ ./target/release/hexad --version
+hexad 0.1.0
 RC=0
-$ ./target/release/aquad --help | grep -i version
+$ ./target/release/hexad --help | grep -i version
 --version        print the version and exit
 ```
 
@@ -439,8 +439,8 @@ Before this commit, `grep -i uninstall` across the repo matched only
 `scripts/build-windows.sh`. The untested platform had an uninstaller; the only
 working platform did not.
 
-Removing Aqua by hand means knowing about five locations, three of them
-invisible: the app bundle, `~/.config/aqua`, `~/.aqua-oss/models`, the TCC
+Removing Hexavoice by hand means knowing about five locations, three of them
+invisible: the app bundle, `~/.config/hexavoice`, `~/.hexavoice/models`, the TCC
 grants, and a line appended to the user's `.zshrc`. That last one is the worst:
 `shell-bridge install` writes an absolute path into the rc file and has no
 uninstall verb.
@@ -448,9 +448,9 @@ uninstall verb.
 ```
 $ ./target/release/shell-bridge install
 installed into /Users/blare/.zshrc
-$ grep -A1 'aqua shell-bridge' ~/.zshrc
-# aqua shell-bridge
-[ -f "/Users/blare/aqua-oss-spike/shell/aqua.zsh" ] && source "/Users/blare/aqua-oss-spike/shell/aqua.zsh"
+$ grep -A1 'hexavoice shell-bridge' ~/.zshrc
+# hexavoice shell-bridge
+[ -f "/Users/blare/hexavoice-spike/shell/hexavoice.zsh" ] && source "/Users/blare/hexavoice-spike/shell/hexavoice.zsh"
 
 $ ./target/release/shell-bridge uninstall
 usage: shell-bridge <serve|intent|status|peek|install|print-plugin-path> [flags]
@@ -468,7 +468,7 @@ Verified in a sandboxed fake `HOME`, ten assertions, all passing:
 PASS: app bundles removed
 PASS: model dir removed
 PASS: config KEPT without --purge
-PASS: aqua line gone from .zshrc
+PASS: hexavoice line gone from .zshrc
 PASS: user EDITOR line survived
 PASS: user PAGER line survived
 PASS: user alias survived
@@ -484,8 +484,8 @@ The `.zshrc` before and after, showing surgical removal:
 export EDITOR=vim                                 export EDITOR=vim
 alias gs='git status'                             alias gs='git status'
 
-# aqua shell-bridge                        --->
-[ -f "/x/shell/aqua.zsh" ] && source ...
+# hexavoice shell-bridge                        --->
+[ -f "/x/shell/hexavoice.zsh" ] && source ...
 
 # more of the user's own settings                 # more of the user's own settings
 export PAGER=less                                 export PAGER=less
@@ -503,7 +503,7 @@ documents why this matters:
 > the trust check is cached per process while the real permission lives with the
 > *responsible* process
 
-So a user who toggles Accessibility off while Aqua is running gets a daemon that
+So a user who toggles Accessibility off while Hexavoice is running gets a daemon that
 still believes it is trusted, silently degrades to clipboard paste or fails, and
 does not say why. The `NoPermission` state exists in the state machine and the
 menu bar renders it, but nothing drives a transition into it after launch.
@@ -538,14 +538,14 @@ proposed:
 
 Verified on the real thing, not only in tests: an ad-hoc build genuinely lost
 its grant when its `cdhash` changed on rebuild, and the running app showed the
-amber warning triangle, the tooltip "Aqua: Accessibility permission needed",
+amber warning triangle, the tooltip "Hexavoice: Accessibility permission needed",
 and the row that opens the pane. The recovery direction is covered by unit test
 rather than live, because `TCC.db` is not readable, correctly.
 
 Related, from the same agent: the single-instance refusal now also shows a
 **dialog** when stderr is not a terminal. The message this assessment added was
 only ever seen by someone watching a terminal, and a bundled launch has none,
-so double-clicking `Aqua.app` while a daemon was already running still appeared
+so double-clicking `Hexavoice.app` while a daemon was already running still appeared
 to do nothing at all. The wording and the menu-bar-first ordering are unchanged.
 
 ### M4. Stale ASR helper process, trigger unidentified
@@ -558,14 +558,14 @@ after its parent died:
 
 ```
   PID  PPID STARTED                       ELAPSED COMMAND
-45677     1 Tue Jul 28 01:07:42 2026     07:46:20 .../aqua-speech-helper
+45677     1 Tue Jul 28 01:07:42 2026     07:46:20 .../hexavoice-speech-helper
 ```
 
 Wedged on a semaphore in `main`:
 
 ```
 1728 Thread_1453639   DispatchQueue_1: com.apple.main-thread  (serial)
-+ 1728 main  (in aqua-speech-helper) + 188
++ 1728 main  (in hexavoice-speech-helper) + 188
 +   1728 _dispatch_semaphore_wait_slow  (in libdispatch.dylib) + 132
 +     1728 semaphore_wait_trap  (in libsystem_kernel.dylib) + 8
 ```
@@ -580,7 +580,7 @@ mid-utterance with the hotkey still held:
 helpers mid-utterance: 45677 92273
 --- kill -9 daemon WHILE key still held ---
 --- helpers after ---
-45677     1 07:50:24 .../aqua-speech-helper       <- only the pre-existing one
+45677     1 07:50:24 .../hexavoice-speech-helper       <- only the pre-existing one
 ```
 
 92273 exited correctly. 16 of 16 clean between both agents. The code is more
@@ -607,7 +607,7 @@ exists.
 When it finds something, it says so rather than tidying up silently:
 
 ```
-aquad: cleaned up 1 stale speech helper(s) from a previous run
+hexad: cleaned up 1 stale speech helper(s) from a previous run
 ```
 
 Verified against a real orphaned helper, in a scratch directory under a
@@ -620,7 +620,7 @@ helper pids after: (none)
 PASS: SIGTERM reaps a stale helper
 
 === the other agent's real helper must be UNTOUCHED ===
-32936 .../Aqua.app/Contents/MacOS/aqua-speech-helper     <- still alive
+32936 .../Hexavoice.app/Contents/MacOS/hexavoice-speech-helper     <- still alive
 ```
 
 The pid-selection logic is split from the killing so it can be unit-tested
@@ -646,7 +646,7 @@ e2e: release->text 215ms (finalize 158ms, inject 56.9ms) via synthetic-keys
 
 Release QA independently measured 223ms and 349ms. Every observation exceeded
 the top of the advertised range. The claim is not wildly wrong, and the
-comparison to Aqua's ~450ms still holds comfortably, but a beta README must not
+comparison to Hexavoice's ~450ms still holds comfortably, but a beta README must not
 overstate. Corrected to **131-215ms** with an explanation that the spread
 depends on the transport.
 
@@ -658,7 +658,7 @@ The starter config is generated with all 16 settings listed and documented.
 Thirteen of them do nothing. They are accepted without warning and changing
 them has no observable effect.
 
-The menu bar is honest about this, and deliberately so. `crates/aquad/src/
+The menu bar is honest about this, and deliberately so. `crates/hexad/src/
 menubar.rs` carries a test gate:
 
 ```rust
@@ -688,7 +688,7 @@ e2e: release->text 147ms ... via synthetic-keys | "Streaming mode test."
 ```
 
 The `stream` crate is fully built (`session.rs`, `undo.rs`, coalescing, a
-commit horizon) but `crates/aquad/Cargo.toml` does not depend on it at all, so
+commit horizon) but `crates/hexad/Cargo.toml` does not depend on it at all, so
 the setting cannot possibly work. Independently noted in
 [`competitive-analysis.md`](competitive-analysis.md).
 
@@ -704,7 +704,7 @@ mention that its choice was ignored:
 
 ```
 $ printf 'microphone = "no-such-device-at-all"\n' > config.toml
-aquad: capturing from MacBook Pro Microphone
+hexad: capturing from MacBook Pro Microphone
 ```
 
 A user who sets that and hears nothing has no way to learn the setting was
@@ -717,26 +717,42 @@ starter file. That converts thirteen silent no-ops into one honest line of
 output. The alternative, wiring all thirteen, is real work and not beta-
 blocking; being honest about them is.
 
-**Update, partially landed.** The release QA agent implemented the detection
-half in `22f579b`: `KeySpec` now carries a `wired` flag and
-`Config::inert_settings()` returns the unwired keys **the user actually set**,
-correctly staying silent about unwired defaults. It is tested.
-
-The warning does not reach the user yet, because nothing calls it. Verified
-against a fresh build with two inert keys set:
+**Update: FIXED.** The call site landed in `menuhost.rs` and reports to *both*
+surfaces, stderr for a terminal launch and the menu for a bundled one, which is
+better than the recommendation above: that asked only for a warning, and a
+bundled app has no terminal to print one to. Verified against the built binary:
 
 ```
-$ printf 'schema-version = 1\nformatting.casing = "upper"\nlanguage = "fr"\n' > config.toml
-$ ./target/release/aquad --asr mock --no-overlay
-aquad: state model-loading
-aquad: hold right-option to dictate
-aquad: recognizer ready: mock
-aquad: state idle
-aquad: capturing from MacBook Pro Microphone
+$ printf 'schema-version = 1\nlanguage = "fr"\n' > config.toml
+$ ./target/release/hexad --asr mock --no-overlay
+hexad: config sets "language" but nothing reads it yet; it has no effect
 ```
 
-Still no warning. The remaining work is a single call site, whose natural home
-is `crates/aquad/src/main.rs` or `menuhost.rs`. This item stays open.
+Confirmed it reports only keys the user actually set rather than the twelve
+unwired defaults, and that dotted keys (`formatting.smart-quotes`,
+`insertion.mode`) work as well as flat ones.
+
+**One narrower gap remains, found while verifying this.** Inert settings now
+reach stderr; *validation* problems still do not. A value outside its
+constraint, or an unknown key, is collected for the menu and printed nowhere:
+
+```
+$ printf 'schema-version = 1\nformatting.casing = "upper"\nnosuchkey = 1\n' > config.toml
+$ ./target/release/hexad --asr mock --no-overlay
+hexad: state model-loading
+hexad: hold right-option to dictate
+...
+```
+
+`"upper"` is not one of `standard` / `casual-lowercase`, and `nosuchkey` is not
+a key at all. Both are correctly detected, both are correctly discarded, and
+neither is mentioned. Someone editing the config in a terminal gets silence and
+a setting that did nothing, which is the same shape of failure this whole
+section is about.
+
+The fix is small: the `warnings` already collected one line above the
+inert-settings loop in `menuhost.rs` need the same `eprintln!` treatment. Left
+to that file's owner rather than edited under an in-flight rename.
 
 ### M7. `enabled = false` self-write: RETRACTED, it was this assessment's own clicks
 
@@ -789,7 +805,7 @@ reload, watcher polling, and model rebuilds carrying a device-change detail, and
 fails if the file changes. Verified passing:
 
 ```
-$ cargo test -p aquad nothing_but_a_click
+$ cargo test -p hexad nothing_but_a_click
 test menuhost::tests::nothing_but_a_click_writes_the_config ... ok
 ```
 
@@ -818,10 +834,10 @@ Being honest in both directions.
   makes doctor output mandatory and asks how the binary was launched and
   whether it was rebuilt since granting, which are precisely the two questions
   that separate a real bug from the environment. Refreshed here to name
-  `./scripts/doctor.sh` and `aquad --version` directly, both of which have
+  `./scripts/doctor.sh` and `hexad --version` directly, both of which have
   changed since the template was written, and to point at the README's new
   known-limitations list before someone files a known issue.
-- **First-run config generation.** With no `~/.config/aqua`, the daemon starts
+- **First-run config generation.** With no `~/.config/hexavoice`, the daemon starts
   clean and writes a fully commented file with every setting shown at its
   default and commented out. Deleting a line genuinely means "use the default".
   It is self-documenting and it is tested.
@@ -830,7 +846,7 @@ Being honest in both directions.
   that make this app class miserable to support.
 - **`shell-bridge install` is idempotent and guarded.** Running it three times
   produces one guarded line that no-ops if the file is missing.
-- **`bundle-aquad-macos.sh` output is excellent.** It tells the user where to
+- **`bundle-hexad-macos.sh` output is excellent.** It tells the user where to
   look in the menu bar, that there is no Dock icon by design, and what to do
   after a rebuild.
 - **Config migration is well designed** even though it is not yet reachable.
@@ -850,12 +866,14 @@ Landed in the README's "Known limitations" section in this commit:
 2. `cargo build` alone does not produce a working recognizer.
 3. ~~No single-instance guard.~~ Fixed; a second copy is refused and told
    which pid to quit.
-4. ~~No `--version` on the daemon.~~ Fixed; `aquad --version` prints `aquad 0.1.0`.
+4. ~~No `--version` on the daemon.~~ Fixed; `hexad --version` prints `hexad 0.1.0`.
 5. The Accessibility grant dies on every rebuild (cdhash pinning).
 6. ~~Revoking a permission while running is not noticed until relaunch.~~
    Fixed; the menu bar glyph changes within a second either way.
 7. macOS 13-25 has no bundled recognizer; only 26+ has `SpeechTranscriber`.
-8. Most config settings are accepted but not yet read by anything.
+8. Most config settings are accepted but not yet read by anything. The daemon
+   now says so at startup for any you set. An invalid *value* is still
+   discarded without a message on the terminal.
 9. Freeform edits are not wired to the language model.
 10. Linux does not work; Windows compiles but has never been run.
 11. If you tested before the Hexavoice rename, your permission grants do not
@@ -870,7 +888,7 @@ Ordered by user pain per unit of effort.
 
 | # | Action | Effort | Why it is where it is |
 |---|---|---|---|
-| 1 | ~~Point the README at `bundle-aquad-macos.sh`~~ | done | Every source install failed without it |
+| 1 | ~~Point the README at `bundle-hexad-macos.sh`~~ | done | Every source install failed without it |
 | 2 | ~~State the Gatekeeper reality in the README~~ | done | Silent failure with `open` returning 0 |
 | 3 | ~~Ship `scripts/uninstall-macos.sh`~~ | done | Testers must be able to leave |
 | 4 | ~~Correct the latency claim~~ | done | A false number in a beta README burns trust |
@@ -878,9 +896,10 @@ Ordered by user pain per unit of effort.
 | 6 | ~~`--version` on the daemon~~ | done | Blocked every bug report |
 | 7 | ~~Reap stale helpers at daemon startup~~ | done | Killed M4's whole class without finding the trigger |
 | 8 | ~~Poll accessibility trust once a second~~ | done | Turned a silent failure into a visible glyph |
-| 9 | Call `inert_settings()` at startup (detection landed in 22f579b, no caller yet) | ~4 lines | Twelve silent no-ops become one honest line |
+| 9 | ~~Call `inert_settings()` at startup~~ | done | Twelve silent no-ops now announce themselves |
+| 9b | Print config *validation* warnings to stderr too, not only the menu | 1 line | An invalid value is currently discarded in silence |
 | 10 | Land the rename BEFORE any stranger installs, or write the re-grant step into the release notes | sequencing | Otherwise every existing tester's grants silently die (M8) |
-| 10 | Make `bundle-aquad-macos.sh` fail, not warn, without `swiftc` | 2 lines | Stops shipping a recognizer-less bundle |
+| 10 | Make `bundle-hexad-macos.sh` fail, not warn, without `swiftc` | 2 lines | Stops shipping a recognizer-less bundle |
 | 11 | Always rebuild the helper, or hash-check it | 2 lines | The staleness that hid blocker B1 |
 | 12 | `shell-bridge uninstall` | ~20 lines | Users should not need the sledgehammer script |
 | 13 | ~~Issue template asking for doctor output and version~~ | done | Turns "it doesn't work" into a diagnosis |
@@ -898,8 +917,8 @@ detection exists and is tested, it just has no call site yet.
 **Frequency: 100% of anyone who tests before the rename and updates after.
 Status: partially handled; the rest is a release-sequencing decision.**
 
-The product is being renamed from Aqua to Hexavoice, which changes the bundle
-identifier from `dev.aquaoss.aquad` to `dev.hexavoice.hexad`. TCC keys its
+The product is being renamed from Hexavoice to Hexavoice, which changes the bundle
+identifier from `dev.hexavoice.hexad` to `dev.hexavoice.hexad`. TCC keys its
 grants by bundle identifier, verifiable directly:
 
 ```
@@ -930,9 +949,9 @@ naming generations, so an upgrader cannot strand the old app or orphan its
 grants:
 
 ```
-==> rm -rf .../dist/Aqua.app
 ==> rm -rf .../dist/Hexavoice.app
-==> tccutil reset Accessibility dev.aquaoss.aquad
+==> rm -rf .../dist/Hexavoice.app
+==> tccutil reset Accessibility dev.hexavoice.hexad
 ==> tccutil reset Accessibility dev.hexavoice.hexad
 ```
 
@@ -999,7 +1018,7 @@ each person's `cargo test` passed. Only a fresh clone saw the truth:
 ```
 $ git clone <repo> /tmp/check && cd /tmp/check && cargo test --workspace
 error[E0277]: the `?` operator can only be applied to values that implement `Try`
-   --> crates/aquad/src/main.rs:286:37
+   --> crates/hexad/src/main.rs:286:37
 ```
 
 This is the nastiest shape of failure available in a shared tree: the tree lies
