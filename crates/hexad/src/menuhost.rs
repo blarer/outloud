@@ -374,7 +374,11 @@ mod tests {
         std::env::set_var("XDG_CONFIG_HOME", &dir);
 
         let mut host = MenuHost::new(RuntimeShared::new());
-        let path = dir.join("aqua").join("config.toml");
+        // Derive the directory from the constant the code writes to, rather
+        // than repeating the literal. The rename moved it from "aqua" to
+        // "hexavoice" and this assertion was left behind, failing on a path
+        // that no longer exists; naming the constant makes that impossible.
+        let path = dir.join(config::APP_DIR).join("config.toml");
         let before = std::fs::read(&path).expect("first run writes the starter file");
 
         // Every passive path a running daemon takes between clicks.

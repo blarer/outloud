@@ -146,19 +146,27 @@ say ""
 # 4. The shell plugin line. `shell-bridge install` appends a guarded line to
 #    the user's rc file and has no uninstall of its own, so a stale line
 #    pointing at a deleted repo would print an error on every new shell.
-#    Matched on the exact marker comment the installer writes.
+#
+#    Matched on the marker comment the installer writes, in BOTH spellings.
+#    `shell-bridge install` still writes "# aqua shell-bridge" (see
+#    shell-bridge/src/main.rs), so matching only the new product name would
+#    silently leave every existing user's rc file broken. Verified against the
+#    source rather than inferred from the product name.
 say "4. Removing the shell plugin line"
 REMOVED_RC=0
+# One pattern for both generations; also matches the sourced plugin line.
+RC_MARKER='\(aqua\|hexavoice\) shell-bridge'
+RC_SOURCED='shell/\(aqua\|hexavoice\)\.\(zsh\|bash\|fish\)'
 for rc in "$HOME/.zshrc" "$HOME/.bashrc" "$HOME/.bash_profile" "$HOME/.config/fish/config.fish"; do
     [[ -f "$rc" ]] || continue
-    if grep -q 'hexavoice shell-bridge' "$rc" 2>/dev/null; then
+    if grep -q "$RC_MARKER" "$rc" 2>/dev/null; then
         if [[ "$DRY_RUN" == 1 ]]; then
-            say "would: remove the hexavoice shell-bridge lines from $rc"
+            say "would: remove the shell-bridge lines from $rc"
         else
             # Keep a backup: editing someone's rc file is the one step here
             # that could cost them work that is not ours.
             cp "$rc" "$rc.hexavoice-uninstall-backup"
-            grep -v 'hexavoice shell-bridge' "$rc" | grep -v 'shell/hexavoice\.\(zsh\|bash\|fish\)' > "$rc.tmp"
+            grep -v "$RC_MARKER" "$rc" | grep -v "$RC_SOURCED" > "$rc.tmp"
             mv "$rc.tmp" "$rc"
             say "==> cleaned $rc (backup at $rc.hexavoice-uninstall-backup)"
         fi
@@ -171,9 +179,23 @@ say ""
 # 5. Runtime leftovers that are not configuration: the bridge socket and the
 #    downloaded-model directory. Removed unconditionally because neither is
 #    something the user authored.
+#
+#    Paths verified against the code rather than assumed from the product
+#    name, because the rename moved some names and not others. As of writing
+#    the daemon still reports `~/.aqua-oss/models` (diag/src/checks.rs) and the
+#    bridge still binds `<runtime>/aqua/shell.sock` (shell-bridge/src/server.rs),
+#    so both spellings are listed: the old ones because they are what exists
+#    today, the new ones so this keeps working once those catch up.
 say "5. Removing runtime state"
 REMOVED_STATE=0
-for path in "${TMPDIR:-/tmp}/hexavoice-shell-bridge.sock" "$HOME/.hexavoice/models"; do
+RUNTIME_BASE="${XDG_RUNTIME_DIR:-${TMPDIR:-/tmp}}"
+for path in \
+    "$RUNTIME_BASE/aqua/shell.sock" \
+    "$RUNTIME_BASE/hexavoice/shell.sock" \
+    "${TMPDIR:-/tmp}/aqua-shell-bridge.sock" \
+    "${TMPDIR:-/tmp}/hexavoice-shell-bridge.sock" \
+    "$HOME/.aqua-oss/models" \
+    "$HOME/.hexavoice/models"; do
     if [[ -e "$path" ]]; then
         act rm -rf "$path"
         REMOVED_STATE=1
@@ -184,20 +206,32 @@ say ""
 
 # 6. Configuration, only on request. See the header: uninstalling is not the
 #    same as consenting to lose your settings.
+#
+#    Both directory names, for the same reason as the bundle ids above. The
+#    daemon adopts a pre-rename `aqua/` config into `hexavoice/` on first run,
+#    but a user who never launched the renamed build still has only the old
+#    one, and --purge that left it behind would not be a purge.
 say "6. Configuration"
-CONFIG_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/hexavoice"
+CONFIG_HOME="${XDG_CONFIG_HOME:-$HOME/.config}"
+CONFIG_DIRS=("$CONFIG_HOME/hexavoice" "$CONFIG_HOME/aqua")
 if [[ "$PURGE" == 1 ]]; then
-    if [[ -d "$CONFIG_DIR" ]]; then
-        act rm -rf "$CONFIG_DIR"
-    else
-        say "    nothing at $CONFIG_DIR"
-    fi
+    PURGED=0
+    for dir in "${CONFIG_DIRS[@]}"; do
+        if [[ -d "$dir" ]]; then
+            act rm -rf "$dir"
+            PURGED=1
+        fi
+    done
+    [[ "$PURGED" == 0 ]] && say "    nothing at ${CONFIG_DIRS[0]}"
 else
-    if [[ -d "$CONFIG_DIR" ]]; then
-        say "    keeping $CONFIG_DIR (pass --purge to delete your settings too)"
-    else
-        say "    nothing at $CONFIG_DIR"
-    fi
+    KEPT=0
+    for dir in "${CONFIG_DIRS[@]}"; do
+        if [[ -d "$dir" ]]; then
+            say "    keeping $dir (pass --purge to delete your settings too)"
+            KEPT=1
+        fi
+    done
+    [[ "$KEPT" == 0 ]] && say "    nothing at ${CONFIG_DIRS[0]}"
 fi
 say ""
 

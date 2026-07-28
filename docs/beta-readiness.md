@@ -37,12 +37,22 @@ than taken on trust.
 
 ---
 
-## Recommendation: **CONDITIONAL GO**
+## Recommendation: **CONDITIONAL GO**, but not from today's `HEAD`
 
 Go, for a **source-install beta on macOS 26+, capped at people who can run a
-shell command**. All three blockers are now cleared: the broken install path and
-the undocumented Gatekeeper reality were fixed here, and the single-instance
-guard was implemented and tested here.
+shell command**, **once the pending Hexavoice rename is committed**. All three
+blockers are cleared in substance: the broken install path and the undocumented
+Gatekeeper reality were fixed here, and the single-instance guard was
+implemented and tested here.
+
+**Today's `HEAD` is not shippable, and this assessment is the reason.** The
+rename exists only in a working tree. This document's README fix names the
+post-rename script, which does not exist at `HEAD`, so B1 is currently broken
+for anyone cloning. See the boxed note under B1 for the reproduction. It
+resolves the moment the rename commit lands, at which point the README, the
+quickstart, and the docs test all become correct and mutually enforcing. Do not
+ship from a commit where `./scripts/verify-head.sh` and
+`cargo test -p hexad --test docs_paths` have not both been run on a fresh clone.
 
 **This verdict covers macOS only, and is not the whole picture.** The release QA
 assessment in [`release-readiness.md`](release-readiness.md) reaches a stricter
@@ -203,6 +213,37 @@ oversight, is the argument for the item below: **the documented install path
 needs an automated check.** Nothing currently fails when the README names a
 script that does not exist, and a beta user is precisely the person who finds
 out first. It is the highest-value untested thing left.
+
+> **STATUS AT TIME OF WRITING: B1 IS BROKEN AT `HEAD`, AND THIS ASSESSMENT
+> BROKE IT.** The rename to Hexavoice exists only in the working tree; it has
+> not been committed. This document's author saw `scripts/bundle-hexad-macos.sh`
+> and `crates/hexad/` locally, assumed the rename had landed, and committed a
+> README naming the new script. It does not exist at `HEAD`:
+>
+> ```
+> $ git clone <repo> /tmp/audit && cd /tmp/audit
+> $ grep -n 'bundle-hexad' README.md
+> 99:./scripts/bundle-hexad-macos.sh
+> $ ls scripts/bundle-hexad-macos.sh
+> ls: cannot access 'scripts/bundle-hexad-macos.sh': No such file or directory
+> ```
+>
+> So a stranger cloning right now hits exactly this blocker. It resolves the
+> moment the rename commit lands, and the README, the quickstart, and the docs
+> test all become correct together at that point. Until then, **treat B1 as
+> open, not fixed.**
+>
+> The docs test did not catch it, for a reason worth knowing: `crates/hexad`
+> exists at `HEAD` as a directory but is not in the workspace `members` list,
+> which still names `crates/aquad`. So `cargo test --workspace` never compiles
+> it (`grep -c docs_paths` returns 0). The test becomes live, and this class of
+> error becomes impossible, as soon as the workspace points at `hexad`.
+>
+> Recorded rather than quietly fixed because it is the third instance of one
+> pattern in a single session: **a tree that has both halves of a change tells
+> you everything is fine, and only a fresh clone disagrees.** It caught the
+> author of the warning about it. That is the strongest possible argument for
+> making the fresh-clone check mandatory rather than advisory.
 
 ---
 

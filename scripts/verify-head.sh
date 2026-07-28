@@ -64,5 +64,27 @@ cargo test --quiet --workspace
 echo "==> cargo check --workspace --no-default-features"
 cargo check --quiet --workspace --no-default-features
 
+# A crate directory that is not a workspace member compiles for nobody and
+# tests for nobody, so anything inside it is dead weight that still looks
+# present. That happened here mid-rename: `crates/hexad` existed while the
+# members list still said `crates/aquad`, so a test living in hexad was never
+# built and a whole class of check silently did nothing.
+echo "==> every crate directory is a workspace member"
+ORPHANS=""
+for dir in crates/*/; do
+    name="$(basename "$dir")"
+    # A directory without a manifest is not a crate; ignore it.
+    [[ -f "$dir/Cargo.toml" ]] || continue
+    if ! grep -q "crates/$name\"" Cargo.toml; then
+        ORPHANS="$ORPHANS $name"
+    fi
+done
+if [[ -n "$ORPHANS" ]]; then
+    echo "    orphaned crate(s), present but not in workspace members:$ORPHANS" >&2
+    echo "    Nothing in them is compiled or tested. Usually a half-finished" >&2
+    echo "    rename: add them to members in Cargo.toml, or delete them." >&2
+    exit 1
+fi
+
 echo
 echo "HEAD is buildable from a fresh clone."
