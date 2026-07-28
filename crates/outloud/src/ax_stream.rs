@@ -48,7 +48,15 @@ fn abs_range(
     range: &std::ops::Range<usize>,
 ) -> (usize, usize) {
     let u16len = |s: &str| s.encode_utf16().count();
-    let location = region_start_u16 + u16len(lead) + u16len(&applied[..range.start]);
+    // The lead space counts toward the location only once it is actually in
+    // the field. On the first write it is still part of the text being
+    // inserted (see `apply`, which prepends it), so counting it here would
+    // address one unit past the caret. At the end of a field that is out of
+    // bounds, and AX rejects the whole selection with
+    // kAXErrorIllegalArgument, which took the entire streaming path down on
+    // targets as simple as TextEdit.
+    let lead_written = if applied.is_empty() { 0 } else { u16len(lead) };
+    let location = region_start_u16 + lead_written + u16len(&applied[..range.start]);
     let length = u16len(&applied[range.start..range.end]);
     (location, length)
 }
@@ -324,9 +332,15 @@ mod macos {
             CFRelease(value as CFTypeRef);
             code
         };
-        (code == kAXErrorSuccess)
-            .then_some(())
-            .ok_or_else(|| format!("set AXSelectedTextRange failed (AXError {code})"))
+        if code == kAXErrorSuccess {
+            return Ok(());
+        }
+        // Name the numbers, not just the code. -25201 (illegal argument)
+        // means the range was out of bounds for the field, and the only way
+        // to see that is to print what was actually asked for.
+        Err(format!(
+            "set AXSelectedTextRange failed: loc={loc} len={len} rejected with AXError {code}"
+        ))
     }
 
     fn set_text(element: AXUIElementRef, text: &str) -> Result<(), String> {
@@ -380,5 +394,41 @@ mod tests {
         // "𝄞" is 4 bytes, 2 UTF-16 units.
         let (loc, len) = abs_range(0, "", "𝄞x", &(0..4));
         assert_eq!((loc, len), (0, 2));
+    }
+
+    /// The first write must address the caret, not one past it.
+    ///
+    /// `lead` is the joining space, and on the FIRST write it is part of the
+    /// text being inserted rather than text already in the field. Counting it
+    /// in the location asks the field to select a range starting one unit
+    /// beyond its own end, which AX rejects with kAXErrorIllegalArgument
+    /// (-25201).
+    ///
+    /// Observed against TextEdit containing "hello world" (11 UTF-16 units)
+    /// with the caret at the end: loc=12, len=0 -> AXError -25201, and the
+    /// whole streaming path fell back to buffered on the simplest possible
+    /// target.
+    #[test]
+    fn first_write_with_a_lead_addresses_the_caret_itself() {
+        // Caret at the end of "hello world"; nothing applied yet; a lead
+        // space is due because the caret touches a word.
+        let (loc, len) = abs_range(11, " ", "", &(0..0));
+        assert_eq!(
+            (loc, len),
+            (11, 0),
+            "the lead space has not been written yet, so the first write must \
+             start AT the caret; starting past it is out of bounds"
+        );
+    }
+
+    /// Once the lead has landed, later writes must account for it.
+    ///
+    /// The pair of tests is the point: the lead counts toward the location
+    /// exactly when it is already in the field, and not before.
+    #[test]
+    fn later_writes_account_for_a_lead_already_written() {
+        // "hello world" + " the quick" applied; appending at the end.
+        let (loc, len) = abs_range(11, " ", "the quick", &(9..9));
+        assert_eq!((loc, len), (21, 0));
     }
 }
