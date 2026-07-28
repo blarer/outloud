@@ -147,31 +147,40 @@ unsafe extern "system" fn hook_proc(
     l_param: ffi::LPARAM,
 ) -> ffi::LRESULT {
     if code >= 0 {
-        let kb = &*(l_param as *const ffi::KBDLLHOOKSTRUCT);
         let is_down = matches!(w_param, ffi::WM_KEYDOWN | ffi::WM_SYSKEYDOWN);
         let is_up = matches!(w_param, ffi::WM_KEYUP | ffi::WM_SYSKEYUP);
         if is_down || is_up {
-            if let Ok(mut guard) = STATE.try_lock() {
-                if let Some(state) = guard.as_mut() {
-                    if let Some(edge) = state.matcher.feed(kb.vk_code, is_down) {
-                        let now = Instant::now();
-                        let events = match edge {
-                            crate::matcher::Edge::Down => state.machine.on_key_down(now),
-                            crate::matcher::Edge::Up => state.machine.on_key_up(now),
-                        };
-                        for e in events {
-                            // A disconnected receiver means the manager was
-                            // dropped; nothing useful to do from inside the
-                            // hook, so events are discarded, matching the
-                            // documented drop semantics.
-                            let _ = state.sender.send(e);
+            let vk = (*(l_param as *const ffi::KBDLLHOOKSTRUCT)).vk_code;
+            // A panic unwinding across an `extern "system"` boundary into
+            // Windows' input dispatcher is undefined behaviour, and this
+            // callback runs on the system's input path where a crash takes
+            // the whole session's keyboard with it. The body is
+            // panic-free by construction (no unwrap, no indexing, no
+            // allocation), so this is belt and braces against a future
+            // edit, not a known panic.
+            let _ = std::panic::catch_unwind(|| {
+                if let Ok(mut guard) = STATE.try_lock() {
+                    if let Some(state) = guard.as_mut() {
+                        if let Some(edge) = state.matcher.feed(vk, is_down) {
+                            let now = Instant::now();
+                            let events = match edge {
+                                crate::matcher::Edge::Down => state.machine.on_key_down(now),
+                                crate::matcher::Edge::Up => state.machine.on_key_up(now),
+                            };
+                            for e in events {
+                                // A disconnected receiver means the manager
+                                // was dropped; nothing useful to do from
+                                // inside the hook, so events are discarded,
+                                // matching the documented drop semantics.
+                                let _ = state.sender.send(e);
+                            }
                         }
                     }
                 }
-            }
-            // try_lock failure means bind/recovery holds the lock this
-            // instant; dropping one observation is better than blocking the
-            // input path and getting unhooked for good.
+                // try_lock failure means bind/recovery holds the lock this
+                // instant; dropping one observation is better than blocking
+                // the input path and getting unhooked for good.
+            });
         }
     }
     // Always pass the event on: this hook observes, never swallows.
@@ -237,11 +246,20 @@ pub fn spawn(
 
     let win_matcher = WinMatcher::new(chord).map_err(|e| HotkeyError::BadChord(e.to_string()))?;
 
-    *STATE.lock().unwrap() = Some(HookState {
+    // Poisoning would mean a previous holder panicked while touching the
+    // state. Recover rather than propagate: refusing to bind because of a
+    // past panic would leave the user with no hotkey at all, which is the
+    // outcome this whole crate exists to prevent. The state is fully
+    // overwritten on the next line anyway, so nothing torn survives.
+    let mut guard = STATE
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    *guard = Some(HookState {
         matcher: win_matcher,
         machine,
         sender,
     });
+    drop(guard);
 
     // Install the hook from the thread that will pump messages: a
     // WH_KEYBOARD_LL callback is delivered via the message queue of the
@@ -305,6 +323,33 @@ fn pump_with_watchdog(mut hook: ffi::HHOOK) {
 
         std::thread::sleep(WATCHDOG_INTERVAL);
 
+        // Poison check, and why it belongs in the watchdog: the callback
+        // takes the state with `try_lock`, and a POISONED mutex returns Err
+        // from try_lock forever. So one panic anywhere would make the hook
+        // silently drop every event from then on, with the hook still
+        // installed and the OS perfectly happy: a dead hotkey with no
+        // symptom, which is the exact failure this crate exists to prevent.
+        // Clearing the poison restores the callback without touching the
+        // hook. `clear_poison` is stable since Rust 1.77, below our MSRV.
+        if STATE.is_poisoned() {
+            STATE.clear_poison();
+            let mut guard = STATE.lock().unwrap_or_else(|p| p.into_inner());
+            if let Some(state) = guard.as_mut() {
+                // The panicking holder may have left the machine mid-edge,
+                // so reset for the same reason the hook-death path does.
+                state.matcher.reset();
+                for e in state.machine.reset() {
+                    let _ = state.sender.send(e);
+                }
+                let _ = state.sender.send(HotkeyEvent::TapRecovered);
+            }
+            drop(guard);
+            eprintln!(
+                "hotkey: hook state was poisoned by a panic and has been cleared; \
+                 the binding is live again"
+            );
+        }
+
         // The liveness question: is our HHOOK still in the chain? There is
         // no "is it installed" API, so we use the one observable side
         // effect: unhooking a hook the OS already removed fails.
@@ -325,7 +370,11 @@ fn pump_with_watchdog(mut hook: ffi::HHOOK) {
             hook = fresh;
             // Pessimistic reset: a swallowed key-up would otherwise leave
             // capture running with no way to stop it.
-            if let Ok(mut guard) = STATE.lock() {
+            // Recover from poisoning here too: skipping the reset because
+            // of a past panic is exactly the stuck-capture outcome the
+            // reset exists to prevent.
+            let mut guard = STATE.lock().unwrap_or_else(|p| p.into_inner());
+            {
                 if let Some(state) = guard.as_mut() {
                     state.matcher.reset();
                     for e in state.machine.reset() {

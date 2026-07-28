@@ -401,3 +401,119 @@ mod recovery_tests {
         assert_eq!(m.feed(VK_SPACE, false), Some(Edge::Up));
     }
 }
+
+/// Poison-recovery semantics for the Windows backend's global hook state.
+///
+/// The Windows backend keeps its matcher and state machine in a process
+/// global `Mutex`, because a Win32 hook procedure is a bare function
+/// pointer with no user-data argument (the macOS tap gets a `user_info`
+/// pointer and needs no lock at all). That introduces a failure mode macOS
+/// does not have: if any holder panics, the mutex is POISONED, and every
+/// later `lock().unwrap()` panics too.
+///
+/// Why that matters here specifically: the watchdog's reset is what stops a
+/// swallowed key-up from leaving the microphone hot. If poisoning made the
+/// reset unreachable, a single unrelated panic would convert a recoverable
+/// hook death into a permanently hot mic. So both non-callback lock sites
+/// recover the guard instead of unwrapping. These tests pin the std
+/// behaviour that argument rests on, on every platform.
+#[cfg(test)]
+mod poison_tests {
+    use std::sync::Mutex;
+
+    #[test]
+    fn a_poisoned_mutex_still_yields_its_data() {
+        let m: Mutex<u32> = Mutex::new(7);
+        let _ = std::panic::catch_unwind(|| {
+            let _g = m.lock().unwrap();
+            panic!("holder died mid-update");
+        });
+        assert!(m.is_poisoned(), "the panic must have poisoned it");
+
+        // The recovery the backend performs. Without into_inner, this line
+        // would panic and the watchdog could never reset the state machine.
+        let recovered = m.lock().unwrap_or_else(|p| p.into_inner());
+        assert_eq!(*recovered, 7, "the data survives poisoning intact");
+    }
+
+    #[test]
+    fn recovery_is_repeatable_not_one_shot() {
+        // Poison is sticky: every subsequent lock returns Err forever. The
+        // backend must therefore recover at EVERY site, not once.
+        let m: Mutex<u32> = Mutex::new(1);
+        let _ = std::panic::catch_unwind(|| {
+            let _g = m.lock().unwrap();
+            panic!("boom");
+        });
+        for expected in [1, 2, 3] {
+            let mut g = m.lock().unwrap_or_else(|p| p.into_inner());
+            assert_eq!(*g, expected);
+            *g += 1;
+        }
+    }
+
+    #[test]
+    fn try_lock_on_a_poisoned_mutex_is_an_error_which_the_callback_treats_as_a_miss() {
+        // The hook callback uses `if let Ok(..) = try_lock()`, so poisoning
+        // makes it drop observations rather than panic. Dropping an event is
+        // survivable (the watchdog resets); panicking across an
+        // `extern "system"` boundary is undefined behaviour and is not.
+        let m: Mutex<u32> = Mutex::new(0);
+        let _ = std::panic::catch_unwind(|| {
+            let _g = m.lock().unwrap();
+            panic!("boom");
+        });
+        assert!(
+            m.try_lock().is_err(),
+            "a poisoned try_lock reports Err, which the callback skips safely"
+        );
+    }
+}
+
+/// Does poison CLEARING actually restore `try_lock`? The watchdog's
+/// poison-recovery path depends on it: the hook callback acquires state
+/// with `try_lock`, which returns `Err` forever on a poisoned mutex, so
+/// without clearing, one panic anywhere would silently deafen the hotkey
+/// while leaving the hook installed and the OS perfectly happy.
+#[cfg(test)]
+mod poison_clearing_tests {
+    use std::sync::Mutex;
+
+    fn poison(m: &Mutex<u32>) {
+        let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _g = m.lock().unwrap();
+            panic!("holder died");
+        }));
+    }
+
+    #[test]
+    fn clearing_poison_restores_try_lock() {
+        let m: Mutex<u32> = Mutex::new(5);
+        poison(&m);
+        assert!(
+            m.try_lock().is_err(),
+            "before clearing, the callback's try_lock fails: every event dropped"
+        );
+
+        m.clear_poison();
+
+        assert!(!m.is_poisoned());
+        let g = m
+            .try_lock()
+            .expect("after clearing, the callback can take the state again");
+        assert_eq!(*g, 5, "the data is intact across poison and recovery");
+    }
+
+    #[test]
+    fn a_cleared_mutex_can_be_poisoned_and_cleared_again() {
+        // The watchdog runs forever, so recovery must be repeatable rather
+        // than a one-time rescue.
+        let m: Mutex<u32> = Mutex::new(0);
+        for _ in 0..3 {
+            poison(&m);
+            assert!(m.is_poisoned());
+            m.clear_poison();
+            assert!(m.try_lock().is_ok());
+        }
+    }
+}
