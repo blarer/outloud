@@ -33,8 +33,10 @@ open source:
 3. **Headless operation.** A build with no display libraries linked at all, for
    SSH sessions and servers.
 
-It is also faster. Measured end to end on an M4 Pro: **131-189ms** from key
+It is also faster. Measured end to end on an M4 Pro: **131-215ms** from key
 release to text on screen, against Aqua's advertised ~450ms insert latency.
+The spread is real and depends on the transport: an accessibility write into a
+native field is the fast end, synthesized keys into a terminal the slow end.
 
 ## What works today
 
@@ -81,23 +83,42 @@ while an admin app has focus and recovers when focus moves. Details in
 
 ## Install
 
-Requires macOS 13 or newer (26+ for the zero-install recognizer) and a Rust
-toolchain. Windows builds and installs (`scripts/build-windows.sh` ships
-`aquad.exe` and `aqua-spike.exe`) but is untested on hardware; Linux does not
-work yet.
+Requires macOS 13 or newer (26+ for the zero-install recognizer), a Rust
+toolchain, and Xcode Command Line Tools for `swiftc`. Windows builds and
+installs (`scripts/build-windows.sh` ships `aquad.exe` and `aqua-spike.exe`)
+but is untested on hardware; Linux does not work yet.
 
 ```bash
 git clone https://github.com/blarer/aqua-oss
 cd aqua-oss
-cargo build --release
 
-# Package as a .app and grant Accessibility permission. Both steps matter:
-# reading and rewriting text in other applications is exactly what that
-# permission governs, and macOS attaches the grant to a signed bundle rather
-# than to a bare binary.
-./scripts/bundle-macos.sh
-./scripts/grant-accessibility.sh
+# Builds the daemon, compiles the Swift speech helper, packages the .app, and
+# signs it. Use this rather than a bare `cargo build`: the recognizer is a
+# Swift child process, not a linked library, so cargo alone does not produce
+# it and the daemon comes up unable to transcribe anything.
+./scripts/bundle-aquad-macos.sh
+
+# Grant Accessibility against the bundle. macOS attaches the grant to a signed
+# bundle rather than to a bare binary, and reading and rewriting text in other
+# applications is exactly what that permission governs.
+open "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility"
 ```
+
+Then launch it through LaunchServices, so the app is its own responsible
+process rather than inheriting your terminal's permissions:
+
+```bash
+open -a "$PWD/dist/Aqua.app"
+```
+
+It has no Dock icon by design. Look for its icon at the right end of your menu
+bar. To remove it later, `./scripts/uninstall-macos.sh` (add `--purge` to
+delete your settings too, or `--dry-run` to see the plan first).
+
+**These builds are unsigned and un-notarized.** Gatekeeper rejects them, so an
+app copied from another machine will not open by double-clicking. Building
+locally, as above, avoids the problem entirely because locally built files
+carry no quarantine flag. See [known limitations](#known-limitations).
 
 If anything misbehaves, run the doctor before anything else. Almost every
 failure in this category is environmental rather than a bug, and each check
@@ -119,7 +140,7 @@ permission look denied, see
 Start the daemon and leave it running:
 
 ```bash
-cargo run --release -p aquad
+open -a "$PWD/dist/Aqua.app"
 ```
 
 Then, in any application:
@@ -129,10 +150,12 @@ Then, in any application:
 3. Speak.
 4. **Release.** Your words appear at the cursor.
 
-To try it without a microphone, feed it synthesized speech:
+To try it without a microphone, feed it synthesized speech. Note the path:
+this runs the *bundled* binary, which is the one that ships with the speech
+helper beside it.
 
 ```bash
-cargo run --release -p aquad -- --once --say "hello from a local dictation daemon"
+./dist/Aqua.app/Contents/MacOS/Aqua --once --say "hello from a local dictation daemon" --no-overlay
 ```
 
 ### Editing text you already wrote
@@ -273,10 +296,31 @@ reachable on a machine that happens to have that software installed.
 the GUI dependencies entirely, so a display library reaching the default feature
 set is a compile error rather than a runtime crash on a server.
 
+## Known limitations
+
+Honest list of what will go wrong, so a first run is not a surprise. Detail and
+evidence in [`docs/beta-readiness.md`](docs/beta-readiness.md).
+
+| Limitation | What you will see | Workaround |
+|---|---|---|
+| Unsigned and un-notarized | An app copied or downloaded from another machine silently refuses to open. `spctl -a -t exec dist/Aqua.app` says `rejected` | Build it locally; local builds carry no quarantine flag |
+| `cargo build` alone is not enough | `recognizer failed to load (aqua-speech-helper not found...)` | Use `./scripts/bundle-aquad-macos.sh`, which compiles the Swift helper |
+| No single-instance guard | Two copies both bind the hotkey and both open the microphone; one utterance can be delivered twice | Check with `pgrep -fl Aqua` before launching, quit via the menu bar item |
+| No `--version` on the daemon | Nothing to quote in a bug report | `defaults read "$PWD/dist/Aqua.app/Contents/Info" CFBundleShortVersionString` |
+| Accessibility grant dies on every rebuild | Toggle reads "on", every call fails | `tccutil reset Accessibility dev.aquaoss.aquad`, then re-grant |
+| Revoking a permission while running is not noticed | Dictation stops working until relaunch | Quit and relaunch after changing permissions |
+| macOS 13-25 has no bundled recognizer | `recognizer never becomes ready` | Only macOS 26+ has `SpeechTranscriber`; other backends are stubbed |
+| Freeform edits are not wired up | "tighten this up" reports that it needs the language model | Use the literal commands listed above |
+| Linux does not work; Windows is unexercised | — | macOS only for now |
+
+When something goes wrong, `./scripts/doctor.sh` classifies it as permission,
+configuration, or bug, and only the last belongs in an issue.
+
 ## Documentation
 
 | Document | Read it when |
 |---|---|
+| [`docs/beta-readiness.md`](docs/beta-readiness.md) | You want the honest state of the rough edges |
 | [`docs/M0-results.md`](docs/M0-results.md) | You want the measured result and what it cost |
 | [`docs/latency.md`](docs/latency.md) | You care where the milliseconds go |
 | [`docs/macos-permissions.md`](docs/macos-permissions.md) | Anything permission-shaped is behaving strangely |
