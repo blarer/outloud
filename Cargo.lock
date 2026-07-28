@@ -75,6 +75,7 @@ dependencies = [
  "audio",
  "ax-edit",
  "block2",
+ "config",
  "diag",
  "edit-intent",
  "hotkey",

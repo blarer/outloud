@@ -29,6 +29,11 @@ struct Args {
     say: Option<String>,
     asr: String,
     chord: String,
+    /// Whether `--chord` was passed. An explicit flag must beat the config
+    /// file (the config crate's own layer order: a per-run override wins),
+    /// and "was it passed" is not recoverable from the value alone once the
+    /// default and the file agree.
+    chord_from_flag: bool,
     no_overlay: bool,
     /// Feed file audio at real-time pace instead of as fast as possible.
     realtime: bool,
@@ -41,6 +46,7 @@ fn parse_args() -> anyhow::Result<Args> {
         say: None,
         asr: "apple".into(),
         chord: "right-option".into(),
+        chord_from_flag: false,
         no_overlay: false,
         realtime: false,
     };
@@ -55,7 +61,10 @@ fn parse_args() -> anyhow::Result<Args> {
             "--wav" => args.wav = Some(val("--wav")?.into()),
             "--say" => args.say = Some(val("--say")?),
             "--asr" => args.asr = val("--asr")?,
-            "--chord" => args.chord = val("--chord")?,
+            "--chord" => {
+                args.chord = val("--chord")?;
+                args.chord_from_flag = true;
+            }
             "--no-overlay" => args.no_overlay = true,
             "--realtime" => args.realtime = true,
             "--help" | "-h" => {
@@ -124,9 +133,27 @@ fn synthesize(text: &str) -> anyhow::Result<std::path::PathBuf> {
 }
 
 fn main() -> anyhow::Result<()> {
-    let args = parse_args()?;
+    let mut args = parse_args()?;
 
     let (engine, shared) = Engine::new();
+
+    // The menu bar owns the configuration the user can see and change, so
+    // it is also where the daemon learns which hotkey to bind. Skipped for
+    // --once, which is a one-shot measurement that should neither create a
+    // config file nor read the user's settings.
+    let mut menu_host = (!args.once).then(aquad::menuhost::MenuHost::new);
+    if let Some(host) = &menu_host {
+        // An explicit --chord is a per-run override and beats the file,
+        // matching the config crate's layer order.
+        if !args.chord_from_flag {
+            args.chord = host.configured_hotkey().to_string();
+        }
+    }
+
+    // What the hotkey layer actually bound, published for the menu bar.
+    // `None` after the pipeline starts means the bind failed, which is a
+    // headline fact in an app with no terminal to print it to.
+    let bound_hotkey: BoundHotkey = std::sync::Arc::new(std::sync::Mutex::new(None));
 
     // The pipeline future, boxed so both thread layouts can run it.
     let file_samples = match (&args.wav, &args.say) {
@@ -152,6 +179,7 @@ fn main() -> anyhow::Result<()> {
     };
 
     let chord = args.chord.clone();
+    let bound_for_pipeline = bound_hotkey.clone();
     let run_pipeline = move || -> anyhow::Result<()> {
         // Two worker threads: the select loop plus spawn_blocking headroom.
         let rt = tokio::runtime::Builder::new_multi_thread()
@@ -184,7 +212,11 @@ fn main() -> anyhow::Result<()> {
                             .parse()
                             .map_err(|e| anyhow::anyhow!("bad --chord: {e}"))?;
                         match source::spawn_hotkey(parsed, ftx.clone()) {
-                            Ok(display) => eprintln!("aquad: hold {display} to dictate"),
+                            Ok(display) => {
+                                eprintln!("aquad: hold {display} to dictate");
+                                *bound_for_pipeline.lock().expect("bound-hotkey lock") =
+                                    Some(display);
+                            }
                             Err(e) => {
                                 // A dead hotkey is a dead product: fail loudly
                                 // with the permission fix named, do not run a
@@ -238,14 +270,20 @@ fn main() -> anyhow::Result<()> {
             })?;
         run_pipeline()
     } else {
-        overlay_main(shared, run_pipeline)
+        overlay_main(shared, menu_host.take(), bound_hotkey, run_pipeline)
     }
 }
+
+/// The chord the hotkey layer actually bound, shared between the pipeline
+/// thread that binds it and the main thread that displays it.
+type BoundHotkey = std::sync::Arc<std::sync::Mutex<Option<String>>>;
 
 /// macOS + display: overlay on the main thread, pipeline behind it.
 #[cfg(all(target_os = "macos", feature = "display"))]
 fn overlay_main(
     shared: aquad::state::StatusShared,
+    menu_host: Option<aquad::menuhost::MenuHost>,
+    bound_hotkey: BoundHotkey,
     run_pipeline: impl FnOnce() -> anyhow::Result<()> + Send + 'static,
 ) -> anyhow::Result<()> {
     use objc2::MainThreadMarker;
@@ -260,6 +298,20 @@ fn overlay_main(
     app.setActivationPolicy(NSApplicationActivationPolicy::Accessory);
 
     let mut ov = overlay::platform_overlay()?;
+
+    // The menu bar presence. Created before the pipeline starts so the icon
+    // is there from the first instant the app is running: "is it on?" must
+    // be answerable during model load, not only once dictation works.
+    let mut status_item = match overlay::status_item::MacStatusItem::new(mtm) {
+        Ok(item) => Some(item),
+        Err(e) => {
+            // A missing status item leaves the app invisible but still
+            // functional, so it is a loud warning, not a fatal error.
+            eprintln!("aquad: could not create the menu bar item: {e}");
+            None
+        }
+    };
+    let mut menu_host = menu_host;
 
     // The pipeline runs to completion on its own thread; its exit ends the
     // process. A channel (not a join) so the run loop below stays simple.
@@ -282,6 +334,25 @@ fn overlay_main(
         if let Err(e) = ov.render(&frame) {
             eprintln!("aquad: overlay render failed: {e}");
         }
+
+        // Menu bar: publish the current state, then perform whatever the
+        // user clicked since the last tick. Both are cheap; the status item
+        // ignores an unchanged model, and clicks are rare.
+        if let (Some(item), Some(host)) = (status_item.as_mut(), menu_host.as_mut()) {
+            let bound = bound_hotkey.lock().expect("bound-hotkey lock").clone();
+            item.apply(host.model(frame.state, frame.detail.clone(), bound));
+            for id in item.drain_clicks() {
+                if host.handle(id) {
+                    // Quit: drop the status item first so the icon leaves
+                    // the menu bar immediately rather than lingering until
+                    // the process is reaped.
+                    let _ = ov.hide();
+                    drop(status_item);
+                    return Ok(());
+                }
+            }
+        }
+
         unsafe {
             let until = NSDate::dateWithTimeIntervalSinceNow(1.0 / 30.0);
             run_loop.runMode_beforeDate(NSDefaultRunLoopMode, &until);
@@ -307,6 +378,10 @@ fn overlay_main(
 #[cfg(all(target_os = "windows", feature = "display"))]
 fn overlay_main(
     shared: aquad::state::StatusShared,
+    // No tray backend on Windows yet: the notification-area equivalent
+    // (Shell_NotifyIcon) is separate work and belongs to the Windows port.
+    _menu_host: Option<aquad::menuhost::MenuHost>,
+    _bound_hotkey: BoundHotkey,
     run_pipeline: impl FnOnce() -> anyhow::Result<()> + Send + 'static,
 ) -> anyhow::Result<()> {
     let mut ov = overlay::platform_overlay()?;
@@ -345,6 +420,8 @@ fn overlay_main(
 )))]
 fn overlay_main(
     _shared: aquad::state::StatusShared,
+    _menu_host: Option<aquad::menuhost::MenuHost>,
+    _bound_hotkey: BoundHotkey,
     run_pipeline: impl FnOnce() -> anyhow::Result<()> + Send + 'static,
 ) -> anyhow::Result<()> {
     // Unreachable in practice (main() branches on the same cfg), kept so the

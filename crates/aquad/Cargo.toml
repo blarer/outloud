@@ -21,6 +21,9 @@ anyhow.workspace = true
 asr = { path = "../asr" }
 audio = { path = "../audio" }
 ax-edit = { path = "../ax-edit" }
+# The menu bar's Settings items are a view over config.toml: every change is
+# written through config::update_file, never into a parallel store.
+config = { path = "../config" }
 diag = { path = "../diag" }
 edit-intent = { path = "../edit-intent" }
 hotkey = { path = "../hotkey" }

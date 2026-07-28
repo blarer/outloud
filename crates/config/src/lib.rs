@@ -23,6 +23,7 @@
 pub mod fuzzy;
 pub mod layers;
 pub mod migrate;
+pub mod paths;
 pub mod profile;
 pub mod schema;
 pub mod validate;
@@ -31,6 +32,7 @@ pub mod watch;
 
 pub use layers::{Config, Layer, Provenance};
 pub use migrate::{migrate, Migration};
+pub use paths::{ensure_user_config, system_config_path, user_config_path, vocabulary_dir};
 pub use profile::{AppIdentity, Matcher, Profile, WinReason};
 pub use schema::{schema, Value, SCHEMA_VERSION};
 pub use validate::{validate_document, ConfigError};

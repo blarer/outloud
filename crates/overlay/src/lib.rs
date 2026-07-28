@@ -34,16 +34,23 @@
 //! compiled and unit-tested on every platform including headless CI.
 
 pub mod layout;
+pub mod menu;
 pub mod pixel;
 pub mod state;
 
 #[cfg(all(target_os = "macos", feature = "display"))]
 pub mod macos;
 
+/// The macOS menu-bar status item. Gated exactly like [`macos`]: a headless
+/// build has no menu bar to put anything in, and must not link AppKit.
+#[cfg(all(target_os = "macos", feature = "display"))]
+pub mod status_item;
+
 #[cfg(all(target_os = "windows", feature = "display"))]
 pub mod windows;
 
 pub use layout::{place, Anchor, Point, Rect, Size};
+pub use menu::{MenuId, MenuItem, MenuModel};
 pub use state::OverlayState;
 
 /// One complete description of what the overlay should show right now.
