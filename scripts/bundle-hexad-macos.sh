@@ -33,11 +33,11 @@ cargo build --release -p hexad --manifest-path "$ROOT/Cargo.toml"
 # Command Line Tools; without it we warn rather than fail, because --asr mock
 # and the WAV paths still work.
 HELPER_SRC="$ROOT/crates/asr/helper/transcriber.swift"
-HELPER_BIN="$ROOT/crates/asr/helper/hexavoice-speech-helper"
+HELPER_BIN="$ROOT/crates/asr/helper/aqua-speech-helper"
 if command -v swiftc >/dev/null 2>&1; then
     if [[ ! -x "$HELPER_BIN" || "$HELPER_SRC" -nt "$HELPER_BIN" ]]; then
         echo "==> Building the speech helper"
-        (cd "$(dirname "$HELPER_SRC")" && swiftc -O transcriber.swift -o hexavoice-speech-helper)
+        (cd "$(dirname "$HELPER_SRC")" && swiftc -O transcriber.swift -o aqua-speech-helper)
     fi
 else
     echo "warning: swiftc not found; skipping the speech helper." >&2
@@ -57,7 +57,7 @@ cp "$ROOT/target/release/hexad" "$APP_DIR/Contents/MacOS/$APP_NAME"
 # this the bundle only works on the machine it was built on, via the in-repo
 # fallback path baked in at compile time.
 if [[ -x "$HELPER_BIN" ]]; then
-    cp "$HELPER_BIN" "$APP_DIR/Contents/MacOS/hexavoice-speech-helper"
+    cp "$HELPER_BIN" "$APP_DIR/Contents/MacOS/aqua-speech-helper"
 fi
 
 # NSMicrophoneUsageDescription is mandatory, not cosmetic: a process that
