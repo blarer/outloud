@@ -1,14 +1,15 @@
 # Overlay redesign: the orb and the rolling window
 
-Status: design + working prototype (`cargo run -p overlay --bin overlay-proto`).
+Status: **shipped** — this design is the production overlay
+(`crates/overlay/src/macos.rs`, model in `crates/overlay/src/layout.rs`).
+`cargo run -p overlay --bin overlay-proto` drives the real overlay with a
+scripted dictation for quick visual verification.
 Owner brief: replace the generic card with (1) a glowing orb pinned to the
 bottom of the screen and (2) a *flowing rolling window* of transcribed text —
 "by the time he reaches 'has a lot of fun', 'the dog is brown' should already
 be fading away."
 
-This document works the problem out; the prototype demonstrates the answers.
-Nothing here changes `crates/overlay/src/{macos,layout,state,theme}.rs`; a
-separate framework evaluation owns those files.
+This document works the problem out; the implementation follows it.
 
 ---
 
@@ -69,10 +70,14 @@ axis:
   text is "still thinking" — genuinely novel feedback no shipping dictation
   overlay gives.
 
-Model input is exactly `HorizonUpdate { newly_committed, tail }`: committed
-words are appended once and never touched; the tail is diffed word-wise and
-rewritten in place. The prototype scripts this feed; production wires
-`CommitHorizon::update` straight in.
+Model input is the whole current hypothesis, exactly as the pipeline
+publishes it in `OverlayFrame::partial_text`. The overlay applies the same
+LocalAgreement policy display-side (`layout::STABILITY` /
+`layout::LOOKBACK_WORDS`, mirroring `stream::HorizonConfig`'s defaults):
+a word renders committed once it has survived N consecutive distinct
+hypotheses and is clear of the lookback frontier. Committed slots are
+append-only and never rewritten; the in-flight tail is diffed unit-wise
+and rewritten in place, so revision only ever churns the tinted zone.
 
 ## 2. Timing: what makes it "flowy"
 
@@ -91,7 +96,11 @@ rewritten in place. The prototype scripts this feed; production wires
 - **30 s of continuous speech**: overflow dominates, staleness never fires
   (words overflow long before 4 s), and the lane is a steady conveyor:
   bloom right, drift target left, ramp out. Bounded words, bounded cost.
-- **Frame clock**: 60 Hz NSTimer while visible, 0 Hz while hidden. Every
+- **Frame clock**: 60 Hz NSTimer while visible, 0 Hz while hidden (the
+  timer is invalidated, so an idle daemon schedules nothing — a dictation
+  tool spinning at 30 Hz doing nothing is a battery bug). While visible, a
+  fully settled frame skips `setNeedsDisplay`, so a static error line
+  costs only the model step. Every
   animation is a pure function of `(now, model)` — no per-frame mutation
   besides the easing — so a dropped frame degrades smoothness, never
   correctness.
@@ -157,23 +166,30 @@ off-switch.
   rolls (information preserved), it just doesn't *flow*.
 - Stale decay becomes a single step to gone at `STALE_AFTER + STALE_FADE`.
 
-## 6. Prototype notes (what is faked, and why drawRect)
+## 6. Implementation notes (what the prototype faked, and why drawRect)
 
 - The brief suggested `CALayer`/`CAGradientLayer`. Those types live in
-  `objc2-quartz-core`, which is not a dependency of the overlay crate, and
-  this task's file budget excludes `Cargo.toml`. The prototype therefore
-  renders the glow in the crate's existing immediate-mode `drawRect:`
+  `objc2-quartz-core`, which is not a dependency of the overlay crate. The
+  overlay therefore renders the glow in its immediate-mode `drawRect:`
   pipeline: 20 concentric circles with a Gaussian alpha falloff, which is
   visually a radial gradient at this size and costs nothing measurable at
   60 Hz over a ~500×190 pt surface. A production pass can move to
   `CAGradientLayer(type: .radial)` to get the compositor to do this for
   free; the *model* (this document) is renderer-independent.
-- The transcript feed is a scripted `(word, commit-at)` timeline standing
-  in for `CommitHorizon::update`. The mic level is a synthetic speech
-  envelope. Both arrive through the same two entry points a real host
-  would use.
-- Focus/click-through/Spaces properties are NOT faked: the prototype uses
-  the same `NonactivatingPanel` + `canBecomeKeyWindow → false` +
+- The prototype's two fakes are now honest. The scripted `(word,
+  commit-at)` timeline is replaced by the real hypothesis stream
+  (`OverlayFrame::partial_text` from the pipeline's ASR partials) with the
+  display-side stability policy of §1; the synthetic mic level is replaced
+  by `OverlayFrame::audio_level` from capture. `overlay-proto` still
+  scripts a dictation, but it now drives the *shipping* `MacOverlay`
+  through the same `Overlay::render` API the daemon uses.
+- Segmentation: the pure model splits hypotheses on whitespace plus
+  per-codepoint CJK units (Han, kana, Hangul) rather than importing
+  `unicode-segmentation` into the overlay crate. For fade granularity this
+  matches UAX #29's per-syllable behaviour on those scripts; the commit
+  horizon in `stream` remains the authority for what is *written*.
+- Focus/click-through/Spaces properties are unchanged from the old
+  overlay: the same `NonactivatingPanel` + `canBecomeKeyWindow → false` +
   `orderFrontRegardless` + `ignoresMouseEvents` + all-Spaces collection
-  behavior as `macos.rs`, verified by typing into another app while it ran
-  (see commit message for the observation log).
+  behavior, verified by typing into another app while it ran (see the
+  shipping commit's message for the observation log).
