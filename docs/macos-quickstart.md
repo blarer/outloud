@@ -39,12 +39,19 @@ afconvert -f WAVE -d LEI16@16000 -c 1 /tmp/aqua.aiff /tmp/aqua.wav
 Each `--once` run prints a line like:
 
 ```
-e2e: release->text 437ms (finalize 120ms, inject 316.6ms) via clipboard-paste | "Change the widget to a gadget."
+e2e: release->text 147ms (finalize 131ms, inject 16.5ms) via set-value | "Regression check for normal text fields."
 ```
 
-`via clipboard-paste` means the accessibility write path was refused, which is
-normal when the focused window is a terminal and expected until step 3 is done.
-`via macos-ax` means the in-place path worked, which is what edit-by-voice needs.
+The `via` field names the transport that actually delivered the text:
+
+| `via` | What it means |
+|---|---|
+| `set-value` / `selected-text` | The accessibility path. In place, undo preserved. What you want in a normal text field |
+| `synthetic-keys` | Typed as key events. What terminals get, because a terminal exposes no writable field. Leaves your clipboard alone |
+| `clipboard-paste` | Fallback when neither of the above worked |
+
+Measured on this machine: TextEdit 147ms end to end (16ms inject),
+Terminal.app 177ms (45ms inject).
 
 ## 3. Grant the two permissions
 
@@ -146,3 +153,24 @@ apply and `Ctrl-X u` to undo through your shell's own undo.
 | Recognizer never becomes ready | macOS below 26, so no `SpeechTranscriber` | `--asr mock` to test wiring; a downloadable backend is stubbed |
 | Records silence | Microphone permission | System Settings > Privacy & Security > Microphone |
 | Anything else | run `./scripts/doctor.sh` | it classifies each failure as permission, configuration, or bug |
+
+## Dictating into a terminal
+
+This works, and it takes a different path from a normal text field. A terminal
+exposes no writable accessibility field (its "field" is a character grid owned
+by whatever program is running inside), so the text is delivered as synthesized
+key events instead, exactly as if you had typed it. You will see
+`via synthetic-keys` rather than `via set-value`.
+
+Two consequences worth knowing:
+
+- Your clipboard is not touched. The old paste-based fallback clobbered it.
+- The text arrives at the shell prompt as normal input, so history, line
+  editing, and your shell's own undo all behave normally. Nothing is executed:
+  the transcript stops at the prompt and waits for you to press enter.
+
+Terminal.app exposes its *scrollback* as a readable accessibility text area,
+which is a trap: treating it as an editable field rewrites your visible shell
+history with mangled text. Aqua checks whether the field is actually writable
+before touching it, so this cannot happen, but it is worth knowing if you are
+adding a transport.
