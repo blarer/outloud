@@ -150,27 +150,54 @@ pub fn deliver(mode: &Mode, transcript: &str) -> Outcome {
 /// `text_target::detect` because delivery needs the *fallback* behaviour on
 /// failure, and detect answers a different question ("what is best right
 /// now") with no retry semantics.
-#[cfg(not(target_os = "macos"))]
-fn deliver_via_tiers(mode: &Mode, text: &str) -> Outcome {
-    let payload = match mode {
-        Mode::Dictate => text.to_string(),
+/// What the tier ladder should actually write, or the outcome that ends the
+/// utterance before any transport is touched.
+///
+/// Split out and compiled on EVERY platform so the decision is unit-tested
+/// on macOS CI, the same reason `winmatch` and `detect_display_on` are pure.
+/// Otherwise this logic would only ever be exercised on Windows hardware
+/// nobody has run yet.
+pub fn payload_for(mode: &Mode, text: &str) -> Result<String, Outcome> {
+    match mode {
+        Mode::Dictate => Ok(text.to_string()),
         Mode::Edit { selected } => {
+            // Recognizers punctuate; spoken imperatives do not. Same
+            // stripping as the macOS path, for the same reason: "to slow."
+            // must not write "slow.".
             let command = text.trim_end_matches(['.', '!', '?', ',']);
             let intent = edit_intent::parse(command);
             if let EditIntent::Freeform { instruction } = &intent {
-                return Outcome::FreeformUnsupported {
+                return Err(Outcome::FreeformUnsupported {
                     instruction: instruction.clone(),
-                };
+                });
             }
             match edit_intent::apply(selected, &intent) {
-                Some(rewritten) => rewritten,
-                None => {
-                    return Outcome::EditNoMatch {
-                        command: text.to_string(),
-                    }
-                }
+                Some(rewritten) => Ok(rewritten),
+                None => Err(Outcome::EditNoMatch {
+                    command: text.to_string(),
+                }),
             }
         }
+    }
+}
+
+/// May this mode fall back to an INSERT-ONLY transport (SendInput, typing)?
+///
+/// No, for edits. An insert-only tier cannot address existing text, so an
+/// edit reaching one would append the rewritten text NEXT TO the original
+/// instead of replacing it: "the quick fox" plus a rewrite yields "the
+/// quick fox the slow fox". That is corruption, not degradation, and it is
+/// silent. Edits therefore skip straight to the clipboard, which replaces a
+/// selection natively through the app's own paste handling.
+pub fn may_use_insert_only_tier(mode: &Mode) -> bool {
+    matches!(mode, Mode::Dictate)
+}
+
+#[cfg(not(target_os = "macos"))]
+fn deliver_via_tiers(mode: &Mode, text: &str) -> Outcome {
+    let payload = match payload_for(mode, text) {
+        Ok(p) => p,
+        Err(outcome) => return outcome,
     };
 
     #[cfg(all(target_os = "windows", feature = "display"))]
@@ -206,7 +233,7 @@ fn deliver_via_tiers(mode: &Mode, text: &str) -> Outcome {
         // replacing it. That is a corruption, not a degradation, so edits
         // stop at the clipboard (where the user pastes over their own
         // selection deliberately) and only dictation types.
-        if matches!(mode, Mode::Dictate) {
+        if may_use_insert_only_tier(mode) {
             use text_target::targets::keys::SendInputTarget;
             let mut keys = SendInputTarget;
             match keys.insert(&payload) {
@@ -521,5 +548,96 @@ mod tests {
     fn splice_without_caret_refuses() {
         let s = caret_snap("hello", None);
         assert_eq!(spliced_at_caret(&s, "x"), None);
+    }
+}
+
+/// Tests for the platform-tier delivery ladder (Windows today).
+///
+/// These exist because the ladder makes a CORRECTNESS claim that compiling
+/// cannot check and that nobody can currently check on hardware: an edit
+/// must never be delivered through an insert-only transport, because that
+/// appends the rewrite next to the original rather than replacing it.
+#[cfg(test)]
+mod tier_tests {
+    use super::*;
+
+    fn edit(selected: &str) -> Mode {
+        Mode::Edit {
+            selected: selected.to_string(),
+        }
+    }
+
+    #[test]
+    fn an_edit_may_never_fall_back_to_an_insert_only_tier() {
+        // The whole point: SendInput cannot address existing text, so an
+        // edit routed there would corrupt the field silently.
+        assert!(!may_use_insert_only_tier(&edit("the quick brown fox")));
+        // Dictation is pure insertion, so typing it is a fine degradation.
+        assert!(may_use_insert_only_tier(&Mode::Dictate));
+    }
+
+    #[test]
+    fn dictation_payload_is_the_transcript_verbatim() {
+        // No punctuation stripping for dictation: the user dictated the
+        // sentence, trailing period included.
+        assert_eq!(
+            payload_for(&Mode::Dictate, "hello there.").unwrap(),
+            "hello there."
+        );
+    }
+
+    #[test]
+    fn an_edit_payload_is_the_rewritten_selection_not_the_command() {
+        // The field must receive the REWRITTEN TEXT, never the spoken
+        // instruction. Writing the command into the document is the most
+        // embarrassing failure this path has.
+        let got = payload_for(&edit("the quick brown fox"), "change quick to slow").unwrap();
+        assert_eq!(got, "the slow brown fox");
+        assert!(
+            !got.contains("change"),
+            "the instruction must not be written"
+        );
+    }
+
+    #[test]
+    fn spoken_punctuation_is_stripped_from_the_command_not_the_result() {
+        // Recognizers add a period the user never said; without stripping,
+        // the replacement text becomes "slow." with a stray period.
+        let got = payload_for(&edit("the quick brown fox"), "change quick to slow.").unwrap();
+        assert_eq!(got, "the slow brown fox");
+    }
+
+    #[test]
+    fn a_freeform_instruction_is_reported_never_guessed_at() {
+        // No local LLM: the honest answer is to say so. Guessing would mean
+        // a model rewriting text nobody asked it to touch.
+        let out = payload_for(&edit("some text"), "make this sound more professional");
+        assert!(
+            matches!(out, Err(Outcome::FreeformUnsupported { .. })),
+            "freeform must not silently fall through to a write"
+        );
+    }
+
+    #[test]
+    fn an_unmatched_edit_writes_nothing() {
+        // "change zebra to horse" against text with no zebra: the field
+        // must be left ALONE rather than receiving anything at all.
+        let out = payload_for(&edit("the quick brown fox"), "change zebra to horse");
+        assert!(
+            matches!(out, Err(Outcome::EditNoMatch { .. })),
+            "a non-matching edit must not reach any transport"
+        );
+    }
+
+    #[test]
+    fn an_empty_edit_selection_cannot_produce_a_destructive_write() {
+        // Degenerate input from a field that reported a selection it could
+        // not return: whatever happens, we must not write the command.
+        if let Ok(payload) = payload_for(&edit(""), "change a to b") {
+            assert!(
+                !payload.contains("change"),
+                "never write the spoken instruction into the user's field"
+            );
+        }
     }
 }
