@@ -64,7 +64,7 @@ Run the doctor first; it names the next action for anything wrong:
 Then build the daemon as an app bundle and grant against **that**:
 
 ```bash
-./scripts/bundle-aquad-macos.sh
+./scripts/bundle-hexad-macos.sh
 open -R dist/Aqua.app          # reveals it in Finder to drag into Settings
 open "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility"
 ```

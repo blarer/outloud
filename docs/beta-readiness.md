@@ -153,6 +153,37 @@ A `build.rs` was considered and rejected, for good reasons: it would put a
 non-hermetic external compiler in the build graph and threaten the `repro`
 job's byte-identical guarantee. The scripts-and-docs fix is the right one.
 
+**B1 regressed once and was re-fixed.** The Hexavoice rename renamed
+`bundle-aquad-macos.sh` to `bundle-hexad-macos.sh` but left the README pointing
+at the old name, so the documented install broke again in exactly the same
+place:
+
+```
+$ ./scripts/bundle-aquad-macos.sh
+bash: ./scripts/bundle-aquad-macos.sh: No such file or directory
+```
+
+Re-fixed and re-verified end to end on the renamed tree:
+
+```
+$ ./scripts/bundle-hexad-macos.sh
+==> Building hexad (release)
+==> Building the speech helper
+Built: .../dist/Hexavoice.app
+$ ./dist/Hexavoice.app/Contents/MacOS/Hexavoice --version
+hexad 0.1.0
+$ ./dist/Hexavoice.app/Contents/MacOS/Hexavoice --once --say "..." --no-overlay
+e2e: release->text 352ms ... | "Hello from a local dictation demon."
+```
+
+That this recurred within hours, from a rename rather than from the original
+oversight, is the argument for the item below: **the documented install path
+needs an automated check.** Nothing currently fails when the README names a
+script that does not exist, and a beta user is precisely the person who finds
+out first. It is the highest-value untested thing left.
+
+---
+
 ### B2. Unsigned and un-notarized: a downloaded app silently does not open
 
 **Severity: blocker for binary distribution. Frequency: 100% of downloads.
@@ -378,7 +409,9 @@ daemon is what users run.
 
 ### M2. No uninstall path on macOS
 
-**Status: FIXED in this commit.**
+**Frequency: every tester who decides the tool is not for them, so a
+single-digit percentage of a 50-person beta, but a disproportionate share of
+the bad word of mouth. Status: FIXED in this commit.**
 
 Before this commit, `grep -i uninstall` across the repo matched only
 `scripts/build-windows.sh`. The untested platform had an uninstaller; the only
@@ -577,7 +610,8 @@ path.
 
 ### M5. The README's latency claim was optimistic
 
-**Status: FIXED in this commit.**
+**Frequency: 100% of readers, though only the sceptical ones will measure and
+notice. Status: FIXED in this commit.**
 
 The README claimed **131-189ms**. Measured on the bundled binary from a fresh
 clone, three consecutive runs:

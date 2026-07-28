@@ -96,7 +96,7 @@ cd aqua-oss
 # signs it. Use this rather than a bare `cargo build`: the recognizer is a
 # Swift child process, not a linked library, so cargo alone does not produce
 # it and the daemon comes up unable to transcribe anything.
-./scripts/bundle-aquad-macos.sh
+./scripts/bundle-hexad-macos.sh
 
 # Grant Accessibility against the bundle. macOS attaches the grant to a signed
 # bundle rather than to a bare binary, and reading and rewriting text in other
@@ -108,7 +108,7 @@ Then launch it through LaunchServices, so the app is its own responsible
 process rather than inheriting your terminal's permissions:
 
 ```bash
-open -a "$PWD/dist/Aqua.app"
+open -a "$PWD/dist/Hexavoice.app"
 ```
 
 It has no Dock icon by design. Look for its icon at the right end of your menu
@@ -140,7 +140,7 @@ permission look denied, see
 Start the daemon and leave it running:
 
 ```bash
-open -a "$PWD/dist/Aqua.app"
+open -a "$PWD/dist/Hexavoice.app"
 ```
 
 Then, in any application:
@@ -155,7 +155,7 @@ this runs the *bundled* binary, which is the one that ships with the speech
 helper beside it.
 
 ```bash
-./dist/Aqua.app/Contents/MacOS/Aqua --once --say "hello from a local dictation daemon" --no-overlay
+./dist/Hexavoice.app/Contents/MacOS/Hexavoice --once --say "hello from a local dictation daemon" --no-overlay
 ```
 
 ### The menu bar item
@@ -323,10 +323,10 @@ evidence in [`docs/beta-readiness.md`](docs/beta-readiness.md).
 
 | Limitation | What you will see | Workaround |
 |---|---|---|
-| Unsigned and un-notarized | An app copied or downloaded from another machine silently refuses to open. `spctl -a -t exec dist/Aqua.app` says `rejected` | Build it locally; local builds carry no quarantine flag |
-| `cargo build` alone is not enough | `recognizer failed to load (aqua-speech-helper not found...)` | Use `./scripts/bundle-aquad-macos.sh`, which compiles the Swift helper |
+| Unsigned and un-notarized | An app copied or downloaded from another machine silently refuses to open. `spctl -a -t exec dist/Hexavoice.app` says `rejected` | Build it locally; local builds carry no quarantine flag |
+| `cargo build` alone is not enough | `recognizer failed to load (speech helper not found...)` | Use `./scripts/bundle-hexad-macos.sh`, which compiles the Swift helper |
 | Only one copy may run | A second launch is refused, naming the pid to quit | Quit the first from the menu bar, or `kill N` |
-| Accessibility grant dies on every rebuild | Toggle reads "on", every call fails. The menu bar glyph turns into a warning triangle within a second | `tccutil reset Accessibility dev.aquaoss.aquad`, then re-grant |
+| Accessibility grant dies on every rebuild | Toggle reads "on", every call fails. The menu bar glyph turns into a warning triangle within a second | `tccutil reset Accessibility dev.hexavoice.hexad`, then re-grant |
 | macOS 13-25 has no bundled recognizer | `recognizer never becomes ready` | Only macOS 26+ has `SpeechTranscriber`; other backends are stubbed |
 | Most config settings are not read yet | Changing them has no effect and no warning | Only `hotkey`, `enabled`, and `overlay.position` are wired today |
 | Freeform edits are not wired up | "tighten this up" reports that it needs the language model | Use the literal commands listed above |
