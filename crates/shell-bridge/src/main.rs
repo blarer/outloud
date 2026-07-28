@@ -11,15 +11,35 @@
 //! shell-bridge print-plugin-path [--shell ...]
 //! ```
 
+// The whole CLI is unix-only for the same reason the library's server and
+// peer modules are: the transport is a unix socket and the clients are
+// POSIX shell line editors. On other targets the binary still builds (so
+// `cargo build --workspace` stays one command everywhere) but says so.
+#[cfg(not(unix))]
+fn main() {
+    eprintln!(
+        "shell-bridge: unsupported on this platform (needs unix-domain sockets \
+         and a POSIX shell; see docs/shell-integration.md)"
+    );
+    std::process::exit(1);
+}
+
+#[cfg(unix)]
 use std::io::Write;
+#[cfg(unix)]
 use std::path::{Path, PathBuf};
 
+#[cfg(unix)]
 use base64::engine::general_purpose::STANDARD as B64;
+#[cfg(unix)]
 use base64::Engine;
 
+#[cfg(unix)]
 use shell_bridge::protocol::Response;
+#[cfg(unix)]
 use shell_bridge::server::{default_socket_path, request, Server};
 
+#[cfg(unix)]
 fn main() {
     if let Err(e) = run() {
         eprintln!("shell-bridge: {e}");
@@ -27,6 +47,7 @@ fn main() {
     }
 }
 
+#[cfg(unix)]
 fn run() -> anyhow::Result<()> {
     let args: Vec<String> = std::env::args().skip(1).collect();
     let verb = args.first().map(String::as_str).unwrap_or("help");
@@ -96,6 +117,7 @@ fn run() -> anyhow::Result<()> {
     }
 }
 
+#[cfg(unix)]
 fn print_response(resp: &Response) -> anyhow::Result<()> {
     match resp {
         Response::Ok => println!("ok"),
@@ -111,6 +133,7 @@ fn print_response(resp: &Response) -> anyhow::Result<()> {
 /// The user's login shell, from `$SHELL`. Asking the kernel about the parent
 /// process would identify the *invoking* shell instead, which is wrong when
 /// the user runs the installer from a script.
+#[cfg(unix)]
 fn detect_shell() -> String {
     std::env::var("SHELL")
         .ok()
@@ -122,6 +145,7 @@ fn detect_shell() -> String {
 /// the workspace root, which is two levels above `target/{debug,release}`;
 /// an installed build would ship them alongside the binary. The walk keeps
 /// both working without configuration.
+#[cfg(unix)]
 fn plugin_dir(explicit: Option<String>) -> anyhow::Result<PathBuf> {
     if let Some(d) = explicit {
         return Ok(PathBuf::from(d));
@@ -140,6 +164,7 @@ fn plugin_dir(explicit: Option<String>) -> anyhow::Result<PathBuf> {
     Ok(PathBuf::from("shell"))
 }
 
+#[cfg(unix)]
 fn plugin_path(dir: &Path, shell: &str) -> anyhow::Result<PathBuf> {
     let file = match shell {
         "bash" => "aqua.bash",
@@ -153,6 +178,7 @@ fn plugin_path(dir: &Path, shell: &str) -> anyhow::Result<PathBuf> {
 /// Append one guarded `source` line to the shell's rc file. One line is the
 /// whole contract: frameworks (oh-my-zsh, prezto, bash-it) all end up
 /// sourcing the same rc, so composing with them means not fighting over it.
+#[cfg(unix)]
 fn install(shell: &str, rc_override: Option<PathBuf>, dir: &Path) -> anyhow::Result<()> {
     let plugin = plugin_path(dir, shell)?;
     if !plugin.exists() {

@@ -95,6 +95,7 @@ fn main() {
 /// Point stdout and stderr at `path` so a LaunchServices-detached run is still
 /// observable. Failure here is not worth aborting over: the run can proceed
 /// silently rather than not at all.
+#[cfg(unix)]
 fn redirect_output_to(path: &str) {
     use std::os::unix::io::AsRawFd;
     let Ok(file) = std::fs::File::create(path) else {
@@ -110,6 +111,13 @@ fn redirect_output_to(path: &str) {
     std::mem::forget(file);
 }
 
+/// On non-unix targets there is no LaunchServices detachment problem to
+/// solve (the flag exists for `open -a` launches on macOS), so the
+/// redirect is a documented no-op rather than a port of `dup2`.
+#[cfg(not(unix))]
+fn redirect_output_to(_path: &str) {}
+
+#[cfg(unix)]
 extern "C" {
     #[link_name = "dup2"]
     fn libc_dup2(src: i32, dst: i32) -> i32;
