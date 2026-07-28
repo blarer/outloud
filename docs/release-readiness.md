@@ -532,12 +532,21 @@ cargo tree -p audio --no-default-features -e normal \
 `crates/audio/tests/capture_feature.rs` pins both halves of the contract and
 runs in both configurations (3 tests without the feature, 4 with).
 
-**Why "partly".** `cargo build --workspace` still enables default features, so
-the CI musl rows stay red until they build with `--no-default-features` (see
-appendix D). Related and worth someone's attention: **`crates/asr` depends on
-`audio` but never references it in code** — it defines its own `SAMPLE_RATE`
-const — so dropping that dependency would shrink the graph further. That crate
-is owned elsewhere, so it is reported rather than changed.
+**Why "partly".** Making `capture` optional was necessary but is **not
+sufficient**, and I initially assumed it was. `cargo build --workspace
+--no-default-features` still yields three ALSA crates on the musl target,
+because `aquad` and `asr` both take `audio = { path = "../audio" }` with
+default features **on**, so that dependency edge re-enables capture whatever
+the CI command passes. Gating both edges does reach zero (tested, then
+reverted since both files are owned by others), but it additionally requires
+cfg-gating `spawn_mic` in `crates/aquad/src/source.rs`, which uses
+`audio::capture` unconditionally. Full measurements, the exact compile errors,
+and the required edits are in appendix D.
+
+Related and worth someone's attention: **`crates/asr` depends on `audio` but
+never references it in code** — it defines its own `SAMPLE_RATE` const — so
+that edge could simply be deleted. That crate is owned elsewhere, so it is
+reported rather than changed.
 
 ---
 
@@ -673,16 +682,59 @@ to:
 Either it builds or the release fails honestly. Publishing a `headless`
 artifact set silently missing an architecture is worse than publishing none.
 
-### D. musl rows: use the new `capture` feature
+### D. musl rows: what it actually takes (tested, not guessed)
 
-`crates/audio`'s `capture` feature is now optional (finding 10), so the musl
-and headless rows should build without it rather than cross-compile ALSA:
+Making `capture` optional (finding 10) was necessary but is **not sufficient**,
+and an earlier revision of this appendix was wrong to imply a workflow flag
+alone would do it. Measured:
+
+```
+cargo tree --workspace --no-default-features -e normal \
+    --target x86_64-unknown-linux-musl | grep -c -E 'cpal|alsa'    -> 3
+```
+
+Still three. `--no-default-features` applies to the *workspace members*, but
+`aquad` and `asr` both declare `audio = { path = "../audio" }` with default
+features **on**, so that dependency edge re-enables `capture` regardless of
+what the CI command passes.
+
+What actually works, verified by experiment (applied, measured, then reverted,
+because both files are owned by other agents):
+
+1. In `crates/aquad` and `crates/asr`, take the dependency as
+   `audio = { path = "../audio", default-features = false }`.
+2. In `crates/aquad`, add `audio/capture` to the existing `display` feature, so
+   a desktop build still gets a microphone.
+
+Result with both edges gated:
+
+```
+workspace, --no-default-features, musl target  -> 0 cpal/alsa crates
+workspace, default features,      musl target  -> 3 (desktop keeps the mic)
+```
+
+**One more change is then required**, and it is the reason this is not a
+one-line fix: `crates/aquad/src/source.rs` uses `audio::capture` unconditionally,
+so the headless build stops compiling:
+
+```
+error[E0433]: cannot find `capture` in `audio`
+   --> crates/aquad/src/source.rs:115:20
+error[E0433]: cannot find `capture` in `audio`
+   --> crates/aquad/src/source.rs:108:13
+error[E0422]: cannot find struct, variant or union type `Started` in this scope
+   --> crates/aquad/src/source.rs:117:13
+```
+
+All of it is inside `spawn_mic` (`source.rs:105-162`), which needs a
+`#[cfg(feature = ...)]` gate and a headless counterpart that returns an error
+naming `--wav`. That is a contained change, but it is a **code** change in
+`crates/aquad` (dove's) and `crates/asr` (off-limits), not CI plumbing, which
+is why it is written up here rather than done.
+
+Only after that does the workflow change make sense:
 
 ```yaml
             cargo build --workspace --locked --no-default-features --target ${{ matrix.target }}
 ```
-
-Note the caveat in finding 10: `--workspace` alone still enables default
-features, so this flag (or dropping the `audio` dependency from `asr`) is what
-actually removes ALSA from the musl graph.
 
