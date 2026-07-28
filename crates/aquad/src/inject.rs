@@ -1,0 +1,349 @@
+//! The write half: turn a final transcript into text on the user's screen.
+//!
+//! Two paths, decided by what was selected at *key-down* time (deliverables
+//! 2 and 3):
+//!
+//! - **Dictation** (no selection): the transcript is inserted at the caret.
+//! - **Edit** (selection present): the transcript is parsed as an
+//!   [`EditIntent`] and applied to the selected text, and the rewritten
+//!   selection is written back in place. Freeform intents have no local LLM
+//!   yet, so they are *reported*, loudly and with the heard instruction,
+//!   instead of silently doing nothing.
+//!
+//! Every failure names its next action (the diag crate's philosophy): the
+//! outcome enum carries a user-facing situation -> action string, and the
+//! caller maps it onto the Error overlay state.
+
+use ax_edit::{AxError, TextSnapshot};
+use edit_intent::EditIntent;
+
+/// What the snapshot taken at key-down tells us about the coming utterance.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Mode {
+    /// Insert the transcript at the caret.
+    Dictate,
+    /// Apply the transcript as an edit command to this selected text.
+    Edit { selected: String },
+}
+
+/// Decide the mode from a key-down snapshot. `None` snapshot (no focused
+/// text field, AX refused, etc.) still means dictation: the clipboard-paste
+/// fallback can insert into fields AX cannot even read.
+pub fn mode_from_snapshot(snap: Option<&TextSnapshot>) -> Mode {
+    match snap {
+        Some(s) if s.is_selection_edit() => Mode::Edit {
+            selected: s
+                .selected_text
+                .clone()
+                .expect("is_selection_edit implies selected_text"),
+        },
+        _ => Mode::Dictate,
+    }
+}
+
+/// How one utterance ended, for the overlay and the log.
+#[derive(Debug)]
+pub enum Outcome {
+    /// Text landed. `via` names the transport/strategy for diagnostics.
+    Wrote { text: String, via: String },
+    /// Recognizer heard nothing: return quietly to Idle per the state table.
+    EmptyTranscript,
+    /// A freeform edit instruction with no local LLM to run it (deliverable
+    /// 3): reported, never silently dropped.
+    FreeformUnsupported { instruction: String },
+    /// The edit command's search text was not in the selection.
+    EditNoMatch { command: String },
+    /// Everything failed. `situation_action` is the one-line
+    /// "situation -> next action" string for the Error overlay state.
+    Failed { situation_action: String },
+}
+
+/// Deliver `transcript` according to `mode`.
+///
+/// Blocking (AX writes are ~13ms synchronous IPC); the supervisor calls it
+/// via `spawn_blocking` so a hung target app cannot stall the event loop.
+pub fn deliver(mode: &Mode, transcript: &str) -> Outcome {
+    let text = transcript.trim();
+    if text.is_empty() {
+        return Outcome::EmptyTranscript;
+    }
+    match mode {
+        Mode::Dictate => insert_with_fallback(text),
+        Mode::Edit { selected } => {
+            // Recognizers punctuate ("Change quick to slow."), but spoken
+            // edit commands are imperatives whose trailing punctuation was
+            // never said: strip it so "to slow." does not write "slow.".
+            let command = text.trim_end_matches(['.', '!', '?', ',']);
+            let intent = edit_intent::parse(command);
+            if let EditIntent::Freeform { instruction } = &intent {
+                // No local LLM yet: say so instead of guessing (the README's
+                // "a model rewriting text nobody asked it to touch" risk).
+                return Outcome::FreeformUnsupported {
+                    instruction: instruction.clone(),
+                };
+            }
+            match edit_intent::apply(selected, &intent) {
+                Some(rewritten) => replace_selection(&rewritten),
+                None => Outcome::EditNoMatch {
+                    command: text.to_string(),
+                },
+            }
+        }
+    }
+}
+
+/// Insert at the caret.
+///
+/// Trap this function exists to defuse: with no selection,
+/// `ax_edit::replace_focused` writes the whole `AXValue`, which would
+/// REPLACE the user's entire document with the transcript. So dictation
+/// re-reads the field at commit time and splices the transcript into the
+/// existing value at the caret (AX reports the caret as a zero-length
+/// selection in UTF-16 units), then writes the spliced whole value. When the
+/// field cannot be read or the caret cannot be mapped, we fall back to
+/// clipboard paste, which inserts natively and cannot destroy anything.
+fn insert_with_fallback(text: &str) -> Outcome {
+    match ax_edit::snapshot_focused() {
+        Ok(snap) => {
+            // A non-empty selection at commit time: typing replaces it, so
+            // dictation does too. replace_focused takes the undo-preserving
+            // AXSelectedText path here.
+            if snap.is_selection_edit() {
+                return write_focused(text);
+            }
+            match spliced_at_caret(&snap, text) {
+                Some(new_value) => write_focused(&new_value),
+                // Field readable but caret unknown/unmappable: paste inserts
+                // at the caret without us knowing where it is.
+                None => clipboard_fallback(text, &AxError::NoTextValue),
+            }
+        }
+        Err(e) => clipboard_fallback(text, &e),
+    }
+}
+
+/// The spliced whole-field value for inserting `text` at the caret, or
+/// `None` when the snapshot does not pin down where the caret is.
+fn spliced_at_caret(snap: &TextSnapshot, text: &str) -> Option<String> {
+    let value = snap.value.as_deref()?;
+    if value.is_empty() {
+        // Empty field: the whole value IS the transcript, no offset math.
+        return Some(text.to_string());
+    }
+    let (loc, len) = snap.selection?;
+    if len != 0 {
+        return None; // selection handled by the caller
+    }
+    let at = crate::utf16_offset_to_byte(value, loc)?;
+    // Join like a human typing: a space on either side where the insertion
+    // would otherwise glue onto an existing word, none against whitespace
+    // or the field's edges.
+    let needs_space_before = value[..at]
+        .chars()
+        .next_back()
+        .is_some_and(|c| !c.is_whitespace());
+    let needs_space_after = value[at..]
+        .chars()
+        .next()
+        .is_some_and(|c| !c.is_whitespace());
+    let mut out = String::with_capacity(value.len() + text.len() + 2);
+    out.push_str(&value[..at]);
+    if needs_space_before {
+        out.push(' ');
+    }
+    out.push_str(text);
+    if needs_space_after {
+        out.push(' ');
+    }
+    out.push_str(&value[at..]);
+    Some(out)
+}
+
+/// One AX write with clipboard fallback, shared by both paths.
+fn write_focused(text: &str) -> Outcome {
+    match ax_edit::replace_focused(text) {
+        Ok(strategy) => Outcome::Wrote {
+            text: text.to_string(),
+            via: strategy.to_string(),
+        },
+        Err(e) => clipboard_fallback(text, &e),
+    }
+}
+
+/// Replace the selection. The selection was read at key-down; writing
+/// `AXSelectedText` at commit time replaces whatever is selected *now*,
+/// which is still the same selection in the overwhelmingly common case
+/// (the user held a key and spoke, they did not re-select). Verifying the
+/// selection is unchanged before writing is future work needing
+/// AXSelectedTextRange comparison in ax-edit.
+fn replace_selection(rewritten: &str) -> Outcome {
+    write_focused(rewritten)
+}
+
+/// The last-resort transport. On success the text is on screen via a
+/// synthesized paste; on failure the text is at least *on the clipboard*,
+/// and the outcome tells the user to press Cmd+V themselves: a named next
+/// action even at the bottom of the fallback chain.
+fn clipboard_fallback(text: &str, ax_err: &AxError) -> Outcome {
+    // Logged, not just folded into the outcome: the fallback usually
+    // succeeds, and the AX refusal that caused it would otherwise vanish.
+    eprintln!("aquad: AX write path refused ({ax_err}); falling back to clipboard paste");
+    #[cfg(feature = "display")]
+    {
+        use text_target::targets::clipboard::ClipboardTarget;
+        use text_target::TextTarget;
+        match ClipboardTarget::new() {
+            Ok(mut clip) => match clip.insert(text) {
+                Ok(()) => {
+                    // Give the target app a beat to consume the paste before
+                    // handing the user's original clipboard back.
+                    std::thread::sleep(std::time::Duration::from_millis(150));
+                    let _ = clip.restore();
+                    Outcome::Wrote {
+                        text: text.to_string(),
+                        via: "clipboard-paste".into(),
+                    }
+                }
+                Err(paste_err) => Outcome::Failed {
+                    situation_action: format!(
+                        "write refused ({ax_err}) and paste failed ({paste_err}) \
+                         -> your text is on the clipboard, press Cmd+V"
+                    ),
+                },
+            },
+            Err(e) => Outcome::Failed {
+                situation_action: format!(
+                    "write refused ({ax_err}) and no clipboard tool ({e}) \
+                     -> focus a text field and try again"
+                ),
+            },
+        }
+    }
+    #[cfg(not(feature = "display"))]
+    {
+        let _ = text;
+        Outcome::Failed {
+            situation_action: format!(
+                "write refused ({ax_err}) and this is a headless build \
+                 -> use the terminal-native transports via spike-cli"
+            ),
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn snap(selected: Option<&str>) -> TextSnapshot {
+        TextSnapshot {
+            role: "AXTextArea".into(),
+            app: Some("TestApp".into()),
+            value: Some("the quick brown fox".into()),
+            selected_text: selected.map(str::to_string),
+            selection: None,
+            value_settable: true,
+            selected_text_settable: true,
+        }
+    }
+
+    #[test]
+    fn no_selection_means_dictate() {
+        assert_eq!(mode_from_snapshot(Some(&snap(None))), Mode::Dictate);
+        assert_eq!(mode_from_snapshot(Some(&snap(Some("")))), Mode::Dictate);
+        assert_eq!(mode_from_snapshot(None), Mode::Dictate);
+    }
+
+    #[test]
+    fn selection_means_edit_on_that_text() {
+        assert_eq!(
+            mode_from_snapshot(Some(&snap(Some("quick")))),
+            Mode::Edit {
+                selected: "quick".into()
+            }
+        );
+    }
+
+    #[test]
+    fn empty_transcript_is_quiet() {
+        assert!(matches!(
+            deliver(&Mode::Dictate, "   "),
+            Outcome::EmptyTranscript
+        ));
+    }
+
+    #[test]
+    fn freeform_edit_reports_instead_of_guessing() {
+        let mode = Mode::Edit {
+            selected: "some prose".into(),
+        };
+        match deliver(&mode, "make this sound more professional") {
+            Outcome::FreeformUnsupported { instruction } => {
+                assert!(instruction.contains("professional"));
+            }
+            other => panic!("expected FreeformUnsupported, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn edit_with_absent_search_text_reports_no_match() {
+        let mode = Mode::Edit {
+            selected: "the quick brown fox".into(),
+        };
+        match deliver(&mode, "change zebra to lion") {
+            Outcome::EditNoMatch { command } => assert!(command.contains("zebra")),
+            other => panic!("expected EditNoMatch, got {other:?}"),
+        }
+    }
+
+    fn caret_snap(value: &str, caret_utf16: Option<usize>) -> TextSnapshot {
+        TextSnapshot {
+            role: "AXTextArea".into(),
+            app: None,
+            value: Some(value.into()),
+            selected_text: None,
+            selection: caret_utf16.map(|c| (c, 0)),
+            value_settable: true,
+            selected_text_settable: false,
+        }
+    }
+
+    #[test]
+    fn splice_inserts_at_caret_with_joining_space() {
+        let s = caret_snap("hello world", Some(5)); // caret after "hello"
+        assert_eq!(
+            spliced_at_caret(&s, "brave").as_deref(),
+            Some("hello brave world")
+        );
+    }
+
+    #[test]
+    fn splice_at_end_appends() {
+        let s = caret_snap("hello", Some(5));
+        assert_eq!(
+            spliced_at_caret(&s, "world").as_deref(),
+            Some("hello world")
+        );
+    }
+
+    #[test]
+    fn splice_at_start_pads_before_the_word() {
+        let s = caret_snap("world", Some(0));
+        assert_eq!(
+            spliced_at_caret(&s, "hello").as_deref(),
+            Some("hello world")
+        );
+    }
+
+    #[test]
+    fn splice_into_empty_field_is_just_the_text() {
+        let s = caret_snap("", None);
+        assert_eq!(spliced_at_caret(&s, "hello").as_deref(), Some("hello"));
+    }
+
+    #[test]
+    fn splice_without_caret_refuses() {
+        let s = caret_snap("hello", None);
+        assert_eq!(spliced_at_caret(&s, "x"), None);
+    }
+}

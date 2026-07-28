@@ -1,0 +1,39 @@
+[package]
+name = "aquad"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+# Internal workspace crate: never published to crates.io. This also lets
+# `cargo deny` treat path dependencies as first-party rather than as
+# unversioned wildcards.
+publish = false
+description = "The dictation daemon: hotkey -> capture -> VAD -> recognizer -> intent -> write, wired end to end"
+
+[features]
+# Desktop build: the GUI overlay plus the display transports. Default because
+# that is what a user runs. Mirrors the `display` gate in text-target and
+# overlay so `--no-default-features` stays a workspace-wide headless guarantee.
+default = ["display"]
+display = ["overlay/display", "text-target/display"]
+
+[dependencies]
+anyhow.workspace = true
+asr = { path = "../asr" }
+audio = { path = "../audio" }
+ax-edit = { path = "../ax-edit" }
+diag = { path = "../diag" }
+edit-intent = { path = "../edit-intent" }
+hotkey = { path = "../hotkey" }
+overlay = { path = "../overlay", default-features = false }
+text-target = { path = "../text-target", default-features = false }
+# rt-multi-thread because the pipeline stages (recognizer thread, injection)
+# are blocking work that must not stall the async supervisor; time for the
+# transcribing-elapsed ticker; sync for the watch/mpsc/oneshot channel set.
+tokio = { version = "1", features = ["rt-multi-thread", "sync", "time", "macros"] }
+
+# The overlay itself needs a main-thread AppKit run loop; the daemon hosts it.
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2 = "0.6"
+objc2-foundation = { version = "0.3", features = ["NSDate", "NSRunLoop"] }
+objc2-app-kit = { version = "0.3", features = ["NSApplication", "NSResponder"] }
+block2 = "0.6"
