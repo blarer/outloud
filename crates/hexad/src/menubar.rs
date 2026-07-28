@@ -53,6 +53,9 @@ pub enum Action {
 /// silently-does-nothing menu item.
 pub const PANE_ACCESSIBILITY: &str = "Privacy_Accessibility";
 pub const PANE_MICROPHONE: &str = "Privacy_Microphone";
+/// Input Monitoring. A DIFFERENT grant from Accessibility, and the one the
+/// event tap actually needs: without it the hotkey never fires.
+pub const PANE_INPUT_MONITORING: &str = "Privacy_ListenEvent";
 
 /// Everything the menu needs to know about the running daemon that is not
 /// in the config file.
@@ -77,6 +80,8 @@ pub struct Status {
     /// Accessibility trust is missing right now, from a live poll rather
     /// than from whatever was true at launch.
     pub accessibility_blocked: bool,
+    /// Input Monitoring is missing, so the hotkey cannot fire at all.
+    pub input_monitoring_blocked: bool,
 }
 
 /// The settings the menu can change, resolved from the config layers.
@@ -113,6 +118,7 @@ impl Default for Status {
             microphone: None,
             microphone_blocked: false,
             accessibility_blocked: false,
+            input_monitoring_blocked: false,
         }
     }
 }
@@ -206,6 +212,23 @@ pub fn build(status: &Status, settings: &Settings) -> (MenuModel, Vec<Action>) {
             },
         );
         items.push(MenuItem::action("Open Accessibility Settings…", id));
+    }
+    // Input Monitoring first among the permission rows, because it is the
+    // one that stops the product working outright: without it the hotkey
+    // produces nothing at all, whereas a missing Accessibility grant still
+    // dictates via clipboard paste.
+    if status.input_monitoring_blocked {
+        items.push(MenuItem::Separator);
+        items.push(MenuItem::Label(
+            "Hexavoice needs Input Monitoring to see the hotkey.".into(),
+        ));
+        let id = add(
+            &mut actions,
+            Action::OpenPrivacyPane {
+                pane: PANE_INPUT_MONITORING,
+            },
+        );
+        items.push(MenuItem::action("Open Input Monitoring Settings…", id));
     }
     if status.microphone_blocked {
         items.push(MenuItem::Label(
@@ -311,7 +334,9 @@ pub fn build(status: &Status, settings: &Settings) -> (MenuModel, Vec<Action>) {
     // believes itself to be: the engine has no idea the permission moved, so
     // the live poll overrides it here rather than faking a state transition
     // the engine's table would reject.
-    let glyph_state = if status.accessibility_blocked && status.state == OverlayState::Idle {
+    let glyph_state = if (status.accessibility_blocked || status.input_monitoring_blocked)
+        && status.state == OverlayState::Idle
+    {
         OverlayState::NoPermission
     } else {
         status.state
@@ -423,8 +448,15 @@ fn same_chord(bound: &str, configured: &str) -> bool {
 fn status_line(status: &Status) -> String {
     // Same override as the glyph: "ready" is a lie when the permission that
     // makes dictation work has been taken away.
-    if status.accessibility_blocked && status.state == OverlayState::Idle {
-        return "Hexavoice: Accessibility permission needed".into();
+    if status.state == OverlayState::Idle {
+        // Name the specific grant. "Permission needed" sends a user to the
+        // wrong pane, which is precisely how this bug wasted an afternoon.
+        if status.input_monitoring_blocked {
+            return "Hexavoice: Input Monitoring permission needed".into();
+        }
+        if status.accessibility_blocked {
+            return "Hexavoice: Accessibility permission needed".into();
+        }
     }
     match status.state {
         OverlayState::Idle => "Hexavoice: ready".into(),
@@ -592,6 +624,45 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn missing_input_monitoring_names_its_own_pane() {
+        // The bug this test exists for: Input Monitoring is what the event
+        // tap actually needs, and a daemon missing it binds nothing while
+        // reporting itself ready. Sending the user to the Accessibility
+        // pane, which they may already have granted, is worse than silence.
+        let mut st = status(OverlayState::Idle);
+        st.input_monitoring_blocked = true;
+        let (model, actions) = build(&st, &settings());
+        assert!(actions.contains(&Action::OpenPrivacyPane {
+            pane: PANE_INPUT_MONITORING
+        }));
+        assert!(
+            model.tooltip.contains("Input Monitoring"),
+            "the tooltip must name the grant that is actually missing: {}",
+            model.tooltip
+        );
+        assert_eq!(
+            model.state,
+            OverlayState::NoPermission,
+            "the glyph must not read healthy while the hotkey cannot fire"
+        );
+    }
+
+    #[test]
+    fn the_two_permissions_are_never_conflated() {
+        // They have different panes and different consequences: without
+        // Input Monitoring nothing happens at all, while without
+        // Accessibility dictation still works via clipboard paste.
+        assert_ne!(PANE_INPUT_MONITORING, PANE_ACCESSIBILITY);
+
+        let mut st = status(OverlayState::Idle);
+        st.input_monitoring_blocked = true;
+        let (_, actions) = build(&st, &settings());
+        assert!(!actions.contains(&Action::OpenPrivacyPane {
+            pane: PANE_ACCESSIBILITY
+        }));
     }
 
     #[test]

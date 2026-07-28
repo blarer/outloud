@@ -23,6 +23,23 @@ pub mod taphold;
 pub mod winmatch;
 
 pub use chord::{Chord, ChordParseError, Key, Modifier};
+
+/// Whether this process may observe keyboard input (macOS **Input
+/// Monitoring**). Always `true` off macOS, which has no such gate.
+///
+/// Exposed from the crate that owns the event tap, because this is the
+/// permission the tap actually requires, and it is NOT the same as
+/// Accessibility. See the backend module doc.
+pub fn has_input_monitoring() -> bool {
+    #[cfg(target_os = "macos")]
+    {
+        backend::macos::has_input_monitoring()
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        true
+    }
+}
 pub use conflict::{check_chord, Conflict, Severity};
 pub use taphold::{HotkeyEvent, TapHold, Timing};
 

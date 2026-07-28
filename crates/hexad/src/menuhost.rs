@@ -166,6 +166,7 @@ impl MenuHost {
             microphone: runtime.microphone.clone(),
             microphone_blocked: runtime.microphone_blocked,
             accessibility_blocked: runtime.accessibility_blocked,
+            input_monitoring_blocked: runtime.input_monitoring_blocked,
         };
         let (model, actions) = menubar::build(&status, &self.settings);
         self.actions = actions;

@@ -81,6 +81,34 @@ type CGEventTapCallBack = extern "C" fn(
     user_info: *mut c_void,
 ) -> CGEventRef;
 
+/// `kIOHIDRequestTypeListenEvent`: may this process observe HID input?
+const K_IOHID_REQUEST_TYPE_LISTEN_EVENT: u32 = 1;
+/// `kIOHIDAccessTypeGranted`.
+const K_IOHID_ACCESS_TYPE_GRANTED: u32 = 0;
+
+#[link(name = "IOKit", kind = "framework")]
+extern "C" {
+    fn IOHIDCheckAccess(request: u32) -> u32;
+}
+
+/// Whether this process may observe keyboard input, i.e. whether the user
+/// has granted **Input Monitoring**.
+///
+/// This is a DIFFERENT permission from Accessibility, and confusing the two
+/// costs hours. `kCGHIDEventTap` sits at the HID layer and needs Input
+/// Monitoring; Accessibility is what lets us read and write text in other
+/// applications. A daemon with Accessibility but not Input Monitoring binds
+/// nothing and reports itself healthy, which is exactly the failure a user
+/// hit: the tray said ready, the hotkey did nothing, and no surface named
+/// the missing grant.
+///
+/// Never prompts. `IOHIDRequestAccess` would show a dialog, which is wrong
+/// on a poll; the caller deep-links to the pane instead.
+pub fn has_input_monitoring() -> bool {
+    // Safety: a pure query with no arguments beyond a constant.
+    unsafe { IOHIDCheckAccess(K_IOHID_REQUEST_TYPE_LISTEN_EVENT) == K_IOHID_ACCESS_TYPE_GRANTED }
+}
+
 #[link(name = "CoreGraphics", kind = "framework")]
 extern "C" {
     fn CGEventTapCreate(
@@ -214,9 +242,10 @@ pub fn spawn(
             };
             if tap.is_null() {
                 // Null means the OS refused: virtually always missing
-                // Accessibility/Input Monitoring trust for the responsible
-                // process (see docs/macos-permissions.md for why "the
-                // responsible process" may be your terminal).
+                // Input Monitoring (this tap's actual requirement) or
+                // Accessibility trust for the responsible process (see
+                // docs/macos-permissions.md for why "the responsible
+                // process" may be your terminal).
                 let _ = ready_tx.send(Err(HotkeyError::PermissionDenied));
                 // Reclaim the state we leaked for a tap that never existed.
                 drop(unsafe { Box::from_raw(state) });

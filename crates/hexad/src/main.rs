@@ -451,6 +451,9 @@ fn overlay_main(
             // `false`: never prompt. A prompt on a timer would be a dialog
             // every second, and the menu already offers the deep link.
             runtime.set_accessibility_trusted(ax_edit::is_trusted(false));
+            // The tap's OWN permission, which is not Accessibility. Without
+            // it the hotkey silently never fires.
+            runtime.set_input_monitoring(hotkey::has_input_monitoring());
             frames_since_trust_poll = 0;
         }
         frames_since_trust_poll += 1;

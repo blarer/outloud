@@ -38,6 +38,15 @@ pub struct Runtime {
     /// paste while still showing a healthy glyph, or it stays broken after
     /// the user has just fixed it and concludes the fix did not work.
     pub accessibility_blocked: bool,
+    /// Input Monitoring is missing right now.
+    ///
+    /// Separate from `accessibility_blocked` because they are separate
+    /// grants with separate panes and separate consequences: without Input
+    /// Monitoring the hotkey never fires at all, while without Accessibility
+    /// the hotkey works and the text lands via clipboard paste. Treating
+    /// them as one is what let a daemon report itself ready while its tap
+    /// was dead.
+    pub input_monitoring_blocked: bool,
 }
 
 /// Shared publication slot. Cloneable; every clone sees the same facts.
@@ -88,6 +97,16 @@ impl RuntimeShared {
     /// relaxed atomic load and nothing else.
     pub fn enabled(&self) -> bool {
         self.enabled.load(Ordering::Relaxed)
+    }
+
+    /// Publish the live Input Monitoring state. Positive sense and polled,
+    /// for the same reason as accessibility: it is a level, and granting it
+    /// while the daemon runs must clear the warning without a restart.
+    pub fn set_input_monitoring(&self, granted: bool) {
+        self.inner
+            .lock()
+            .expect("runtime lock poisoned")
+            .input_monitoring_blocked = !granted;
     }
 
     /// Arm or pause dictation, from the `enabled` setting.
