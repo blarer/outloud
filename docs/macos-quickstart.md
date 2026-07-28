@@ -112,6 +112,57 @@ tccutil reset Accessibility dev.aquaoss.aquad   # then re-grant
 open -a "$PWD/dist/Aqua.app"    # runs in the background, no Dock icon
 ```
 
+### What you will see: the menu bar item
+
+Aqua has no Dock icon and no window on purpose (`LSUIElement`): it writes
+into whatever text field you are focused on, so it must never activate and
+steal that focus. Its entire visible presence is **one icon at the right of
+your menu bar**, which appears within a second of launch:
+
+| Icon | State | Meaning |
+|---|---|---|
+| waveform | `idle` | Running, model resident, waiting for the hotkey |
+| filled microphone | `listening` | **The microphone is hot right now** |
+| waveform + magnifier | `transcribing` | Key released, finalizing |
+| circular arrows | `model-loading` | Model paging in. Dictate anyway; audio buffers |
+| slashed microphone | `no-permission` | Accessibility or Microphone is missing |
+| warning triangle | `error` | Something failed; the menu says what |
+
+Click the icon for the menu:
+
+```
+Aqua: ready
+─────────────────────────────
+Hold right-option to dictate
+─────────────────────────────
+Settings                    >
+Edit /Users/you/.config/aqua/config.toml…
+Open vocabulary folder…
+─────────────────────────────
+Run diagnostics…
+Reload configuration
+─────────────────────────────
+Quit Aqua
+```
+
+- **Settings** changes the hotkey, model, insertion mode, casing, overlay
+  position, and the enabled / launch-at-login switches. The current value
+  carries a checkmark. Every change is written straight into your
+  `config.toml`, comments and all, so the menu and the file are two views of
+  the same thing and neither hides an edit made in the other.
+- **Run diagnostics** runs the same checks as `./scripts/doctor.sh`, but from
+  inside the bundled app, so it reports on the permissions *Aqua* has rather
+  than the ones your terminal has. The report opens in your text editor.
+- If a permission is missing, an extra item appears at the top of the menu
+  that opens the exact System Settings pane you need.
+- **Quit Aqua** stops the daemon. It is the reason you no longer need
+  `pkill`.
+
+The config file is created on first launch, fully commented, at
+`~/.config/aqua/config.toml` (or `$XDG_CONFIG_HOME/aqua/config.toml`).
+
+### Dictating
+
 Then in any app:
 
 1. Put the cursor where you want text.
@@ -128,7 +179,7 @@ To watch the logs instead of running detached:
 ./target/release/aquad --no-overlay    # needs Accessibility on your terminal
 ```
 
-Stop it with:
+Stop it with the menu bar item's **Quit Aqua**, or if it is wedged:
 
 ```bash
 pkill -f 'Aqua.app/Contents/MacOS/Aqua'
@@ -148,6 +199,7 @@ apply and `Ctrl-X u` to undo through your shell's own undo.
 
 | Symptom | Cause | Fix |
 |---|---|---|
+| No icon in the menu bar after `open` | the app is not running, or the bar is full and macOS hid the item | `ps aux \| grep Aqua.app`; if it is running, widen the bar (quit another menu bar app) or check with `cargo run -p overlay --bin status-demo` |
 | `via clipboard-paste` on every run | no Accessibility grant, or the grant is on the wrong process | step 3, and mind the responsible-process trap |
 | Toggle is on but everything is denied | rebuilt since granting (`cdhash` changed), or wrong responsible process | `tccutil reset Accessibility dev.aquaoss.aquad`, re-grant |
 | Recognizer never becomes ready | macOS below 26, so no `SpeechTranscriber` | `--asr mock` to test wiring; a downloadable backend is stubbed |

@@ -109,6 +109,11 @@ Grant permissions once (macOS gives no programmatic way to do this):
 Then start it so it is its own responsible process:
   open -a "$APP_DIR"
 
+It has no Dock icon by design (it must never steal focus from the field it
+is typing into). Look for its icon at the RIGHT END OF YOUR MENU BAR: a
+waveform when idle, a filled microphone while listening. Click it for
+status, settings, diagnostics, and Quit.
+
 Ad-hoc signing note: the grant is pinned to this build's cdhash, so after a
 rebuild run \`tccutil reset Accessibility $BUNDLE_ID\` and re-grant.
 EOF

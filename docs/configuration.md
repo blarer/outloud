@@ -12,12 +12,25 @@ unit coverage; only file watching and the actual reads/writes touch the OS.
 
 ## Files
 
+Everything lives in one directory: `$XDG_CONFIG_HOME/aqua/`, or
+`~/.config/aqua/` when that variable is unset (on macOS too, deliberately:
+this is a file you are meant to read, edit, diff and sync like any dotfile).
+The daemon writes a fully-commented `config.toml` there on first launch, and
+the menu bar's **Edit config file…** opens exactly that file.
+
 | File | Purpose |
 |---|---|
 | `config.toml` | All settings and per-app profiles |
 | `config.toml.broken` | Kept automatically if the file fails to parse; defaults load instead |
 | `config.toml.v<N>` | Automatic backup made before a schema migration |
 | `vocabulary/*.txt` | Vocabulary sets, one entry per line (see below) |
+
+A machine-wide `/etc/aqua/config.toml` is also read, for managed
+deployments; the daemon never writes to it.
+
+The macOS menu bar item's **Settings** submenu is a view over this same
+file: choosing a value writes it here, preserving your comments, and editing
+the file by hand is picked up by the menu on its next reload.
 
 ## Layering
 
