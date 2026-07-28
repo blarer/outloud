@@ -3,6 +3,10 @@ name = "audio"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+# Internal workspace crate: never published to crates.io. This also lets
+# `cargo deny` treat path dependencies as first-party rather than as
+# unversioned wildcards.
+publish = false
 description = "Microphone capture, resampling, VAD, and speech segmentation for the recognizer pipeline"
 
 [features]

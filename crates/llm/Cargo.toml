@@ -3,6 +3,10 @@ name = "llm"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+# Internal workspace crate: never published to crates.io. This also lets
+# `cargo deny` treat path dependencies as first-party rather than as
+# unversioned wildcards.
+publish = false
 description = "Local LLM freeform text transformation: Transformer trait, guardrails, sanitation, model manager"
 
 [features]

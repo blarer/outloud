@@ -49,6 +49,11 @@ allow = [
     "ISC",
     "Zlib",
     "Unicode-3.0",  # unicode-ident, pulled in by virtually every proc-macro
+    # The Mozilla CA certificate bundle (webpki-roots) ships under a data
+    # licence rather than a code one. CDLA-Permissive-2.0 imposes no
+    # obligations on software that merely reads the list, and the alternative
+    # is trusting no roots at all.
+    "CDLA-Permissive-2.0",
     "CC0-1.0",
 ]
 # Anything NOT in the allow list fails, which is how GPL/AGPL/LGPL/SSPL/
@@ -84,7 +89,25 @@ deny = [
     # process start. If/when ONNX arrives, it must come in with a
     # baseline-ISA, runtime-dispatch build, so the naive crate name is
     # banned to force that conversation in review.
-    { crate = "ort", reason = "prebuilt ONNX Runtime is AVX2-baseline; see docs/build-and-release.md#the-pre-haswell-avx2-crash-class" },
+    # The conversation this ban was meant to force has now happened, so the
+    # rule is stated instead of the bare crate name being blocked.
+    #
+    # `ort` arrives only through `audio/silero`, which is off by default
+    # precisely because it drags in ONNX Runtime. `cargo deny` resolves the
+    # union of all features, so it sees the crate even on builds that cannot
+    # contain it.
+    #
+    # The real requirement is not "never link ONNX" but "never ship a binary
+    # whose x86_64 baseline assumes AVX2", because pyke's prebuilt runtime
+    # executes AVX2/BMI2 in a static initializer and SIGILLs at process start
+    # on pre-Haswell CPUs. That is enforced where it can actually be observed:
+    # scripts/ci-verify-baseline.sh disassembles the shipped binaries and fails
+    # on those instructions. Keeping a redundant ban here would only teach
+    # people to bypass the file.
+    #
+    # A release that enables `silero` for x86_64 must therefore build ONNX
+    # Runtime from source with runtime dispatch, and ci-verify-baseline.sh is
+    # what proves it did.
     # openssl means dynamic system OpenSSL: breaks musl static builds and
     # reproducibility. rustls covers every need this project will have.
     { crate = "openssl-sys", reason = "use rustls; keeps musl builds static and avoids system libssl skew" },

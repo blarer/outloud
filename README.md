@@ -1,162 +1,190 @@
-# Aqua OSS Spike (M0)
+# Aqua OSS
 
-A four-week milestone-zero spike toward an open-source, fully-local alternative
-to [Aqua Voice](https://withaqua.com). Research behind it lives in
-`../aqua-voice-research/`.
+A fully local, open-source alternative to [Aqua Voice](https://withaqua.com):
+hold a key, speak, and text appears in whatever you are typing into. Select
+text, speak a change, and it is rewritten in place.
 
-## What this spike is for
+Nothing leaves your machine.
 
-The research concluded that the machine learning is the solved part. Local
-speech recognition in 2026 (Parakeet TDT, Moonshine, whisper.cpp) already beats
-Aqua's ~450ms insert latency while keeping audio on the device. Existing
-open-source projects such as [Handy](https://github.com/cjpais/Handy) already
-ship audio capture, voice activity detection, and multiple recognizer backends
-under a permissive licence.
+**Status: working prototype.** Dictation, edit-by-voice, and shell command-line
+editing are verified end to end on macOS. Windows and Linux backends are
+designed and stubbed but not implemented. See [what works](#what-works-today).
 
-What no open-source project has solved is **edit-by-voice on text the user has
-already committed**: selecting a sentence in any application, saying "change
-hello to goodbye", and having it rewritten in place. That requires reading the
-focused text field out of another process and writing a replacement back into
-it, through each operating system's accessibility layer.
+## Why this exists
 
-M0 exists to prove that one capability, in real applications, before any team is
-hired or any recognizer is wired up. If this does not work reliably, the whole
-product thesis is wrong and it is much better to learn that in week one.
+Aqua Voice and [Wispr Flow](https://wisprflow.ai) are excellent and are both
+cloud products: your audio leaves your device, transcripts are retained unless
+you opt out, and there is no offline mode. The open-source alternatives
+([Handy](https://github.com/cjpais/Handy),
+[VoiceInk](https://github.com/Beingpax/VoiceInk), Whispering) are local but stop
+at dictation. None of them can edit text you have already written.
 
-## Layout
+Three things here are, as far as we can tell, not available anywhere else in
+open source:
 
-| Crate | Responsibility |
-|---|---|
-| `ax-edit` | Read and rewrite the focused text field via the macOS Accessibility API |
-| `edit-intent` | Turn a spoken phrase into a deterministic text transformation |
-| `text-target` | Choose and drive a transport for any destination: accessibility, input method, synthetic keys, clipboard, terminal-native, or headless |
-| `diag` | Diagnose the environment and name the next action; ships the `doctor` binary |
-| `spike-cli` | Harness that exercises all of the above and measures the result |
+1. **Edit-by-voice.** Select a sentence, say "change hello to goodbye", and it
+   is rewritten in place through the accessibility API, preserving the host
+   application's undo where possible.
+2. **Terminal and shell support.** A terminal exposes no writable accessibility
+   field, so we cooperate with the line editor directly. You can rewrite a
+   `kubectl` command by voice, and `^Xu` undoes it through zsh's own undo.
+3. **Headless operation.** A build with no display libraries linked at all, for
+   SSH sessions and servers.
 
-The split is deliberate. `edit-intent` has no operating-system dependency, so it
-runs and is tested anywhere, including CI. `ax-edit` isolates all the unsafe FFI
-behind a small safe surface and returns `Unsupported` off macOS, so the Windows
-and Linux backends can be added later without disturbing callers. `text-target`
-keeps transport selection a pure function of an `Env` trait, so every branch is
-unit tested rather than only reachable on the machine that happens to have that
-software installed.
+It is also faster. Measured end to end on an M4 Pro: **131-189ms** from key
+release to text on screen, against Aqua's advertised ~450ms insert latency.
 
-## Documentation
+## What works today
 
-| Document | Read it when |
-|---|---|
-| `docs/M0-results.md` | You want the measured result and what it cost to get |
-| `docs/macos-permissions.md` | Anything permission-shaped is behaving strangely |
-| `docs/debugging.md` | Something works in one application and not another |
-| `docs/compat-matrix.md` | You need to know what a given destination supports |
-| `docs/signing-runbook.md` | You are setting up certificates, or wondering why grants keep dying |
-| `docs/build-and-release.md` | You are changing how anything is built or shipped |
-| `docs/ux/` | You are designing or implementing user-facing behaviour |
-| `docs/planning/` | You are picking up work or planning a milestone |
-| `CONTRIBUTING.md` | You are about to write code here |
+Every number below was measured on this machine, not estimated.
 
-## Design decisions worth knowing
+| Path | Result | Latency |
+|---|---|---|
+| Dictation into a native app | "The rain in Spain falls mainly on the plain." | 189ms |
+| Edit-by-voice on a selection | "quick" → "slow", in place | 131ms |
+| Shell command line | `--namespace prod-web` → `staging-web`, zsh undo intact | verified |
+| Clipboard fallback (unfocused) | text still delivered | 445ms |
 
-**A language model is the fallback, not the first resort.** Most real edit
-commands are a small closed set: replace, delete, append, recase. A
-deterministic parser handles them in microseconds with no GPU and no risk of a
-model rewriting text nobody asked it to touch. Only genuinely open-ended
-instructions ("tighten this up") escalate to a local model. This is what keeps
-the latency budget dominated by speech recognition rather than by generation.
+Recognition is Apple's on-device `SpeechTranscriber` (macOS 26+), which needs no
+model download. Parakeet TDT and whisper.cpp backends are stubbed with
+documented model URLs for platforms without it.
 
-**Three rewrite strategies, best first.** Writing `AXSelectedText` goes through
-the target application's own text system, so undo and change notifications keep
-working. Writing `AXValue` works in simpler fields but usually resets undo.
-Applications that expose text but refuse writes fall back to a synthesized
-paste. `TextSnapshot::strategy()` reports which one a given field supports.
+Not yet built: Windows and Linux transports, streaming partial injection wired
+into the daemon, and a settings UI. See [`docs/planning/00-roadmap.md`](docs/planning/00-roadmap.md).
 
-**Every accessibility call is time-bounded.** These calls are synchronous IPC
-into another process. A spinning Electron renderer would otherwise hang the
-dictation hotkey, which the user experiences as the application being broken.
+## Try it
 
-## Running it
+Requires macOS 13+ (26+ for the zero-install recognizer) and a Rust toolchain.
 
 ```bash
-# Build and package. The .app bundle gives the TCC permission system a stable
-# identity to attach to, which a bare ad-hoc-signed binary does not have.
+# Build and grant Accessibility permission. The permission step is unavoidable:
+# reading and rewriting text in other applications is exactly what it governs.
 ./scripts/bundle-macos.sh
-
-# Grant Accessibility permission. Opens the right pane and waits for the toggle.
 ./scripts/grant-accessibility.sh
 
-BIN=dist/AquaSpike.app/Contents/MacOS/AquaSpike
+# Dictate one utterance without needing a microphone, using synthesized speech.
+cargo run --release -p aquad -- --once --say "hello from a local dictation daemon"
 
-$BIN probe                          # read the focused field right now
-$BIN watch 500                      # poll it while you tab between applications
-$BIN edit "change hello to goodbye" # full read-interpret-apply-write pipeline
-$BIN target                         # which transport this environment resolves to, and why
-$BIN inspect Safari                 # scan a named application for text fields
-$BIN matrix                         # the guided application test checklist
+# Run for real: hold right-option, speak, release.
+cargo run --release -p aquad
 ```
 
-When anything behaves unexpectedly, run the doctor first. It reports the
-environmental traps that account for nearly every confusing failure here, and
-each finding names the exact next action:
+If anything misbehaves, run the doctor first. Nearly every failure in this
+category is environmental rather than a bug, and each check names the exact
+next action:
 
 ```bash
 ./scripts/doctor.sh
 ```
 
-## Headless builds
+## How it fits together
 
-The terminal and headless transports are the differentiator: no competing
-product edits text over SSH, and no open-source tool does edit-by-voice at all.
-They are also a build-time contract rather than a runtime hope.
-
-```bash
-cargo build --no-default-features --features headless   # no display libraries
-./scripts/build-headless.sh                             # builds and verifies it
+```mermaid
+flowchart LR
+    HK[hotkey<br/>CGEventTap] --> AU[audio<br/>capture + VAD]
+    AU --> ASR[asr<br/>streaming recognizer]
+    ASR --> ST[stream<br/>commit horizon]
+    ASR --> EI[edit-intent<br/>command parser]
+    EI --> LLM[llm<br/>freeform fallback]
+    ST --> TT[text-target<br/>transport selection]
+    EI --> TT
+    TT --> OUT[(focused app<br/>terminal, or shell)]
+    AQ[aquad] -.orchestrates.-> HK & AU & ASR & EI & TT & OV
+    OV[overlay<br/>non-activating panel]
 ```
 
-The `display` feature gates the accessibility, input-method, synthetic-key, and
-clipboard tiers. Building without it drops those dependencies entirely, so a GUI
-library reaching the default feature set becomes a compile error here rather
-than a runtime crash on a server with no display stack.
+| Crate | Responsibility |
+|---|---|
+| `aquad` | The daemon. Wires everything together and owns the state machine |
+| `audio` | Capture, ring buffer, resampling, VAD, speech segmentation |
+| `asr` | Streaming recognizer trait, Apple/Parakeet/whisper backends, model manager |
+| `stream` | Commit horizon, minimal diffs, coalescing, undo ring |
+| `edit-intent` | Spoken command → deterministic text transformation |
+| `llm` | Local model for freeform edits, with guardrails and preview |
+| `text-target` | Picks and drives a transport for any destination |
+| `ax-edit` | macOS accessibility read/rewrite |
+| `shell-bridge` | Unix socket + shell plugins for command-line editing |
+| `hotkey` | Global push-to-talk, tap-to-latch, conflict detection |
+| `overlay` | Non-activating floating panel |
+| `config` | Layered configuration, per-app profiles, vocabulary |
+| `diag` | Environmental checks, timing, redacted bug reports |
+| `spike-cli` | Development harness for the accessibility layer |
 
-The intent parser needs no permission at all:
+## Design decisions worth knowing
 
-```bash
-$BIN dry-run "change quick to slow"
-$BIN dry-run "make it all caps"
-$BIN dry-run "tighten this up"      # escalates to freeform
-```
+**A language model is the fallback, not the first resort.** Most edit commands
+are a small closed set: replace, delete, append, recase. A deterministic parser
+handles them in microseconds with no GPU and no chance of a model rewriting text
+nobody asked it to touch. Only open-ended instructions escalate to a local model,
+and those are previewed before they apply.
 
-## M0 exit criteria
+**The overlay must never take focus.** Taking focus would destroy the text field
+we are about to edit, so this is a correctness requirement rather than polish.
+It is a non-activating `NSPanel` that cannot become key.
 
-Run `$BIN matrix` for the checklist. In-place rewrite must succeed in at least
-the native (TextEdit), browser (Safari), and Electron (VS Code, Slack) rows. A
-read-only terminal is an acceptable paste-fallback row rather than a failure,
-because terminals legitimately do not expose a writable text field.
+**Committed text is never retracted.** A streaming recognizer revises itself:
+"recognise speech" can become "wreck a nice beach" three words later. Text is
+only committed once several consecutive hypotheses agree on it, so the user
+never watches their document rewrite itself.
 
-Beyond that checklist, M0 is met when end-to-end finalization stays under 800ms
-with a real recognizer attached. The `edit` command already prints a per-stage
-timing breakdown, so that number is measured rather than estimated from the
-first day.
+**Transports are chosen by capability, not by guesswork.** Selection is a pure
+function of an `Env` trait, so every branch is unit tested rather than only
+reachable on a machine that happens to have that software installed.
+
+**Headless is a compile-time gate.** Building without the `display` feature drops
+the GUI dependencies entirely, so a display library reaching the default feature
+set is a compile error rather than a runtime crash on a server.
+
+## Documentation
+
+| Document | Read it when |
+|---|---|
+| [`docs/M0-results.md`](docs/M0-results.md) | You want the measured result and what it cost |
+| [`docs/latency.md`](docs/latency.md) | You care where the milliseconds go |
+| [`docs/macos-permissions.md`](docs/macos-permissions.md) | Anything permission-shaped is behaving strangely |
+| [`docs/debugging.md`](docs/debugging.md) | Something works in one application and not another |
+| [`docs/compat-matrix.md`](docs/compat-matrix.md) | You need to know what a destination supports |
+| [`docs/shell-integration.md`](docs/shell-integration.md) | You are working on terminal support |
+| [`docs/streaming.md`](docs/streaming.md) | You are touching partial text commitment |
+| [`docs/configuration.md`](docs/configuration.md) | You are adding or changing a setting |
+| [`docs/signing-runbook.md`](docs/signing-runbook.md) | Certificates, or why grants keep dying |
+| [`docs/ux/`](docs/ux/) | You are designing user-facing behaviour |
+| [`docs/planning/`](docs/planning/) | You are picking up work or planning a milestone |
+| [`CONTRIBUTING.md`](CONTRIBUTING.md) | You are about to write code here |
+
+## Four traps that will cost you a day each
+
+These were all discovered the hard way. They are why `doctor` exists.
+
+1. **The system-wide `AXUIElement` does not work.** Asking it for
+   `AXFocusedUIElement` returns `kAXErrorCannotComplete` even for a fully
+   trusted process. Resolve the focused *application* first, then ask it.
+2. **Accessibility grants follow the responsible process.** A binary run from a
+   shell is judged against your terminal's permission, so the app can appear
+   enabled in System Settings and still be denied. Launch through
+   LaunchServices.
+3. **Ad-hoc signatures invalidate grants on rebuild.** TCC pins approval to the
+   binary's `cdhash`. The toggle keeps reading "on" while nothing works. Use
+   `tccutil reset` during development, and a Developer ID certificate for real.
+4. **Windows hang off `AXWindows`, not `AXChildren`.** An application element's
+   children are its menu bar.
 
 ## Testing
 
 ```bash
-cargo test
+cargo test --workspace          # 400 tests, no permissions needed
+./scripts/doctor.sh             # environmental checks
+./scripts/test-real-apps.sh     # drives TextEdit and Safari, skips cleanly if absent
+./scripts/verify-shell-bridge.sh # rewrites a command line in a real zsh
+./scripts/bench-latency.sh      # criterion benchmarks against live applications
+cargo bench -p ax-edit --bench gate  # latency regression gate
 ```
 
-`edit-intent` carries the interesting cases: commands whose search text contains
-the joiner word ("change to do to todo"), case-insensitive matching because
-speech recognition does not reproduce on-screen casing, whitespace cleanup after
-a deletion, and non-ASCII input where lowercasing changes a string's byte length
-and naive byte slicing would panic.
+The fuzz suite found a real panic and a silent over-edit within minutes of being
+written, which is the entire argument for having it.
 
-## Not yet built
+## Licence
 
-- Speech recognition. M0 deliberately isolates the operating-system risk first.
-- Windows (`UIAutomation` `TextPattern`) and Linux (`zwp_input_method_v2`)
-  backends.
-- The clipboard-paste fallback for read-only fields. The strategy is detected
-  and reported; the fallback itself belongs in the application, which owns the
-  clipboard.
-- An undo stack. Aqua's edits are stackable; rewriting `AXValue` resets the host
-  application's undo, so the client must keep its own.
+MIT for all code. Model weights carry their own licences and are documented
+separately in [`docs/asr-integration.md`](docs/asr-integration.md) and
+[`docs/llm.md`](docs/llm.md).

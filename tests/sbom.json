@@ -1,0 +1,51 @@
+{
+  "bomFormat": "CycloneDX",
+  "specVersion": "1.5",
+  "version": 1,
+  "serialNumber": "urn:uuid:9910a221-e483-451c-bfc1-cdd9479913da",
+  "metadata": {
+    "timestamp": "2026-07-28T00:43:44.200803000Z",
+    "tools": [
+      {
+        "vendor": "CycloneDX",
+        "name": "cargo-cyclonedx",
+        "version": "0.5.9"
+      }
+    ],
+    "component": {
+      "type": "library",
+      "bom-ref": "path+file:///Users/blare/aqua-oss-spike/tests#workspace-tests@0.1.0",
+      "name": "workspace-tests",
+      "version": "0.1.0",
+      "description": "Cross-crate integration tests: the seams between crates, where every hard bug so far has lived",
+      "scope": "required",
+      "licenses": [
+        {
+          "expression": "MIT"
+        }
+      ],
+      "purl": "pkg:cargo/workspace-tests@0.1.0?download_url=file://.",
+      "components": [
+        {
+          "type": "library",
+          "bom-ref": "path+file:///Users/blare/aqua-oss-spike/tests#workspace-tests@0.1.0 bin-target-0",
+          "name": "workspace_tests",
+          "version": "0.1.0",
+          "purl": "pkg:cargo/workspace-tests@0.1.0?download_url=file://.#lib.rs"
+        }
+      ]
+    },
+    "properties": [
+      {
+        "name": "cdx:rustc:sbom:target:triple",
+        "value": "aarch64-apple-darwin"
+      }
+    ]
+  },
+  "components": [],
+  "dependencies": [
+    {
+      "ref": "path+file:///Users/blare/aqua-oss-spike/tests#workspace-tests@0.1.0"
+    }
+  ]
+}
