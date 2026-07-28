@@ -37,6 +37,7 @@ pub mod inject;
 pub mod instance;
 pub mod menubar;
 pub mod menuhost;
+pub mod mic;
 pub mod pipeline;
 pub mod recognize;
 pub mod runtime;

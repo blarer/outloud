@@ -18,6 +18,7 @@
 
 use asr::Recognizer;
 use diag::timing::Recorder;
+use hexad::mic::Mic;
 use hexad::pipeline::{self, Config};
 use hexad::recognize;
 use hexad::source;
@@ -274,19 +275,17 @@ fn main() -> anyhow::Result<()> {
             // Frontends: file replay replaces BOTH the hotkey and the mic;
             // a mic-driven --once needs no hotkey (VAD endpoints commit);
             // the full daemon binds the hotkey and opens the mic.
-            let mut _capture = None;
+            let mut mic = None;
             match file_samples {
                 Some(samples) => {
                     source::spawn_wav(samples, args.realtime, ftx.clone());
                 }
                 None => {
-                    // `?`, not a log-and-continue: a daemon that came up
-                    // without capture would sit there looking healthy and
-                    // never hear a word. Failing here says why, once.
-                    _capture = Some(source::spawn_mic(
-                        ftx.clone(),
-                        runtime_for_pipeline.clone(),
-                    )?);
+                    // The microphone is NOT opened here. The pipeline opens
+                    // it on key-down and closes it on commit, so the system's
+                    // recording indicator means "dictating right now" rather
+                    // than "this app is running". See crates/hexad/src/mic.rs.
+                    mic = Some(Mic::new(ftx.clone(), runtime_for_pipeline.clone()));
                     if args.once {
                         // No key to hold: capture starts immediately.
                         let _ = ftx.send(source::FrontendEvent::KeyDown);
@@ -312,7 +311,19 @@ fn main() -> anyhow::Result<()> {
             }
 
             let mut recorder = Recorder::new();
-            let reports = pipeline::run(cfg, engine, frx, arx, feed, rrx, &mut recorder).await?;
+            let reports = pipeline::run(
+                cfg,
+                engine,
+                pipeline::Channels {
+                    frontend: frx,
+                    asr_events: arx,
+                    feed,
+                    ready: rrx,
+                    mic,
+                },
+                &mut recorder,
+            )
+            .await?;
 
             // The honest numbers, printed where a script can scrape them.
             for r in &reports {

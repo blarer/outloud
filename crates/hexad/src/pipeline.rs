@@ -81,15 +81,36 @@ struct InFlight {
 /// Run the supervisor until the frontend channel closes, or (in `once`
 /// mode) until the first utterance commits. Returns the reports of every
 /// committed utterance, plus a percentile summary via `recorder`.
+/// The wiring one run needs: where events arrive from and where audio goes.
+///
+/// Grouped into a struct rather than passed as loose parameters because
+/// they are one thing (the pipeline's plumbing) and they are always
+/// constructed together. It also keeps `run` under the argument-count lint,
+/// which was the nudge that made the grouping obvious.
+pub struct Channels {
+    pub frontend: UnboundedReceiver<FrontendEvent>,
+    pub asr_events: UnboundedReceiver<AsrEvent>,
+    pub feed: AudioFeed,
+    pub ready: tokio::sync::oneshot::Receiver<anyhow::Result<&'static str>>,
+    /// The microphone, when this run owns one. `None` for file-driven and
+    /// test runs, which supply their own samples and must never open a
+    /// device.
+    pub mic: Option<crate::mic::Mic>,
+}
+
 pub async fn run(
     cfg: Config,
     mut engine: Engine,
-    mut frontend: UnboundedReceiver<FrontendEvent>,
-    mut asr_events: UnboundedReceiver<AsrEvent>,
-    feed: AudioFeed,
-    ready: tokio::sync::oneshot::Receiver<anyhow::Result<&'static str>>,
+    channels: Channels,
     recorder: &mut Recorder,
 ) -> anyhow::Result<Vec<UtteranceReport>> {
+    let Channels {
+        mut frontend,
+        mut asr_events,
+        feed,
+        ready,
+        mut mic,
+    } = channels;
     let mut reports = Vec::new();
     let mut segmenter = new_segmenter();
     let mut listening = false;
@@ -185,6 +206,21 @@ pub async fn run(
                             eprintln!("hexad: edit mode on selection: \"{selected}\"");
                         }
                         segmenter = new_segmenter();
+                        // Open the device HERE, not at startup. Holding a
+                        // stream open all session lights the system's
+                        // recording indicator permanently, which tells the
+                        // user they are being recorded while idle. See
+                        // crates/hexad/src/mic.rs.
+                        if let Some(m) = mic.as_mut() {
+                            if let Err(e) = m.open() {
+                                eprintln!("hexad: could not open the microphone: {e}");
+                                engine.transition(
+                                    OverlayState::Error,
+                                    Some("could not open the microphone -> check Privacy settings".into()),
+                                );
+                                continue;
+                            }
+                        }
                         in_flight = Some(InFlight { mode, released_at: Instant::now() });
                         if recognizer_ready {
                             listening = true;
@@ -203,6 +239,12 @@ pub async fn run(
                     FrontendEvent::KeyUp => {
                         if listening {
                             commit(&mut engine, &mut segmenter, &feed, &mut in_flight, &mut listening);
+                            // Release the device as soon as the user stops
+                            // speaking, so the recording indicator tracks
+                            // dictation rather than uptime.
+                            if let Some(m) = mic.as_mut() {
+                                m.close();
+                            }
                         }
                     }
                     FrontendEvent::Chunk(samples) => {
@@ -224,6 +266,12 @@ pub async fn run(
                         }
                         if endpoint && cfg.auto_endpoint {
                             commit(&mut engine, &mut segmenter, &feed, &mut in_flight, &mut listening);
+                            // Same release as the key-up path: every route
+                            // out of listening must close the device, or a
+                            // silence-committed utterance leaves it open.
+                            if let Some(m) = mic.as_mut() {
+                                m.close();
+                            }
                         }
                     }
                     FrontendEvent::CaptureUp(device) => {
@@ -452,9 +500,20 @@ mod tests {
             once: true,
             auto_endpoint: false,
         };
-        let reports = run(cfg, engine, frx, arx, feed, rrx, &mut recorder)
-            .await
-            .unwrap();
+        let reports = run(
+            cfg,
+            engine,
+            Channels {
+                frontend: frx,
+                asr_events: arx,
+                feed,
+                ready: rrx,
+                mic: None,
+            },
+            &mut recorder,
+        )
+        .await
+        .unwrap();
         assert_eq!(reports.len(), 1);
         let r = &reports[0];
         assert!(!r.transcript.is_empty(), "voiced audio must transcribe");
@@ -491,9 +550,20 @@ mod tests {
             once: true,
             auto_endpoint: false,
         };
-        let reports = run(cfg, engine, frx, arx, feed, rrx, &mut recorder)
-            .await
-            .unwrap();
+        let reports = run(
+            cfg,
+            engine,
+            Channels {
+                frontend: frx,
+                asr_events: arx,
+                feed,
+                ready: rrx,
+                mic: None,
+            },
+            &mut recorder,
+        )
+        .await
+        .unwrap();
         assert!(reports.is_empty());
         assert_eq!(shared.snapshot().state, OverlayState::Idle);
     }
@@ -512,9 +582,20 @@ mod tests {
             once: true,
             auto_endpoint: false,
         };
-        let err = run(cfg, engine, frx, arx, feed, rrx, &mut recorder)
-            .await
-            .unwrap_err();
+        let err = run(
+            cfg,
+            engine,
+            Channels {
+                frontend: frx,
+                asr_events: arx,
+                feed,
+                ready: rrx,
+                mic: None,
+            },
+            &mut recorder,
+        )
+        .await
+        .unwrap_err();
         assert!(err.to_string().contains("no helper"));
         assert_eq!(shared.snapshot().state, OverlayState::Error);
         // The error must carry a named next action.

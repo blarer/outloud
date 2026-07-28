@@ -1,0 +1,114 @@
+//! Microphone lifetime: open it to dictate, close it the moment we stop.
+//!
+//! The daemon used to open the input stream at startup and hold it for the
+//! whole session, discarding samples whenever the hotkey was not held. The
+//! audio genuinely was thrown away, but that is invisible to the person
+//! using the machine: macOS shows its orange recording indicator for as long
+//! as a stream is open, so the tray said idle while the system said "this
+//! app is listening to you", all day. Competing dictation tools do not do
+//! that, and a user is right to read it as the tool recording them.
+//!
+//! "Trust me, the samples are discarded" is exactly the kind of claim this
+//! product refuses to make (docs/ux/00-principles.md: settings-as-proof,
+//! claims a user can check). So the stream is now opened on key-down and
+//! closed on commit, which makes the orange dot mean precisely what the user
+//! thinks it means: the microphone is on ONLY while they are dictating.
+//!
+//! The cost is stream startup latency on each utterance. That is acceptable
+//! because it overlaps the user beginning to speak: nobody starts a word in
+//! the same millisecond they press a key, and the VAD discards the leading
+//! silence anyway.
+
+use tokio::sync::mpsc::UnboundedSender;
+
+use crate::runtime::RuntimeShared;
+use crate::source::{self, FrontendEvent};
+
+/// Owns the capture stream when one is open.
+///
+/// Not a plain `Option<CaptureHandle>` in the pipeline because the invariant
+/// worth protecting is "closed unless dictating", and giving it a name means
+/// the one place that opens a stream and the one place that closes it are
+/// both obvious.
+pub struct Mic {
+    /// How to start capture. Held rather than captured once, because the
+    /// stream is rebuilt for every utterance.
+    events: UnboundedSender<FrontendEvent>,
+    runtime: RuntimeShared,
+    open: Option<audio::capture::CaptureHandle>,
+}
+
+impl Mic {
+    pub fn new(events: UnboundedSender<FrontendEvent>, runtime: RuntimeShared) -> Mic {
+        Mic {
+            events,
+            runtime,
+            open: None,
+        }
+    }
+
+    pub fn is_open(&self) -> bool {
+        self.open.is_some()
+    }
+
+    /// Open the stream if it is not already open.
+    ///
+    /// Idempotent, because a key-down that arrives while an utterance is
+    /// still finalizing must not stack two streams on one device.
+    pub fn open(&mut self) -> anyhow::Result<()> {
+        if self.open.is_some() {
+            return Ok(());
+        }
+        self.open = Some(source::spawn_mic(
+            self.events.clone(),
+            self.runtime.clone(),
+        )?);
+        Ok(())
+    }
+
+    /// Close the stream, releasing the device and clearing the system's
+    /// recording indicator.
+    ///
+    /// Called on every path that leaves the listening state, including the
+    /// error paths: a failed utterance that left the microphone open would
+    /// be the worst version of this bug, since it is both invisible and
+    /// unbounded.
+    pub fn close(&mut self) {
+        if let Some(handle) = self.open.take() {
+            handle.stop();
+        }
+    }
+}
+
+impl Drop for Mic {
+    fn drop(&mut self) {
+        // A daemon that exits mid-utterance must not leave the device held.
+        self.close();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The invariant this module exists for, stated as a test even though it
+    /// cannot open a real device here: a fresh `Mic` holds nothing, so the
+    /// system indicator is off until something explicitly opens it.
+    #[test]
+    fn a_new_mic_holds_no_stream() {
+        let (tx, _rx) = tokio::sync::mpsc::unbounded_channel();
+        let mic = Mic::new(tx, RuntimeShared::new());
+        assert!(!mic.is_open(), "the microphone must start closed");
+    }
+
+    #[test]
+    fn closing_an_unopened_mic_is_harmless() {
+        // Commit paths call close() unconditionally rather than checking
+        // first, so this has to be a no-op instead of a panic.
+        let (tx, _rx) = tokio::sync::mpsc::unbounded_channel();
+        let mut mic = Mic::new(tx, RuntimeShared::new());
+        mic.close();
+        mic.close();
+        assert!(!mic.is_open());
+    }
+}
