@@ -306,21 +306,24 @@ mod tests {
         // Aqua-parity silhouette: the shipping size must stay markedly
         // wider than tall. A future "size to fit the text" change that
         // squares the card off would lose the family resemblance.
-        assert!(
-            OVERLAY_SIZE.width >= OVERLAY_SIZE.height * 4.0,
-            "overlay {OVERLAY_SIZE:?} is too square to read as a floating bar"
-        );
+        const {
+            assert!(
+                OVERLAY_SIZE.width >= OVERLAY_SIZE.height * 4.0,
+                "the overlay is too square to read as a floating bar"
+            );
+        }
     }
 
     #[test]
     fn screen_margin_clears_the_card_radius() {
         // A rounded card inset by less than its own corner radius looks
         // jammed into the screen edge, and vanishes into rounded displays.
-        assert!(
-            SCREEN_MARGIN >= crate::theme::CARD_RADIUS - 4.0,
-            "margin {SCREEN_MARGIN} too small for radius {}",
-            crate::theme::CARD_RADIUS
-        );
+        const {
+            assert!(
+                SCREEN_MARGIN >= crate::theme::CARD_RADIUS - 4.0,
+                "screen margin is too small for the card's corner radius"
+            );
+        }
     }
 
     #[test]

@@ -275,6 +275,13 @@ pub fn meter_bar_height(shaped_level: f64, phase: f64) -> f64 {
 mod tests {
     use super::*;
 
+    /// Relative luminance, the cheap sRGB approximation (no gamma
+    /// linearisation). Good enough for the contrast tripwires below, and
+    /// `const` so those checks can run at compile time.
+    const fn luminance(c: Color) -> f64 {
+        0.2126 * c.r + 0.7152 * c.g + 0.0722 * c.b
+    }
+
     #[test]
     fn palette_matches_the_published_design_tokens() {
         // These hexes are transcribed from withaqua.com's stylesheet. If a
@@ -293,10 +300,14 @@ mod tests {
     #[test]
     fn card_is_translucent_ink() {
         assert_eq!(CARD_BG.hex(), 0x292C3D, "the card must be Aqua's ink");
-        assert!(
-            CARD_BG.a > 0.85 && CARD_BG.a < 1.0,
-            "opaque enough to read text over any content, translucent enough to read as an overlay"
-        );
+        // A const block, so a bad edit fails to compile rather than failing
+        // a test run someone might not have started.
+        const {
+            assert!(
+                CARD_BG.a > 0.85 && CARD_BG.a < 1.0,
+                "opaque enough to read over any content, translucent enough to read as an overlay"
+            );
+        }
     }
 
     #[test]
@@ -406,11 +417,13 @@ mod tests {
     fn first_feedback_animation_fits_the_latency_budget() {
         // UX principle 2: visible feedback within ~100ms of key-down. An
         // animation slower than that budget *is* perceived latency.
-        assert!(FADE_IN_MS <= 100, "fade-in eats the 100ms feedback budget");
-        assert!(
-            FADE_OUT_MS >= FADE_IN_MS,
-            "appearing must be snappier than disappearing"
-        );
+        const {
+            assert!(FADE_IN_MS <= 100, "fade-in eats the 100ms feedback budget");
+            assert!(
+                FADE_OUT_MS >= FADE_IN_MS,
+                "appearing must be snappier than disappearing"
+            );
+        }
     }
 
     #[test]
@@ -418,35 +431,35 @@ mod tests {
         // Cheap luminance check, not a full WCAG computation: the point is
         // to catch someone darkening the label or lightening the card into
         // an unreadable pair, which review by screenshot routinely misses.
-        let lum = |c: Color| 0.2126 * c.r + 0.7152 * c.g + 0.0722 * c.b;
-        assert!(
-            lum(LABEL_COLOR) - lum(CARD_BG) > 0.6,
-            "label/card contrast collapsed"
-        );
-        // The tail is dimmer on purpose, but must stay legible.
-        assert!(
-            TAIL_COLOR.a >= 0.55,
-            "provisional text must remain readable"
-        );
-        assert!(
-            TAIL_COLOR.a < 1.0,
-            "provisional text must be visibly weaker than committed text"
-        );
+        const {
+            assert!(
+                luminance(LABEL_COLOR) - luminance(CARD_BG) > 0.6,
+                "label/card contrast collapsed"
+            );
+            // The tail is dimmer on purpose, but must stay legible.
+            assert!(TAIL_COLOR.a >= 0.55, "provisional text must stay readable");
+            assert!(
+                TAIL_COLOR.a < 1.0,
+                "provisional text must be visibly weaker than committed text"
+            );
+        }
     }
 
     #[test]
     fn type_scale_keeps_the_label_dominant() {
-        assert!(
-            LABEL_FONT_SIZE > TAIL_FONT_SIZE,
-            "the state label is the thing read at a glance"
-        );
-        assert!(
-            LABEL_FONT_WEIGHT > TAIL_FONT_WEIGHT,
-            "weight, not just size, carries the hierarchy"
-        );
-        assert!(
-            !TAIL_MONOSPACE,
-            "dictated prose is prose, not console output"
-        );
+        const {
+            assert!(
+                LABEL_FONT_SIZE > TAIL_FONT_SIZE,
+                "the state label is the thing read at a glance"
+            );
+            assert!(
+                LABEL_FONT_WEIGHT > TAIL_FONT_WEIGHT,
+                "weight, not just size, carries the hierarchy"
+            );
+            assert!(
+                !TAIL_MONOSPACE,
+                "dictated prose is prose, not console output"
+            );
+        }
     }
 }
