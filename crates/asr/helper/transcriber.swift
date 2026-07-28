@@ -34,6 +34,15 @@ func fail(_ message: String) -> Never {
     exit(1)
 }
 
+/// A thread-safe boolean, because the reader thread sets it and the async
+/// task reads it after joining.
+final class Flag: @unchecked Sendable {
+    private let lock = NSLock()
+    private var value = false
+    func set() { lock.lock(); value = true; lock.unlock() }
+    func get() -> Bool { lock.lock(); defer { lock.unlock() }; return value }
+}
+
 let semaphore = DispatchSemaphore(value: 0)
 
 Task {
@@ -102,6 +111,10 @@ Task {
             fail("cannot build converter to \(audioFormat)")
         }
 
+        // Whether any audio ever reached the analyzer. See the guard before
+        // `inputBuilder.finish()` for why this matters.
+        let pushedAny = Flag()
+
         func pushSamples(_ data: Data) {
             let count = data.count / MemoryLayout<Float32>.size
             guard count > 0 else { return }
@@ -130,6 +143,7 @@ Task {
                 return
             }
             inputBuilder.yield(AnalyzerInput(buffer: outBuf))
+            pushedAny.set()
         }
 
         // Read stdin on a dedicated OS thread. The naive approach (reading
@@ -168,8 +182,22 @@ Task {
         }
 
         inputBuilder.finish()
-        try await analyzer.finalizeAndFinishThroughEndOfInput()
-        _ = await resultsTask.result
+        // `finalizeAndFinishThroughEndOfInput()` never returns when the
+        // analyzer was started but never received a single buffer: it waits
+        // on an end-of-input marker that only exists once audio has flowed.
+        // That happens for real whenever the user taps the hotkey without
+        // speaking, or releases before the segmenter's onset debounce
+        // elapses, and it wedged the whole daemon: the helper hung, aquad's
+        // 30s finalize deadline fired, and the overlay was left stuck in
+        // Transcribing before reporting a recognizer fault. An utterance
+        // with no audio has one honest answer, so give it directly.
+        if pushedAny.get() {
+            try await analyzer.finalizeAndFinishThroughEndOfInput()
+            _ = await resultsTask.result
+        } else {
+            resultsTask.cancel()
+            emit(["type": "final", "text": ""])
+        }
         emit(["type": "done"])
         semaphore.signal()
     } catch {

@@ -19,6 +19,13 @@ use crate::recognize::{AsrEvent, AudioFeed};
 use crate::source::FrontendEvent;
 use crate::state::Engine;
 
+/// How long an error panel stays on screen before dismissing itself.
+///
+/// Long enough to read one line, short enough that the daemon visibly
+/// returns to normal rather than looking wedged. Errors here are advisory:
+/// nothing is lost by clearing one, and the message is also on stderr.
+const ERROR_DISMISS_AFTER: std::time::Duration = std::time::Duration::from_secs(4);
+
 /// Supervisor behaviour knobs.
 pub struct Config {
     /// Exit after one committed utterance (the `--once` testing mode).
@@ -104,6 +111,13 @@ pub async fn run(
             // it (the worker sends `ready` before touching audio, but the
             // random-order select could still poll the channels first).
             biased;
+
+            // Tick only while an error is on screen, so the idle daemon is
+            // still fully event-driven. An error panel that only clears on
+            // the next key-down is indistinguishable from a hang.
+            _ = tokio::time::sleep(ERROR_DISMISS_AFTER), if engine.state() == OverlayState::Error => {
+                engine.dismiss_stale_error(ERROR_DISMISS_AFTER);
+            }
 
             // Recognizer readiness: ModelLoading -> Idle, or a named failure.
             r = &mut ready, if !recognizer_ready => {

@@ -53,6 +53,11 @@ struct HelperEvent {
     message: String,
 }
 
+/// How long `finalize` waits for the helper to flush and say `done` after
+/// stdin is closed. See the call site for why this is a liveness deadline
+/// rather than a generous work budget.
+const FINALIZE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
+
 /// Locate the helper binary: explicit override, then next to the current
 /// executable (release layout), then the in-repo build (dev layout).
 fn find_helper() -> Option<PathBuf> {
@@ -195,7 +200,15 @@ impl Recognizer for AppleRecognizer {
         // prints the remaining events then `done`.
         drop(self.stdin.take());
         let mut final_text = self.last_partial.clone().unwrap_or_default();
-        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+        // Deliberately short. This is a liveness deadline, not a work budget:
+        // by the time stdin is closed the helper has already been fed every
+        // sample, so it only has to flush the tail of an utterance the user
+        // just finished speaking. Anything past a few seconds means the OS
+        // speech stack is wedged, and the user is staring at a "transcribing"
+        // overlay the whole time, so failing fast with a named error beats
+        // waiting. It was 30s, which made one wedged helper look like the
+        // whole daemon had died.
+        let deadline = std::time::Instant::now() + FINALIZE_TIMEOUT;
         loop {
             let remaining = deadline.saturating_duration_since(std::time::Instant::now());
             match self.events.recv_timeout(remaining) {
@@ -205,7 +218,26 @@ impl Recognizer for AppleRecognizer {
                     "error" => anyhow::bail!("speech helper error: {}", ev.message),
                     _ => {}
                 },
-                Err(_) => anyhow::bail!("speech helper did not finish in time"),
+                Err(_) => {
+                    // Kill it rather than leaking a wedged child that still
+                    // holds the OS speech session; Drop would too, but the
+                    // error path below returns before then in the Ok case.
+                    let _ = self.child.kill();
+                    if final_text.is_empty() {
+                        anyhow::bail!(
+                            "speech helper did not finish within {FINALIZE_TIMEOUT:?} \
+                             -> press the hotkey again; if it keeps happening, rebuild \
+                             the helper (see crates/asr/helper) or run with --asr mock"
+                        );
+                    }
+                    // Partial text is better than losing the utterance: the
+                    // user spoke, we heard most of it, and the only thing
+                    // missing is the helper's own end-of-stream marker.
+                    eprintln!(
+                        "asr: speech helper stalled at finalize; committing the last partial"
+                    );
+                    break;
+                }
             }
         }
         let audio_secs = self.samples_fed as f32 / 16_000.0;
@@ -235,6 +267,43 @@ impl Drop for AppleRecognizer {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The regression that wedged the daemon: press the hotkey, say nothing,
+    /// release. Nothing was ever fed, so the helper's
+    /// `finalizeAndFinishThroughEndOfInput()` waited forever on an
+    /// end-of-input marker that only exists once audio has flowed. The user
+    /// saw the overlay stuck in "transcribing" until the Rust-side deadline
+    /// fired, then a bare "recognizer fault".
+    ///
+    /// Finalizing without a single sample must return promptly with an empty
+    /// transcript, which the supervisor already treats as the documented
+    /// silence path.
+    #[test]
+    #[ignore = "requires macOS 26 SpeechTranscriber and built helper"]
+    fn finalize_without_any_audio_returns_empty_and_does_not_hang() {
+        let started = std::time::Instant::now();
+        let mut rec = AppleRecognizer::new().expect("helper must start");
+        let t = rec.finalize().expect("empty utterance is not an error");
+        assert_eq!(t.text, "", "no audio can only transcribe to nothing");
+        assert_eq!(t.audio_secs, 0.0);
+        assert!(
+            started.elapsed() < FINALIZE_TIMEOUT,
+            "finalize must not ride the timeout; took {:?}",
+            started.elapsed()
+        );
+    }
+
+    /// A key tap so short the segmenter emits only a few frames must behave
+    /// the same way: fast return, no wedge.
+    #[test]
+    #[ignore = "requires macOS 26 SpeechTranscriber and built helper"]
+    fn finalize_after_a_sliver_of_audio_does_not_hang() {
+        let started = std::time::Instant::now();
+        let mut rec = AppleRecognizer::new().expect("helper must start");
+        rec.feed(&vec![0.0f32; 480]); // one 30ms frame of silence
+        let _ = rec.finalize().expect("silence is not an error");
+        assert!(started.elapsed() < FINALIZE_TIMEOUT);
+    }
 
     /// End-to-end against the real OS speech stack. Ignored by default:
     /// requires macOS 26+, the built helper, and the OS model asset. Run

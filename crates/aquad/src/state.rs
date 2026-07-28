@@ -37,6 +37,10 @@ impl StatusShared {
 /// table, publishes frames.
 pub struct Engine {
     state: OverlayState,
+    /// When the current state was entered. The supervisor uses this to
+    /// auto-dismiss error-shaped states, which otherwise sit on screen
+    /// until the user happens to press the hotkey again.
+    entered_at: std::time::Instant,
     shared: StatusShared,
     /// Live audio level, refreshed independently of state changes so the
     /// waveform animates between transitions.
@@ -58,6 +62,7 @@ impl Engine {
         (
             Engine {
                 state: OverlayState::ModelLoading,
+                entered_at: std::time::Instant::now(),
                 shared: shared.clone(),
                 level: 0.0,
                 partial: String::new(),
@@ -84,6 +89,7 @@ impl Engine {
             return;
         }
         self.state = next;
+        self.entered_at = std::time::Instant::now();
         // Entering a state clears per-utterance data unless the caller is
         // continuing one (Listening -> Transcribing keeps the partial tail
         // so the user sees what will be committed).
@@ -107,6 +113,29 @@ impl Engine {
 
     pub fn saw_illegal_transition(&self) -> bool {
         self.saw_illegal
+    }
+
+    /// How long the engine has been in its current state.
+    pub fn time_in_state(&self) -> std::time::Duration {
+        self.entered_at.elapsed()
+    }
+
+    /// Dismiss an error-shaped state back to Idle once the user has had time
+    /// to read it.
+    ///
+    /// Without this, `Error` only exits on the *next* key-down, so a failed
+    /// utterance leaves a panel on screen indefinitely: releasing the hotkey
+    /// does nothing, which reads as a hang rather than as a reported error.
+    /// Errors state a situation and an action (UX principle 4); neither needs
+    /// to be acknowledged, so time is the right dismissal.
+    ///
+    /// `NoPermission` is deliberately excluded: it is not transient, and it
+    /// tells the user to go change a system setting, which takes longer than
+    /// any timeout worth having.
+    pub fn dismiss_stale_error(&mut self, after: std::time::Duration) {
+        if self.state == OverlayState::Error && self.time_in_state() >= after {
+            self.transition(OverlayState::Idle, None);
+        }
     }
 
     fn publish(&self, detail: Option<String>) {
@@ -157,6 +186,45 @@ mod tests {
         e.transition(Idle, None); // named exit per UX principle 4
         assert_eq!(e.state(), Idle);
         assert!(!e.saw_illegal_transition());
+    }
+
+    #[test]
+    fn error_dismisses_itself_after_the_timeout() {
+        let (mut e, shared) = Engine::new();
+        e.transition(Idle, None);
+        e.transition(Listening, None);
+        e.transition(Error, Some("recognizer fault -> try again".into()));
+
+        // Not yet: the user must have time to read it.
+        e.dismiss_stale_error(std::time::Duration::from_secs(60));
+        assert_eq!(e.state(), Error, "dismissed before the user could read it");
+
+        // Zero elapsed-time requirement stands in for the timeout firing.
+        e.dismiss_stale_error(std::time::Duration::ZERO);
+        assert_eq!(e.state(), Idle);
+        assert_eq!(shared.snapshot().state, Idle);
+        assert!(!e.saw_illegal_transition());
+    }
+
+    #[test]
+    fn dismissal_leaves_non_error_states_alone() {
+        let (mut e, _s) = Engine::new();
+        e.transition(Idle, None);
+        e.transition(Listening, None);
+        // A slow utterance must never be cut short by the error timer.
+        e.transition(Transcribing, None);
+        e.dismiss_stale_error(std::time::Duration::ZERO);
+        assert_eq!(e.state(), Transcribing);
+    }
+
+    /// NoPermission tells the user to go change a system setting, which
+    /// takes longer than any timeout worth having, so it must persist.
+    #[test]
+    fn permission_state_is_never_auto_dismissed() {
+        let (mut e, _s) = Engine::new();
+        e.transition(NoPermission, None);
+        e.dismiss_stale_error(std::time::Duration::ZERO);
+        assert_eq!(e.state(), NoPermission);
     }
 
     #[test]
