@@ -315,3 +315,89 @@ mod tests {
         assert_eq!(m.feed(VK_SPACE, true), None);
     }
 }
+
+/// State-space tests for the hook-recovery contract.
+///
+/// The Windows hook can be removed by the OS mid-gesture with no
+/// notification (docs/hotkeys.md). The watchdog's job is to make that
+/// survivable, and the property that matters is not "we reinstalled" but
+/// **the microphone never stays hot**. These exercise the exact
+/// matcher+machine pair the hook callback drives, so the guarantee is
+/// tested on every platform rather than argued in a comment.
+#[cfg(test)]
+mod recovery_tests {
+    use super::*;
+    use crate::chord::Chord;
+    use crate::taphold::{HotkeyEvent, TapHold, Timing};
+    use std::time::Instant;
+
+    fn chord(s: &str) -> Chord {
+        s.parse().unwrap()
+    }
+
+    /// The exact disaster the watchdog exists to prevent: the key goes
+    /// down, the hook dies while it is held, and the key-UP is therefore
+    /// never observed. Without a reset the machine stays in "capturing"
+    /// forever, which means a live microphone with no way to stop it.
+    #[test]
+    fn recovery_closes_a_capture_whose_key_up_was_swallowed() {
+        let mut m = WinMatcher::new(&chord("right-option")).unwrap();
+        let mut machine = TapHold::new(Timing::default());
+        let t0 = Instant::now();
+
+        assert_eq!(m.feed(VK_RMENU, true), Some(Edge::Down));
+        // Capture starts on the DOWN edge: push-to-talk must not wait for a
+        // threshold, or the first word of every utterance is lost.
+        assert_eq!(machine.on_key_down(t0), vec![HotkeyEvent::Pressed]);
+        assert!(machine.capturing(), "the microphone is now live");
+
+        // ---- the hook dies here; the key-up is never delivered ----
+        // Without recovery the machine would sit in Pressed forever.
+
+        // What the watchdog does on detection.
+        m.reset();
+        let recovered = machine.reset();
+
+        assert!(
+            !machine.capturing(),
+            "the machine must not be left capturing after recovery: a stuck \
+             capture is a permanently hot microphone"
+        );
+        assert_eq!(
+            recovered,
+            vec![HotkeyEvent::Released],
+            "recovery must TELL the daemon capture ended, not just flip an \
+             internal flag: the pipeline stops recording on Released"
+        );
+
+        // And the binding must be usable again immediately afterwards.
+        assert_eq!(m.feed(VK_RMENU, true), Some(Edge::Down));
+        assert_eq!(m.feed(VK_RMENU, false), Some(Edge::Up));
+    }
+
+    /// A reset while genuinely idle must not invent a Released event, or
+    /// the daemon would try to commit an utterance nobody spoke.
+    #[test]
+    fn recovery_while_idle_emits_nothing() {
+        let mut machine = TapHold::new(Timing::default());
+        assert!(machine.reset().is_empty());
+    }
+
+    /// After recovery the matcher must not believe a key is still down:
+    /// a stale "down" would swallow the user's next press (the edge would
+    /// be suppressed as a typematic repeat) and the hotkey would look dead.
+    #[test]
+    fn recovery_does_not_swallow_the_next_press() {
+        let mut m = WinMatcher::new(&chord("ctrl+space")).unwrap();
+        m.feed(VK_LCONTROL, true);
+        assert_eq!(m.feed(VK_SPACE, true), Some(Edge::Down));
+
+        m.reset(); // hook died and was reinstalled
+
+        // Modifiers must be re-pressed (we cannot know what is held), and
+        // then the chord fires normally rather than being eaten.
+        m.feed(VK_LCONTROL, true);
+        assert_eq!(m.feed(VK_SPACE, true), Some(Edge::Down));
+        assert_eq!(m.feed(VK_SPACE, false), Some(Edge::Up));
+    }
+}
