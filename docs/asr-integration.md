@@ -7,7 +7,7 @@ was chosen, what its licence means for us, and how to add a backend.
 
 M0 measured the OS integration at ~47ms of an 800ms end-to-end budget. The
 remaining ~750ms belongs to the recognizer, and the research
-(`../hexavoice-voice-research/02-local-asr-tech.md` §2, §5) says the winning shape
+(`../outloud-voice-research/02-local-asr-tech.md` §2, §5) says the winning shape
 is two recognizers, not one:
 
 ```mermaid
@@ -82,7 +82,7 @@ download, model RAM charged to the system.
 ## Model and licence audit
 
 The app is MIT. Code licences below are all MIT-compatible. Model *weights*
-are separate artifacts fetched at runtime into `~/.hexavoice/models`, never
+are separate artifacts fetched at runtime into `~/.outloud/models`, never
 vendored into this repository, so weight licences constrain distribution of
 downloaded bundles, not this codebase.
 

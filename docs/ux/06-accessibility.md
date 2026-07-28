@@ -3,7 +3,7 @@
 This tool is not an app *with* accessibility features. It **is** assistive
 technology. A meaningful fraction of users will arrive because typing hurts
 (RSI), is impossible (motor impairment), or because writing by keyboard fights
-their brain (dyslexia — Hexavoice's founder is dyslexic and built the product for
+their brain (dyslexia — OutLoud's founder is dyslexic and built the product for
 himself). For these users the tool is not a 4x-faster convenience, it is the
 input method. Every design in `00`–`05` gets audited against that stake.
 
@@ -25,7 +25,7 @@ grows with each keystroke. Their goal is *fewer and easier* physical acts.
   and Bluetooth accessibility buttons enumerate as keys/HID and the hotkey
   picker accepts them like any key. Tremor accommodation: the tap/hold
   discrimination threshold (300ms default) and a debounce for repeated
-  unintended presses are both adjustable under Advanced, and `hexavoice doctor`
+  unintended presses are both adjustable under Advanced, and `outloud doctor`
   includes a "hotkey timing test" that measures the user's own tap and
   recommends thresholds rather than making them guess numbers.
 - **No interaction anywhere requires the mouse.** Onboarding, settings,
@@ -44,12 +44,12 @@ grows with each keystroke. Their goal is *fewer and easier* physical acts.
 The strictest case: a user who cannot use a keyboard at all, for whom the
 hotkey itself is a barrier. The product must close the loop with voice alone.
 
-- **Wake word ("hey hexavoice") is the activation path**, which is exactly why
+- **Wake word ("hey outloud") is the activation path**, which is exactly why
   voice activation exists despite being off by default
   (`02-core-interaction.md`). For this audience the setup wizard offers a
   "voice-only mode" preset during onboarding that enables the wake word,
   latched capture, and spoken confirmations in one choice.
-- **A voice command grammar covers the control surface**: "hey hexavoice, stop
+- **A voice command grammar covers the control surface**: "hey outloud, stop
   listening / undo that / show commands / open settings / switch to accurate
   model / go to sleep" (arms a longer wake-word-only state). The grammar is
   the same intent pipeline, so it inherits deterministic parsing and the
@@ -115,7 +115,7 @@ transcribing your screen reader is nonsense output at best).
 
 Our own surfaces must also be readable: the overlay, wizard, settings, and
 TUI carry correct roles/labels; every state the tray glyph shows also exists
-as an announced, queryable text state (`hexavoice status` and AX label); the TUI
+as an announced, queryable text state (`outloud status` and AX label); the TUI
 is a first-class path for screen-reader users on Linux consoles with
 `espeakup`/`fenrir` (`04-terminal-and-headless.md`).
 

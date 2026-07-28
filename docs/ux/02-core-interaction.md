@@ -12,7 +12,7 @@ Three candidate models, one default:
 because it makes the microphone state *physically embodied*: the mic is hot
 exactly while a finger is down. No mode to forget, no trailing capture, no
 voice-activated false triggers in a meeting. It also gives us a free, natural
-commit signal (key-up), which the insertion model below leans on. Hexavoice and
+commit signal (key-up), which the insertion model below leans on. OutLoud and
 Wispr both default to hold-to-talk; users arriving from either carry the habit.
 
 **Toggle (tap to start, tap to stop)** is offered for long-form dictation and
@@ -24,7 +24,7 @@ work with zero configuration, and the overlay shows which mode it's in
 mode a hard silence timeout (default 60s, configurable) is a safety net against
 the forgotten hot mic.
 
-**Voice activation ("hey hexavoice") is off by default** and lives behind settings.
+**Voice activation ("hey outloud") is off by default** and lives behind settings.
 An always-on microphone contradicts the trust story (principle 3) badly enough
 that it must be an explicit, informed opt-in with a persistent tray badge while
 armed. It exists because zero-keyboard operation requires it
@@ -35,7 +35,7 @@ armed. It exists because zero-keyboard operation requires it
 - Default: **Right Option (macOS) / Right Ctrl (Windows/Linux)**. Bare
   modifiers don't collide with app shortcuts, are reachable one-handed, and
   holding a modifier alone is otherwise meaningless, so PTT steals nothing.
-  Hexavoice's Fn default is unavailable to third parties reliably enough; we don't
+  OutLoud's Fn default is unavailable to third parties reliably enough; we don't
   copy it.
 - The picker is *press-to-set*: focus the field, press the desired key or
   chord, done. F13–F19 and multi-key chords supported for keyboards that have
@@ -94,7 +94,7 @@ over the overlay entirely (`04-terminal-and-headless.md`).
 - **Partial text tail**: the last ~60 chars of the current hypothesis, single
   line, middle-truncated from the left. Not the full transcript; the app's
   own field is the source of truth once text commits.
-- **Latency, on demand**: hovering (or `hexavoice doctor`) shows the per-stage
+- **Latency, on demand**: hovering (or `outloud doctor`) shows the per-stage
   numbers (read / recognize / write). Not shown by default; measured always.
 
 The overlay appears on key-down within one frame and vanishes at commit. Its

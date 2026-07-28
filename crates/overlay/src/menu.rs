@@ -13,7 +13,7 @@
 //!   the same state machine rather than inventing a parallel one.
 //! * The **menu** is a plain tree of [`MenuItem`]s carrying opaque
 //!   [`MenuId`]s. The overlay crate therefore knows nothing about
-//!   configuration, permissions, or diagnostics: the host (hexad) builds the
+//!   configuration, permissions, or diagnostics: the host (outloud) builds the
 //!   model, maps ids back to its own actions, and stays the only place where
 //!   policy lives. That is what keeps this crate compiling headless, where
 //!   there is no menu bar to put anything in.

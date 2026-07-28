@@ -13,7 +13,7 @@
 # committed, and HEAD failed with
 #
 #     error[E0277]: the `?` operator can only be applied to values that
-#     implement `Try` --> crates/hexad/src/main.rs:286
+#     implement `Try` --> crates/outloud/src/main.rs:286
 #
 # while `cargo test` passed for every person who ran it locally.
 #
@@ -24,7 +24,7 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-WORK="$(mktemp -d "${TMPDIR:-/tmp}/hexavoice-verify-head.XXXXXX")"
+WORK="$(mktemp -d "${TMPDIR:-/tmp}/outloud-verify-head.XXXXXX")"
 # Always clean up the clone, including on failure: a stale multi-gigabyte
 # target directory per invocation would fill the disk within a few runs.
 trap 'rm -rf "$WORK"' EXIT
@@ -79,8 +79,8 @@ cargo check --quiet --workspace --no-default-features
 
 # A crate directory that is not a workspace member compiles for nobody and
 # tests for nobody, so anything inside it is dead weight that still looks
-# present. That happened here mid-rename: `crates/hexad` existed while the
-# members list still said `crates/aquad`, so a test living in hexad was never
+# present. That happened here mid-rename: `crates/outloud` existed while the
+# members list still said `crates/aquad`, so a test living in outloud was never
 # built and a whole class of check silently did nothing.
 echo "==> every crate directory is a workspace member"
 ORPHANS=""

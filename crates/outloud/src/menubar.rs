@@ -203,7 +203,7 @@ pub fn build(status: &Status, settings: &Settings) -> (MenuModel, Vec<Action>) {
     {
         items.push(MenuItem::Separator);
         items.push(MenuItem::Label(
-            "Hexavoice needs Accessibility to see the hotkey and write text.".into(),
+            "OutLoud needs Accessibility to see the hotkey and write text.".into(),
         ));
         let id = add(
             &mut actions,
@@ -220,7 +220,7 @@ pub fn build(status: &Status, settings: &Settings) -> (MenuModel, Vec<Action>) {
     if status.input_monitoring_blocked {
         items.push(MenuItem::Separator);
         items.push(MenuItem::Label(
-            "Hexavoice needs Input Monitoring to see the hotkey.".into(),
+            "OutLoud needs Input Monitoring to see the hotkey.".into(),
         ));
         let id = add(
             &mut actions,
@@ -232,7 +232,7 @@ pub fn build(status: &Status, settings: &Settings) -> (MenuModel, Vec<Action>) {
     }
     if status.microphone_blocked {
         items.push(MenuItem::Label(
-            "Hexavoice cannot open the microphone.".into(),
+            "OutLoud cannot open the microphone.".into(),
         ));
         let id = add(
             &mut actions,
@@ -326,7 +326,7 @@ pub fn build(status: &Status, settings: &Settings) -> (MenuModel, Vec<Action>) {
 
     items.push(MenuItem::Separator);
     let id = add(&mut actions, Action::Quit);
-    items.push(MenuItem::action("Quit Hexavoice", id));
+    items.push(MenuItem::action("Quit OutLoud", id));
 
     // The glyph must answer "is it on?" without a click, which is the whole
     // reason the tray surface exists. A daemon whose Accessibility grant was
@@ -452,21 +452,21 @@ fn status_line(status: &Status) -> String {
         // Name the specific grant. "Permission needed" sends a user to the
         // wrong pane, which is precisely how this bug wasted an afternoon.
         if status.input_monitoring_blocked {
-            return "Hexavoice: Input Monitoring permission needed".into();
+            return "OutLoud: Input Monitoring permission needed".into();
         }
         if status.accessibility_blocked {
-            return "Hexavoice: Accessibility permission needed".into();
+            return "OutLoud: Accessibility permission needed".into();
         }
     }
     match status.state {
-        OverlayState::Idle => "Hexavoice: ready".into(),
-        OverlayState::Listening => "Hexavoice: listening".into(),
-        OverlayState::Transcribing => "Hexavoice: transcribing…".into(),
-        OverlayState::Injecting => "Hexavoice: inserting text".into(),
-        OverlayState::Error => "Hexavoice: error".into(),
-        OverlayState::NoPermission => "Hexavoice: permission needed".into(),
-        OverlayState::ModelLoading => "Hexavoice: loading model…".into(),
-        OverlayState::DegradedOffline => "Hexavoice: ready (offline)".into(),
+        OverlayState::Idle => "OutLoud: ready".into(),
+        OverlayState::Listening => "OutLoud: listening".into(),
+        OverlayState::Transcribing => "OutLoud: transcribing…".into(),
+        OverlayState::Injecting => "OutLoud: inserting text".into(),
+        OverlayState::Error => "OutLoud: error".into(),
+        OverlayState::NoPermission => "OutLoud: permission needed".into(),
+        OverlayState::ModelLoading => "OutLoud: loading model…".into(),
+        OverlayState::DegradedOffline => "OutLoud: ready (offline)".into(),
     }
 }
 
@@ -476,7 +476,7 @@ mod tests {
 
     fn settings() -> Settings {
         Settings {
-            config_path: Some(PathBuf::from("/home/u/.config/hexavoice/config.toml")),
+            config_path: Some(PathBuf::from("/home/u/.config/outloud/config.toml")),
             ..Settings::default()
         }
     }

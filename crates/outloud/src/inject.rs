@@ -75,7 +75,7 @@ pub fn mode_at_keydown() -> Mode {
                 // Logged, not silent: an elevated window in focus (UIPI)
                 // looks exactly like "nothing selected" otherwise, and the
                 // user deserves to know why edit-by-voice went quiet.
-                eprintln!("hexad: could not read the focused element ({e}); assuming dictation");
+                eprintln!("outloud: could not read the focused element ({e}); assuming dictation");
                 Mode::Dictate
             }
         }
@@ -231,7 +231,7 @@ fn deliver_via_tiers(mode: &Mode, text: &str) -> Outcome {
             }
             Err(e) => e.to_string(),
         };
-        eprintln!("hexad: UI Automation write refused ({uia_err}); falling back");
+        eprintln!("outloud: UI Automation write refused ({uia_err}); falling back");
 
         // Tier 3: SendInput. Insert-only, so an edit that reaches here
         // would APPEND the rewritten text next to the original rather than
@@ -248,7 +248,7 @@ fn deliver_via_tiers(mode: &Mode, text: &str) -> Outcome {
                         via: "windows-sendinput".into(),
                     }
                 }
-                Err(e) => eprintln!("hexad: SendInput refused ({e}); falling back to clipboard"),
+                Err(e) => eprintln!("outloud: SendInput refused ({e}); falling back to clipboard"),
             }
         }
 
@@ -448,7 +448,7 @@ fn replace_selection(rewritten: &str) -> Outcome {
 fn deliver_without_ax(text: &str, ax_err: &AxError) -> Outcome {
     // Logged, not just folded into the outcome: the fallback usually
     // succeeds, and the AX refusal that caused it would otherwise vanish.
-    eprintln!("hexad: AX write path refused ({ax_err}); typing it instead");
+    eprintln!("outloud: AX write path refused ({ax_err}); typing it instead");
 
     // Tier 1: type it. Leaves the clipboard alone entirely.
     match ax_edit::synth::type_text(text) {
@@ -458,7 +458,9 @@ fn deliver_without_ax(text: &str, ax_err: &AxError) -> Outcome {
                 via: "synthetic-keys".into(),
             }
         }
-        Err(e) => eprintln!("hexad: keystroke synthesis refused ({e}); falling back to clipboard"),
+        Err(e) => {
+            eprintln!("outloud: keystroke synthesis refused ({e}); falling back to clipboard")
+        }
     }
 
     #[cfg(feature = "display")]

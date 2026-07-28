@@ -97,7 +97,7 @@ pub fn spawn(
     let dropped = Arc::new(std::sync::atomic::AtomicU64::new(0));
 
     std::thread::Builder::new()
-        .name("hexad-asr".into())
+        .name("outloud-asr".into())
         .spawn(move || worker(make_recognizer, rx, events, ready))
         .expect("spawning recognizer thread");
 

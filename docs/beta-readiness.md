@@ -40,7 +40,7 @@ than taken on trust.
 ## Recommendation: **CONDITIONAL GO**, but not from today's `HEAD`
 
 Go, for a **source-install beta on macOS 26+, capped at people who can run a
-shell command**, **once the pending Hexavoice rename is committed**. All three
+shell command**, **once the pending OutLoud rename is committed**. All three
 blockers are cleared in substance: the broken install path and the undocumented
 Gatekeeper reality were fixed here, and the single-instance guard was
 implemented and tested here.
@@ -52,7 +52,7 @@ for anyone cloning. See the boxed note under B1 for the reproduction. It
 resolves the moment the rename commit lands, at which point the README, the
 quickstart, and the docs test all become correct and mutually enforcing. Do not
 ship from a commit where `./scripts/verify-head.sh` and
-`cargo test -p hexad --test docs_paths` have not both been run on a fresh clone.
+`cargo test -p outloud --test docs_paths` have not both been run on a fresh clone.
 
 **This verdict covers macOS only, and is not the whole picture.** The release QA
 assessment in [`release-readiness.md`](release-readiness.md) reaches a stricter
@@ -70,7 +70,7 @@ around. The conditional in "conditional go" is that sentence and nothing else.
 
 Every blocker and every major except one were closed during this assessment,
 most of them in code rather than in prose. The remaining open item is M8, which
-is a sequencing decision rather than a bug: the rename to Hexavoice changes the
+is a sequencing decision rather than a bug: the rename to OutLoud changes the
 bundle identifier, and TCC keys grants by identifier, so every permission an
 existing tester has granted stops applying. That costs nothing if the rename
 lands before any stranger installs, and is entirely self-inflicted if it lands
@@ -89,14 +89,14 @@ walked start to finish on a clean clone, following the corrected README
 verbatim with no other steps:
 
 ```
-$ git clone <repo> && cd hexavoice
-$ ./scripts/bundle-hexad-macos.sh
-==> Building hexad (release)
+$ git clone <repo> && cd outloud
+$ ./scripts/bundle-outloud-macos.sh
+==> Building outloud (release)
 ==> Building the speech helper
-    dist/Hexavoice.app: valid on disk
-Built: dist/Hexavoice.app
+    dist/OutLoud.app: valid on disk
+Built: dist/OutLoud.app
 
-$ ./dist/Hexavoice.app/Contents/MacOS/Hexavoice --once --say "hello from a local dictation daemon" --no-overlay
+$ ./dist/OutLoud.app/Contents/MacOS/OutLoud --once --say "hello from a local dictation daemon" --no-overlay
 e2e: release->text 383ms (finalize 326ms, inject 56.6ms) via synthetic-keys | "Hello from a local dictation demon."
 RC=0
 ```
@@ -123,39 +123,39 @@ the Swift speech helper, so the recognizer is absent.
 Reproduction, from a genuinely fresh clone:
 
 ```
-$ git clone /Users/blare/hexavoice-spike /tmp/lobster-fresh && cd /tmp/lobster-fresh
+$ git clone /Users/blare/outloud-spike /tmp/lobster-fresh && cd /tmp/lobster-fresh
 $ cargo build --release
     Finished `release` profile [optimized] target(s) in 39.86s
 
-$ ./target/release/hexad --once --say "the rain in spain falls mainly on the plain" --no-overlay
-hexad: state model-loading
-Error: recognizer failed to load (hexavoice-speech-helper not found; build it with `swiftc -O crates/asr/helper/transcriber.swift -o hexavoice-speech-helper` or set HEXA_SPEECH_HELPER) -> build the speech helper (see crates/asr/helper) or run with --asr mock
+$ ./target/release/outloud --once --say "the rain in spain falls mainly on the plain" --no-overlay
+outloud: state model-loading
+Error: recognizer failed to load (outloud-speech-helper not found; build it with `swiftc -O crates/asr/helper/transcriber.swift -o outloud-speech-helper` or set OUTLOUD_SPEECH_HELPER) -> build the speech helper (see crates/asr/helper) or run with --asr mock
 RC=1
 ```
 
 The plain daemon, which is the README's "Using it" step, dies the same way:
 
 ```
-$ ./target/release/hexad --no-overlay
-hexad: state model-loading
-hexad: hold right-option to dictate
-hexad: state error (recognizer failed to load (hexavoice-speech-helper not found ...))
+$ ./target/release/outloud --no-overlay
+outloud: state model-loading
+outloud: hold right-option to dictate
+outloud: state error (recognizer failed to load (outloud-speech-helper not found ...))
 RC=1
 ```
 
 > **Name note, added after the fact.** These transcripts were captured while
-> the Aqua-to-Hexavoice rename was mid-flight, so the tool genuinely printed
-> `hexavoice-speech-helper` at the time. The shipped name is
+> the Aqua-to-OutLoud rename was mid-flight, so the tool genuinely printed
+> `outloud-speech-helper` at the time. The shipped name is
 > `aqua-speech-helper`: `crates/asr/src/backends/apple.rs` looks for that
 > exact filename, so the helper deliberately did not follow the product
 > rename. The transcripts are left verbatim because a record of a real run
 > that has been edited afterwards is no longer evidence; only this note is
 > new. Anything you TYPE should use `aqua-speech-helper`.
 
-Cause: `crates/asr/helper/hexavoice-speech-helper` is a compiled artifact and is
+Cause: `crates/asr/helper/outloud-speech-helper` is a compiled artifact and is
 gitignored, there is no `build.rs` anywhere in the workspace (`find crates -name
 build.rs` returns nothing), and the only thing that ever invokes `swiftc` is
-`scripts/bundle-hexad-macos.sh`. The README pointed at `scripts/bundle-macos.sh`,
+`scripts/bundle-outloud-macos.sh`. The README pointed at `scripts/bundle-macos.sh`,
 which packages `spike-cli`, not the daemon. This stayed invisible to the team
 because every development tree already has a stale helper binary in the
 gitignored path.
@@ -163,13 +163,13 @@ gitignored path.
 The correct script does work, from the same fresh clone:
 
 ```
-$ ./scripts/bundle-hexad-macos.sh
+$ ./scripts/bundle-outloud-macos.sh
 ==> Building the speech helper
 ...
-$ ls dist/Hexavoice.app/Contents/MacOS/
-Hexavoice                 hexavoice-speech-helper
+$ ls dist/OutLoud.app/Contents/MacOS/
+OutLoud                 outloud-speech-helper
 
-$ ./dist/Hexavoice.app/Contents/MacOS/Hexavoice --once --say "the rain in spain falls mainly on the plain" --no-overlay
+$ ./dist/OutLoud.app/Contents/MacOS/OutLoud --once --say "the rain in spain falls mainly on the plain" --no-overlay
 e2e: release->text 193ms (finalize 145ms, inject 48.0ms) via synthetic-keys | "The rain in Spain falls mainly on the plain."
 ```
 
@@ -177,14 +177,14 @@ Independently reproduced by release QA, which also confirmed the packaged path
 transcribes correctly. That is the severity-limiting fact: the artifact works,
 only the documented from-source path was broken.
 
-**Fixed here** by pointing the README at `bundle-hexad-macos.sh`, naming the
+**Fixed here** by pointing the README at `bundle-outloud-macos.sh`, naming the
 Xcode Command Line Tools prerequisite, and changing the "Using it" examples to
 run the bundled binary.
 
 **Not fixed, and should be before beta:** two ways this still bites.
 
-1. `bundle-hexad-macos.sh` warns rather than fails when `swiftc` is missing
-   ("hexad will start but cannot transcribe"). A release process can scroll
+1. `bundle-outloud-macos.sh` warns rather than fails when `swiftc` is missing
+   ("outloud will start but cannot transcribe"). A release process can scroll
    past that and ship a bundle with no recognizer.
 2. The helper is rebuilt only when the source is newer than the binary
    (`[[ ! -x "$HELPER_BIN" || "$HELPER_SRC" -nt "$HELPER_BIN" ]]`), so a stale
@@ -194,26 +194,26 @@ A `build.rs` was considered and rejected, for good reasons: it would put a
 non-hermetic external compiler in the build graph and threaten the `repro`
 job's byte-identical guarantee. The scripts-and-docs fix is the right one.
 
-**B1 regressed once and was re-fixed.** The Hexavoice rename renamed
-`bundle-hexad-macos.sh` to `bundle-hexad-macos.sh` but left the README pointing
+**B1 regressed once and was re-fixed.** The OutLoud rename renamed
+`bundle-outloud-macos.sh` to `bundle-outloud-macos.sh` but left the README pointing
 at the old name, so the documented install broke again in exactly the same
 place:
 
 ```
-$ ./scripts/bundle-hexad-macos.sh
-bash: ./scripts/bundle-hexad-macos.sh: No such file or directory
+$ ./scripts/bundle-outloud-macos.sh
+bash: ./scripts/bundle-outloud-macos.sh: No such file or directory
 ```
 
 Re-fixed and re-verified end to end on the renamed tree:
 
 ```
-$ ./scripts/bundle-hexad-macos.sh
-==> Building hexad (release)
+$ ./scripts/bundle-outloud-macos.sh
+==> Building outloud (release)
 ==> Building the speech helper
-Built: .../dist/Hexavoice.app
-$ ./dist/Hexavoice.app/Contents/MacOS/Hexavoice --version
-hexad 0.1.0
-$ ./dist/Hexavoice.app/Contents/MacOS/Hexavoice --once --say "..." --no-overlay
+Built: .../dist/OutLoud.app
+$ ./dist/OutLoud.app/Contents/MacOS/OutLoud --version
+outloud 0.1.0
+$ ./dist/OutLoud.app/Contents/MacOS/OutLoud --once --say "..." --no-overlay
 e2e: release->text 352ms ... | "Hello from a local dictation demon."
 ```
 
@@ -224,17 +224,17 @@ script that does not exist, and a beta user is precisely the person who finds
 out first. It is the highest-value untested thing left.
 
 > **STATUS AT TIME OF WRITING: B1 IS BROKEN AT `HEAD`, AND THIS ASSESSMENT
-> BROKE IT.** The rename to Hexavoice exists only in the working tree; it has
-> not been committed. This document's author saw `scripts/bundle-hexad-macos.sh`
-> and `crates/hexad/` locally, assumed the rename had landed, and committed a
+> BROKE IT.** The rename to OutLoud exists only in the working tree; it has
+> not been committed. This document's author saw `scripts/bundle-outloud-macos.sh`
+> and `crates/outloud/` locally, assumed the rename had landed, and committed a
 > README naming the new script. It does not exist at `HEAD`:
 >
 > ```
 > $ git clone <repo> /tmp/audit && cd /tmp/audit
-> $ grep -n 'bundle-hexad' README.md
-> 99:./scripts/bundle-hexad-macos.sh
-> $ ls scripts/bundle-hexad-macos.sh
-> ls: cannot access 'scripts/bundle-hexad-macos.sh': No such file or directory
+> $ grep -n 'bundle-outloud' README.md
+> 99:./scripts/bundle-outloud-macos.sh
+> $ ls scripts/bundle-outloud-macos.sh
+> ls: cannot access 'scripts/bundle-outloud-macos.sh': No such file or directory
 > ```
 >
 > So a stranger cloning right now hits exactly this blocker. It resolves the
@@ -242,11 +242,11 @@ out first. It is the highest-value untested thing left.
 > test all become correct together at that point. Until then, **treat B1 as
 > open, not fixed.**
 >
-> The docs test did not catch it, for a reason worth knowing: `crates/hexad`
+> The docs test did not catch it, for a reason worth knowing: `crates/outloud`
 > exists at `HEAD` as a directory but is not in the workspace `members` list,
 > which still names `crates/aquad`. So `cargo test --workspace` never compiles
 > it (`grep -c docs_paths` returns 0). The test becomes live, and this class of
-> error becomes impossible, as soon as the workspace points at `hexad`.
+> error becomes impossible, as soon as the workspace points at `outloud`.
 >
 > Recorded rather than quietly fixed because it is the third instance of one
 > pattern in a single session: **a tree that has both halves of a change tells
@@ -265,7 +265,7 @@ this commit.**
 The bundle is ad-hoc signed with no team identifier:
 
 ```
-$ codesign -dv --verbose=2 dist/Hexavoice.app
+$ codesign -dv --verbose=2 dist/OutLoud.app
 Identifier=dev.hexavoice.hexad
 CodeDirectory v=20400 size=5322 flags=0x2(adhoc) hashes=160+3 location=embedded
 Signature=adhoc
@@ -275,12 +275,12 @@ TeamIdentifier=not set
 Gatekeeper rejects it:
 
 ```
-$ spctl -a -vvv -t exec dist/Hexavoice.app
-dist/Hexavoice.app: rejected
+$ spctl -a -vvv -t exec dist/OutLoud.app
+dist/OutLoud.app: rejected
 RC=3
 
-$ stapler validate dist/Hexavoice.app
-Hexavoice.app does not have a ticket stapled to it.
+$ stapler validate dist/OutLoud.app
+OutLoud.app does not have a ticket stapled to it.
 ```
 
 Simulating a browser download by applying the quarantine flag, then
@@ -320,20 +320,20 @@ Nothing prevents two daemons running at once. Both bind the same hotkey and
 both open the microphone:
 
 ```
-$ ./target/release/hexad --asr mock --no-overlay &   # instance A
-$ ./target/release/hexad --asr mock --no-overlay &   # instance B
-$ pgrep -fl 'target/release/hexad'
-91059 ./target/release/hexad --asr mock --no-overlay
-91072 ./target/release/hexad --asr mock --no-overlay
+$ ./target/release/outloud --asr mock --no-overlay &   # instance A
+$ ./target/release/outloud --asr mock --no-overlay &   # instance B
+$ pgrep -fl 'target/release/outloud'
+91059 ./target/release/outloud --asr mock --no-overlay
+91072 ./target/release/outloud --asr mock --no-overlay
 ```
 
 Both logs report a successful bind and an open capture device:
 
 ```
 === A ===                                    === B ===
-hexad: hold right-option to dictate          hexad: hold right-option to dictate
-hexad: recognizer ready: mock                hexad: recognizer ready: mock
-hexad: capturing from Jessie's AirPods #2    hexad: capturing from Jessie's AirPods #2
+outloud: hold right-option to dictate          outloud: hold right-option to dictate
+outloud: recognizer ready: mock                outloud: recognizer ready: mock
+outloud: capturing from Jessie's AirPods #2    outloud: capturing from Jessie's AirPods #2
 ```
 
 Neither warns. Neither mentions the other.
@@ -344,9 +344,9 @@ the default right-option), then a single press and release:
 
 ```
 === A ===                        === B ===
-hexad: state idle                hexad: state idle
-hexad: state listening    <---   hexad: state listening    <--- both hot
-hexad: state idle                hexad: state idle
+outloud: state idle                outloud: state idle
+outloud: state listening    <---   outloud: state listening    <--- both hot
+outloud: state idle                outloud: state idle
 ```
 
 Both entered `listening` from the same keypress, meaning **two processes had
@@ -356,7 +356,7 @@ would inject their transcript into the focused field.
 This is realistic, not contrived. A user starts the `.app`, forgets, and later
 runs the daemon from a terminal to see logs. Or launch-at-login starts one and
 they start another. The quickstart actively encourages the second case: "To
-watch the logs instead of running detached: `./target/release/hexad --no-overlay`".
+watch the logs instead of running detached: `./target/release/outloud --no-overlay`".
 
 There is also a related crash with no guard at all. Two `--once` runs at the
 same time collide on a shared temp file:
@@ -369,11 +369,11 @@ Error: ExtAudioFileCreateWithURL failed (-48)
 Error: afconvert failed
 ```
 
-`-48` is `dupFNErr`. Both processes write `$TMPDIR/hexad-say/utterance.aiff`.
+`-48` is `dupFNErr`. Both processes write `$TMPDIR/outloud-say/utterance.aiff`.
 Only affects `--say`, which is a test path, but it shows the same missing
 assumption.
 
-**Fixed in this assessment.** `crates/hexad/src/instance.rs` takes an advisory
+**Fixed in this assessment.** `crates/outloud/src/instance.rs` takes an advisory
 `flock(LOCK_EX | LOCK_NB)` on a lock file in `$XDG_RUNTIME_DIR` (else the temp
 directory) before anything is bound or opened, so a refused start cannot
 disturb the daemon already running.
@@ -391,19 +391,19 @@ Before and after, same commands:
 
 ```
 BEFORE
-$ ./target/release/hexad --asr mock --no-overlay &   # A
-$ ./target/release/hexad --asr mock --no-overlay &   # B
-$ pgrep -f 'release/hexad' | wc -l
+$ ./target/release/outloud --asr mock --no-overlay &   # A
+$ ./target/release/outloud --asr mock --no-overlay &   # B
+$ pgrep -f 'release/outloud' | wc -l
 2                                    <- both running, both hot on one keypress
 
 AFTER
-$ ./target/release/hexad --asr mock --no-overlay &   # A
-$ ./target/release/hexad --asr mock --no-overlay     # B
-Error: hexad is already running (pid 17138). Quit it from the menu bar, or
+$ ./target/release/outloud --asr mock --no-overlay &   # A
+$ ./target/release/outloud --asr mock --no-overlay     # B
+Error: outloud is already running (pid 17138). Quit it from the menu bar, or
 `kill 17138`, then start this one. Running two copies makes both record you
 and both type what you said.
 B exit code: 1
-$ pgrep -f 'release/hexad' | wc -l
+$ pgrep -f 'release/outloud' | wc -l
 1
 ```
 
@@ -454,10 +454,10 @@ Will not stop a beta, but will generate support load.
 Before the fix:
 
 ```
-$ ./target/release/hexad --version
+$ ./target/release/outloud --version
 Error: unknown argument --version (try --help)
 RC=1
-$ ./target/release/hexad -V
+$ ./target/release/outloud -V
 Error: unknown argument -V (try --help)
 RC=1
 ```
@@ -465,10 +465,10 @@ RC=1
 After, verified against a rebuilt binary:
 
 ```
-$ ./target/release/hexad --version
-hexad 0.1.0
+$ ./target/release/outloud --version
+outloud 0.1.0
 RC=0
-$ ./target/release/hexad --help | grep -i version
+$ ./target/release/outloud --help | grep -i version
 --version        print the version and exit
 ```
 
@@ -489,8 +489,8 @@ Before this commit, `grep -i uninstall` across the repo matched only
 `scripts/build-windows.sh`. The untested platform had an uninstaller; the only
 working platform did not.
 
-Removing Hexavoice by hand means knowing about five locations, three of them
-invisible: the app bundle, `~/.config/hexavoice`, `~/.hexavoice/models`, the TCC
+Removing OutLoud by hand means knowing about five locations, three of them
+invisible: the app bundle, `~/.config/outloud`, `~/.outloud/models`, the TCC
 grants, and a line appended to the user's `.zshrc`. That last one is the worst:
 `shell-bridge install` writes an absolute path into the rc file and has no
 uninstall verb.
@@ -498,9 +498,9 @@ uninstall verb.
 ```
 $ ./target/release/shell-bridge install
 installed into /Users/blare/.zshrc
-$ grep -A1 'hexavoice shell-bridge' ~/.zshrc
-# hexavoice shell-bridge
-[ -f "/Users/blare/hexavoice-spike/shell/hexavoice.zsh" ] && source "/Users/blare/hexavoice-spike/shell/hexavoice.zsh"
+$ grep -A1 'outloud shell-bridge' ~/.zshrc
+# outloud shell-bridge
+[ -f "/Users/blare/outloud-spike/shell/outloud.zsh" ] && source "/Users/blare/outloud-spike/shell/outloud.zsh"
 
 $ ./target/release/shell-bridge uninstall
 usage: shell-bridge <serve|intent|status|peek|install|print-plugin-path> [flags]
@@ -518,7 +518,7 @@ Verified in a sandboxed fake `HOME`, ten assertions, all passing:
 PASS: app bundles removed
 PASS: model dir removed
 PASS: config KEPT without --purge
-PASS: hexavoice line gone from .zshrc
+PASS: outloud line gone from .zshrc
 PASS: user EDITOR line survived
 PASS: user PAGER line survived
 PASS: user alias survived
@@ -534,8 +534,8 @@ The `.zshrc` before and after, showing surgical removal:
 export EDITOR=vim                                 export EDITOR=vim
 alias gs='git status'                             alias gs='git status'
 
-# hexavoice shell-bridge                        --->
-[ -f "/x/shell/hexavoice.zsh" ] && source ...
+# outloud shell-bridge                        --->
+[ -f "/x/shell/outloud.zsh" ] && source ...
 
 # more of the user's own settings                 # more of the user's own settings
 export PAGER=less                                 export PAGER=less
@@ -553,7 +553,7 @@ documents why this matters:
 > the trust check is cached per process while the real permission lives with the
 > *responsible* process
 
-So a user who toggles Accessibility off while Hexavoice is running gets a daemon that
+So a user who toggles Accessibility off while OutLoud is running gets a daemon that
 still believes it is trusted, silently degrades to clipboard paste or fails, and
 does not say why. The `NoPermission` state exists in the state machine and the
 menu bar renders it, but nothing drives a transition into it after launch.
@@ -588,14 +588,14 @@ proposed:
 
 Verified on the real thing, not only in tests: an ad-hoc build genuinely lost
 its grant when its `cdhash` changed on rebuild, and the running app showed the
-amber warning triangle, the tooltip "Hexavoice: Accessibility permission needed",
+amber warning triangle, the tooltip "OutLoud: Accessibility permission needed",
 and the row that opens the pane. The recovery direction is covered by unit test
 rather than live, because `TCC.db` is not readable, correctly.
 
 Related, from the same agent: the single-instance refusal now also shows a
 **dialog** when stderr is not a terminal. The message this assessment added was
 only ever seen by someone watching a terminal, and a bundled launch has none,
-so double-clicking `Hexavoice.app` while a daemon was already running still appeared
+so double-clicking `OutLoud.app` while a daemon was already running still appeared
 to do nothing at all. The wording and the menu-bar-first ordering are unchanged.
 
 ### M4. Stale ASR helper process, trigger unidentified
@@ -608,14 +608,14 @@ after its parent died:
 
 ```
   PID  PPID STARTED                       ELAPSED COMMAND
-45677     1 Tue Jul 28 01:07:42 2026     07:46:20 .../hexavoice-speech-helper
+45677     1 Tue Jul 28 01:07:42 2026     07:46:20 .../outloud-speech-helper
 ```
 
 Wedged on a semaphore in `main`:
 
 ```
 1728 Thread_1453639   DispatchQueue_1: com.apple.main-thread  (serial)
-+ 1728 main  (in hexavoice-speech-helper) + 188
++ 1728 main  (in outloud-speech-helper) + 188
 +   1728 _dispatch_semaphore_wait_slow  (in libdispatch.dylib) + 132
 +     1728 semaphore_wait_trap  (in libsystem_kernel.dylib) + 8
 ```
@@ -630,7 +630,7 @@ mid-utterance with the hotkey still held:
 helpers mid-utterance: 45677 92273
 --- kill -9 daemon WHILE key still held ---
 --- helpers after ---
-45677     1 07:50:24 .../hexavoice-speech-helper       <- only the pre-existing one
+45677     1 07:50:24 .../outloud-speech-helper       <- only the pre-existing one
 ```
 
 92273 exited correctly. 16 of 16 clean between both agents. The code is more
@@ -657,7 +657,7 @@ exists.
 When it finds something, it says so rather than tidying up silently:
 
 ```
-hexad: cleaned up 1 stale speech helper(s) from a previous run
+outloud: cleaned up 1 stale speech helper(s) from a previous run
 ```
 
 Verified against a real orphaned helper, in a scratch directory under a
@@ -670,7 +670,7 @@ helper pids after: (none)
 PASS: SIGTERM reaps a stale helper
 
 === the other agent's real helper must be UNTOUCHED ===
-32936 .../Hexavoice.app/Contents/MacOS/hexavoice-speech-helper     <- still alive
+32936 .../OutLoud.app/Contents/MacOS/outloud-speech-helper     <- still alive
 ```
 
 The pid-selection logic is split from the killing so it can be unit-tested
@@ -696,7 +696,7 @@ e2e: release->text 215ms (finalize 158ms, inject 56.9ms) via synthetic-keys
 
 Release QA independently measured 223ms and 349ms. Every observation exceeded
 the top of the advertised range. The claim is not wildly wrong, and the
-comparison to Hexavoice's ~450ms still holds comfortably, but a beta README must not
+comparison to OutLoud's ~450ms still holds comfortably, but a beta README must not
 overstate. Corrected to **131-215ms** with an explanation that the spread
 depends on the transport.
 
@@ -708,7 +708,7 @@ The starter config is generated with all 16 settings listed and documented.
 Thirteen of them do nothing. They are accepted without warning and changing
 them has no observable effect.
 
-The menu bar is honest about this, and deliberately so. `crates/hexad/src/
+The menu bar is honest about this, and deliberately so. `crates/outloud/src/
 menubar.rs` carries a test gate:
 
 ```rust
@@ -738,7 +738,7 @@ e2e: release->text 147ms ... via synthetic-keys | "Streaming mode test."
 ```
 
 The `stream` crate is fully built (`session.rs`, `undo.rs`, coalescing, a
-commit horizon) but `crates/hexad/Cargo.toml` does not depend on it at all, so
+commit horizon) but `crates/outloud/Cargo.toml` does not depend on it at all, so
 the setting cannot possibly work. Independently noted in
 [`competitive-analysis.md`](competitive-analysis.md).
 
@@ -754,7 +754,7 @@ mention that its choice was ignored:
 
 ```
 $ printf 'microphone = "no-such-device-at-all"\n' > config.toml
-hexad: capturing from MacBook Pro Microphone
+outloud: capturing from MacBook Pro Microphone
 ```
 
 A user who sets that and hears nothing has no way to learn the setting was
@@ -774,8 +774,8 @@ bundled app has no terminal to print one to. Verified against the built binary:
 
 ```
 $ printf 'schema-version = 1\nlanguage = "fr"\n' > config.toml
-$ ./target/release/hexad --asr mock --no-overlay
-hexad: config sets "language" but nothing reads it yet; it has no effect
+$ ./target/release/outloud --asr mock --no-overlay
+outloud: config sets "language" but nothing reads it yet; it has no effect
 ```
 
 Confirmed it reports only keys the user actually set rather than the twelve
@@ -788,9 +788,9 @@ constraint, or an unknown key, is collected for the menu and printed nowhere:
 
 ```
 $ printf 'schema-version = 1\nformatting.casing = "upper"\nnosuchkey = 1\n' > config.toml
-$ ./target/release/hexad --asr mock --no-overlay
-hexad: state model-loading
-hexad: hold right-option to dictate
+$ ./target/release/outloud --asr mock --no-overlay
+outloud: state model-loading
+outloud: hold right-option to dictate
 ...
 ```
 
@@ -855,7 +855,7 @@ reload, watcher polling, and model rebuilds carrying a device-change detail, and
 fails if the file changes. Verified passing:
 
 ```
-$ cargo test -p hexad nothing_but_a_click
+$ cargo test -p outloud nothing_but_a_click
 test menuhost::tests::nothing_but_a_click_writes_the_config ... ok
 ```
 
@@ -884,10 +884,10 @@ Being honest in both directions.
   makes doctor output mandatory and asks how the binary was launched and
   whether it was rebuilt since granting, which are precisely the two questions
   that separate a real bug from the environment. Refreshed here to name
-  `./scripts/doctor.sh` and `hexad --version` directly, both of which have
+  `./scripts/doctor.sh` and `outloud --version` directly, both of which have
   changed since the template was written, and to point at the README's new
   known-limitations list before someone files a known issue.
-- **First-run config generation.** With no `~/.config/hexavoice`, the daemon starts
+- **First-run config generation.** With no `~/.config/outloud`, the daemon starts
   clean and writes a fully commented file with every setting shown at its
   default and commented out. Deleting a line genuinely means "use the default".
   It is self-documenting and it is tested.
@@ -896,7 +896,7 @@ Being honest in both directions.
   that make this app class miserable to support.
 - **`shell-bridge install` is idempotent and guarded.** Running it three times
   produces one guarded line that no-ops if the file is missing.
-- **`bundle-hexad-macos.sh` output is excellent.** It tells the user where to
+- **`bundle-outloud-macos.sh` output is excellent.** It tells the user where to
   look in the menu bar, that there is no Dock icon by design, and what to do
   after a rebuild.
 - **Config migration is well designed** even though it is not yet reachable.
@@ -916,7 +916,7 @@ Landed in the README's "Known limitations" section in this commit:
 2. `cargo build` alone does not produce a working recognizer.
 3. ~~No single-instance guard.~~ Fixed; a second copy is refused and told
    which pid to quit.
-4. ~~No `--version` on the daemon.~~ Fixed; `hexad --version` prints `hexad 0.1.0`.
+4. ~~No `--version` on the daemon.~~ Fixed; `outloud --version` prints `outloud 0.1.0`.
 5. The Accessibility grant dies on every rebuild (cdhash pinning).
 6. ~~Revoking a permission while running is not noticed until relaunch.~~
    Fixed; the menu bar glyph changes within a second either way.
@@ -926,7 +926,7 @@ Landed in the README's "Known limitations" section in this commit:
    discarded without a message on the terminal.
 9. Freeform edits are not wired to the language model.
 10. Linux does not work; Windows compiles but has never been run.
-11. If you tested before the Hexavoice rename, your permission grants do not
+11. If you tested before the OutLoud rename, your permission grants do not
     carry over: re-grant Accessibility and Microphone, and remove the stale
     entry for the old name from System Settings by hand.
 
@@ -938,7 +938,7 @@ Ordered by user pain per unit of effort.
 
 | # | Action | Effort | Why it is where it is |
 |---|---|---|---|
-| 1 | ~~Point the README at `bundle-hexad-macos.sh`~~ | done | Every source install failed without it |
+| 1 | ~~Point the README at `bundle-outloud-macos.sh`~~ | done | Every source install failed without it |
 | 2 | ~~State the Gatekeeper reality in the README~~ | done | Silent failure with `open` returning 0 |
 | 3 | ~~Ship `scripts/uninstall-macos.sh`~~ | done | Testers must be able to leave |
 | 4 | ~~Correct the latency claim~~ | done | A false number in a beta README burns trust |
@@ -949,7 +949,7 @@ Ordered by user pain per unit of effort.
 | 9 | ~~Call `inert_settings()` at startup~~ | done | Twelve silent no-ops now announce themselves |
 | 9b | Print config *validation* warnings to stderr too, not only the menu | 1 line | An invalid value is currently discarded in silence |
 | 10 | Land the rename BEFORE any stranger installs, or write the re-grant step into the release notes | sequencing | Otherwise every existing tester's grants silently die (M8) |
-| 10 | Make `bundle-hexad-macos.sh` fail, not warn, without `swiftc` | 2 lines | Stops shipping a recognizer-less bundle |
+| 10 | Make `bundle-outloud-macos.sh` fail, not warn, without `swiftc` | 2 lines | Stops shipping a recognizer-less bundle |
 | 11 | Always rebuild the helper, or hash-check it | 2 lines | The staleness that hid blocker B1 |
 | 12 | `shell-bridge uninstall` | ~20 lines | Users should not need the sledgehammer script |
 | 13 | ~~Issue template asking for doctor output and version~~ | done | Turns "it doesn't work" into a diagnosis |
@@ -962,12 +962,12 @@ detection exists and is tested, it just has no call site yet.
 
 ---
 
-### M8. The Hexavoice rename voids every existing tester's permission grants
+### M8. The OutLoud rename voids every existing tester's permission grants
 
 **Frequency: 100% of anyone who tests before the rename and updates after.
 Status: partially handled; the rest is a release-sequencing decision.**
 
-The product is being renamed from Hexavoice to Hexavoice, which changes the bundle
+The product is being renamed from OutLoud to OutLoud, which changes the bundle
 identifier from `dev.hexavoice.hexad` to `dev.hexavoice.hexad`. TCC keys its
 grants by bundle identifier, verifiable directly:
 
@@ -999,8 +999,8 @@ naming generations, so an upgrader cannot strand the old app or orphan its
 grants:
 
 ```
-==> rm -rf .../dist/Hexavoice.app
-==> rm -rf .../dist/Hexavoice.app
+==> rm -rf .../dist/OutLoud.app
+==> rm -rf .../dist/OutLoud.app
 ==> tccutil reset Accessibility dev.hexavoice.hexad
 ==> tccutil reset Accessibility dev.hexavoice.hexad
 ```
@@ -1068,7 +1068,7 @@ each person's `cargo test` passed. Only a fresh clone saw the truth:
 ```
 $ git clone <repo> /tmp/check && cd /tmp/check && cargo test --workspace
 error[E0277]: the `?` operator can only be applied to values that implement `Try`
-   --> crates/hexad/src/main.rs:286:37
+   --> crates/outloud/src/main.rs:286:37
 ```
 
 This is the nastiest shape of failure available in a shared tree: the tree lies

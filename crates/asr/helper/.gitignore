@@ -1,7 +1,7 @@
 # The compiled Swift helper. A build artifact, never committed.
 #
 # Glob rather than one literal name: the product rename produced
-# hexa-speech-helper and hexavoice-speech-helper, neither of which matched
+# outloud-speech-helper and outloud-speech-helper, neither of which matched
 # the single old entry here, so both got committed as ~98KB binaries without
 # anyone noticing. Worse, a stale one on a developer's machine satisfies
 # find_helper()'s dev-layout fallback and masks a real name mismatch between

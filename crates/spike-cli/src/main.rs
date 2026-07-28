@@ -57,7 +57,7 @@ fn main() {
     //
     // LaunchServices detaches the process from the terminal, so output is
     // mirrored to a log file that the launching script can display.
-    let log_target = std::env::var("HEXA_SPIKE_LOG").ok();
+    let log_target = std::env::var("OUTLOUD_SPIKE_LOG").ok();
     if let Some(path) = &log_target {
         redirect_output_to(path);
     }

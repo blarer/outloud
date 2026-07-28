@@ -82,7 +82,7 @@ behavior that crosses a crate boundary belongs here.
 (whitelisted names only, never values), capability probe answers, transport
 selected and why, focused-field shape, intent shape, transformation geometry,
 write result, and per-stage timings. It serializes to a greppable
-line-oriented text format (`hexavoice-replay v1`).
+line-oriented text format (`outloud-replay v1`).
 
 Redaction is by construction: the `record_*` methods take raw values and
 store only what `diag::redact` leaves behind. There is no method that stores

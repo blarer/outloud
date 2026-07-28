@@ -68,7 +68,7 @@ cat > "$APP_DIR/Contents/Info.plist" <<PLIST
     <key>CFBundleName</key>
     <string>$APP_NAME</string>
     <key>CFBundleDisplayName</key>
-    <string>Hexavoice Spike</string>
+    <string>OutLoud Spike</string>
     <key>CFBundleIdentifier</key>
     <string>$BUNDLE_ID</string>
     <key>CFBundleExecutable</key>
@@ -84,7 +84,7 @@ cat > "$APP_DIR/Contents/Info.plist" <<PLIST
     <key>LSUIElement</key>
     <true/>
     <key>NSAppleEventsUsageDescription</key>
-    <string>Hexavoice Spike identifies the frontmost application to choose formatting rules.</string>
+    <string>OutLoud Spike identifies the frontmost application to choose formatting rules.</string>
 </dict>
 </plist>
 PLIST

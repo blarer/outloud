@@ -1,7 +1,7 @@
 //! The layered store: defaults <- system file <- user file <- profile <- env.
 //!
 //! Every resolved value carries the layer it came from, because "why is my
-//! hotkey not what I set" is unanswerable without provenance. `hexa status`
+//! hotkey not what I set" is unanswerable without provenance. `outloud status`
 //! and validation errors both consume the same [`Provenance`].
 
 use std::collections::BTreeMap;
@@ -11,9 +11,9 @@ use crate::profile::{select, AppIdentity, Profile, WinReason};
 use crate::schema::{self, KeySpec, Value};
 use crate::validate::{validate_document, ConfigError};
 
-/// The environment-variable prefix for overrides: `HEXA_HOTKEY` sets
+/// The environment-variable prefix for overrides: `OUTLOUD_HOTKEY` sets
 /// `hotkey`.
-pub const ENV_PREFIX: &str = "HEXA_";
+pub const ENV_PREFIX: &str = "OUTLOUD_";
 
 /// The previous product's prefix, still honoured. Frozen: this is history,
 /// not configuration.
@@ -25,7 +25,7 @@ pub const LEGACY_ENV_PREFIX: &str = "AQUA_";
 pub enum Layer {
     /// Compiled-in default from the schema table.
     Default,
-    /// The machine-wide file (e.g. /etc/hexavoice/config.toml), for managed
+    /// The machine-wide file (e.g. /etc/outloud/config.toml), for managed
     /// deployments. Carries the path actually read.
     SystemFile(PathBuf),
     /// The user's own config.toml.
@@ -33,7 +33,7 @@ pub enum Layer {
     /// A matched per-app profile; carries the profile name so the answer to
     /// "why" is "profile 'slack' in your config".
     Profile(String),
-    /// A `HEXA_*` (or legacy `AQUA_*`) environment variable; carries the
+    /// A `OUTLOUD_*` (or legacy `AQUA_*`) environment variable; carries the
     /// variable name. Highest
     /// precedence because env vars are how one-off debugging and CI say
     /// "just this run, do this".
@@ -123,8 +123,8 @@ impl Config {
             profiles.extend(parsed.profiles);
         }
 
-        // Environment overrides: HEXA_INSERTION_MODE -> insertion.mode.
-        // Unknown HEXA_ variables are reported, not ignored: a typo'd env
+        // Environment overrides: OUTLOUD_INSERTION_MODE -> insertion.mode.
+        // Unknown OUTLOUD_ variables are reported, not ignored: a typo'd env
         // override that silently does nothing is the same failure class as a
         // typo'd key.
         //
@@ -234,7 +234,7 @@ impl Config {
     }
 
     /// Which profile would apply to `app`, and why it won. Exposed so the
-    /// settings UI and `hexa status --json` explain profile selection with
+    /// settings UI and `outloud status --json` explain profile selection with
     /// the same logic that performs it.
     pub fn profile_for(&self, app: &AppIdentity) -> Option<(&Profile, WinReason)> {
         select(&self.profiles, app)
@@ -267,7 +267,7 @@ impl Config {
             .collect()
     }
 
-    /// Every known key with its provenance, for `hexa status --json` and the
+    /// Every known key with its provenance, for `outloud status --json` and the
     /// docs generator.
     pub fn all(&self, app: Option<&AppIdentity>) -> Vec<(&'static KeySpec, Provenance)> {
         schema::schema()
@@ -287,7 +287,7 @@ mod tests {
     use super::*;
 
     fn build(user: &str, env: &[(&str, &str)]) -> (Config, Vec<ConfigError>) {
-        let path = PathBuf::from("/home/u/.config/hexavoice/config.toml");
+        let path = PathBuf::from("/home/u/.config/outloud/config.toml");
         let env: BTreeMap<String, String> = env
             .iter()
             .map(|(k, v)| (k.to_string(), v.to_string()))
@@ -320,8 +320,8 @@ mod tests {
 
     #[test]
     fn system_file_sits_below_user_file() {
-        let sys_path = PathBuf::from("/etc/hexavoice/config.toml");
-        let user_path = PathBuf::from("/home/u/.config/hexavoice/config.toml");
+        let sys_path = PathBuf::from("/etc/outloud/config.toml");
+        let user_path = PathBuf::from("/home/u/.config/outloud/config.toml");
         let (cfg, _) = Config::build(
             Some((&sys_path, "model = \"fast\"\nlanguage = \"en\"\n")),
             Some((&user_path, "model = \"accurate\"\n")),
@@ -371,18 +371,18 @@ mod tests {
 
     #[test]
     fn unknown_env_var_is_reported_with_suggestion() {
-        let (_, warnings) = build("", &[("HEXA_HOTKYE", "fn")]);
+        let (_, warnings) = build("", &[("OUTLOUD_HOTKYE", "fn")]);
         assert_eq!(warnings.len(), 1);
         match &warnings[0] {
             ConfigError::UnknownKey {
                 key, suggestion, ..
             } => {
-                assert_eq!(key, "HEXA_HOTKYE");
+                assert_eq!(key, "OUTLOUD_HOTKYE");
                 // The suggestion names the CURRENT prefix even when the typo
                 // came in under the legacy one: telling an upgrader to fix
                 // their typo by keeping the deprecated spelling is advice
                 // that ages badly.
-                assert_eq!(suggestion.as_deref(), Some("HEXA_HOTKEY"));
+                assert_eq!(suggestion.as_deref(), Some("OUTLOUD_HOTKEY"));
             }
             other => panic!("expected UnknownKey, got {other}"),
         }
@@ -410,7 +410,7 @@ mod tests {
         // silently beat it.
         let (cfg, warnings) = build(
             "",
-            &[("AQUA_HOTKEY", "f13"), ("HEXA_HOTKEY", "right-option")],
+            &[("AQUA_HOTKEY", "f13"), ("OUTLOUD_HOTKEY", "right-option")],
         );
         assert!(warnings.is_empty(), "{warnings:?}");
         assert_eq!(

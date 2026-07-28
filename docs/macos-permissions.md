@@ -24,7 +24,7 @@ open -a dist/AquaSpike.app --args probe
 
 `scripts/run.sh` wraps this. Because LaunchServices detaches the process from
 the terminal, the binary mirrors its output to the file named by
-`HEXA_SPIKE_LOG` and the script tails it.
+`OUTLOUD_SPIKE_LOG` and the script tails it.
 
 This is not a workaround. It is how every real user starts a real application,
 so the shipping product is unaffected. It only bites during development, and it

@@ -94,7 +94,7 @@ No certificate authority is involved. Package signing uses your own GPG key.
 
 ```bash
 gpg --full-generate-key            # RSA 4096, no expiry or a long one
-gpg --armor --export KEYID > hexavoice-signing.asc
+gpg --armor --export KEYID > outloud-signing.asc
 ```
 
 Publish the public key alongside releases so users can verify. For Flathub,

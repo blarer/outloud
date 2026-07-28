@@ -1,7 +1,7 @@
 # Visual parity with Aqua Voice
 
 The goal of this document is narrow and concrete: make our surfaces *look*
-like Aqua Voice, to the point that someone who used Hexavoice yesterday feels at
+like Aqua Voice, to the point that someone who used OutLoud yesterday feels at
 home today, while keeping every place where our local-first design should
 deliberately diverge.
 
@@ -15,10 +15,10 @@ pixels, colours, radii, and timings.
 
 | Source | What it gave |
 |---|---|
-| `withaqua.com` stylesheet (`/_next/static/css/eefa388e02313efb.css`) | The **exact design tokens**: `.bg-cobalt`, `.bg-ink`, `.bg-hexavoice`, … as literal RGB values, plus the font stack and the radius scale |
+| `withaqua.com` stylesheet (`/_next/static/css/eefa388e02313efb.css`) | The **exact design tokens**: `.bg-cobalt`, `.bg-ink`, `.bg-outloud`, … as literal RGB values, plus the font stack and the radius scale |
 | `withaqua.com/images/icons/orb-128.png` | The brand "orb": pixel-sampled its gradient |
 | `aquavoice.com/info/faq` | The overlay's **name and appearance in their own words**: *"How do I hide the black floating bar at the bottom? Open Settings → System and toggle off 'Show Floating Bar'."* |
-| `aquavoice.com/changelog` | Design-system history: 0.15.1 "Refreshed the desktop app with Hexavoice's updated design system… Updated the loading and sign-in screens with the new Hexavoice orb"; 0.9.5 "Beginnings of a UI refresh"; 0.11.5 "The microphone UI no longer jumps around when recording"; 0.11.9 "Fixed Floating Bar positioning issue when in fullscreen" |
+| `aquavoice.com/changelog` | Design-system history: 0.15.1 "Refreshed the desktop app with OutLoud's updated design system… Updated the loading and sign-in screens with the new OutLoud orb"; 0.9.5 "Beginnings of a UI refresh"; 0.11.5 "The microphone UI no longer jumps around when recording"; 0.11.9 "Fixed Floating Bar positioning issue when in fullscreen" |
 | `aquavoice.com/llms.txt`, `/guide` | Settings section names, mode names (Instant / Realtime), latency figures |
 | 9to5Mac press image, App Store listing | Marketing-composited product imagery |
 
@@ -28,7 +28,7 @@ pixels, colours, radii, and timings.
   extension is not installed), so I could not drive `withaqua.com`'s
   interactive hero, which is where the animated bar mock lives. Everything
   below comes from static assets, CSS, and their own prose.
-- I did not install the Hexavoice macOS app, so I have **no direct screenshot of
+- I did not install the OutLoud macOS app, so I have **no direct screenshot of
   the real Floating Bar or the real settings window**. Their marketing and
   App Store imagery is composited, not a screen capture.
 - Consequently: every statement about their *bar's* exact radius, height,
@@ -37,7 +37,7 @@ pixels, colours, radii, and timings.
   and the radius scale are **(observed)**.
 
 Anything inferred is a starting value chosen to be consistent with what was
-observed, not a measurement. If someone installs Hexavoice later, the inferred
+observed, not a measurement. If someone installs OutLoud later, the inferred
 rows are the ones to correct.
 
 ## Their visual language (observed)
@@ -47,9 +47,9 @@ rows are the ones to correct.
 | Token | Hex | Role |
 |---|---|---|
 | `cobalt` | `#4288FF` | Primary action / "the product is doing something" |
-| `hexavoice` | `#67BEFF` | Lighter brand blue |
-| `hexavoice-deep` | `#219AF7` | Saturated blue for emphasis on light surfaces |
-| `hexavoice-pale` | `#A7DAFC` | Palest blue; reads as "waiting" |
+| `outloud` | `#67BEFF` | Lighter brand blue |
+| `outloud-deep` | `#219AF7` | Saturated blue for emphasis on light surfaces |
+| `outloud-pale` | `#A7DAFC` | Palest blue; reads as "waiting" |
 | `ink` | `#292C3D` | Their "black". **Blue-tinted charcoal, not neutral** |
 | `ink-soft` | `#3E4150` | Hairlines, inset fills |
 | `mist` | `#F4F5F7` | Light surface |
@@ -118,8 +118,8 @@ Reference material for their side, as downloaded:
 
 | What | Image |
 |---|---|
-| Hexavoice brand orb (`orb-128.png`) | ![hexavoice orb](img/hexavoice-orb.png) |
-| 9to5Mac press composite | ![hexavoice press](img/hexavoice-press-9to5.jpg) |
+| OutLoud brand orb (`orb-128.png`) | ![outloud orb](img/outloud-orb.png) |
+| 9to5Mac press composite | ![outloud press](img/outloud-press-9to5.jpg) |
 
 Note honestly: the press composite is marketing art, and the orb is an icon,
 not the bar. This is the best "their side" evidence available without
@@ -162,9 +162,9 @@ own noun is *bar*. *Fix: `layout::OVERLAY_SIZE` → 380x64 (5.9:1), radius 14
 **4. The partial tail is monospaced.** Dictation output is prose destined
 for an email or a Slack message. Monospace makes provisional text look like
 console output and pushes the whole product into a developer-tool register
-Hexavoice carefully avoids. *Fix: `theme::TAIL_MONOSPACE = false`, 12.5pt.*
+OutLoud carefully avoids. *Fix: `theme::TAIL_MONOSPACE = false`, 12.5pt.*
 
-**5. No fade.** The card blinks in and out. Hexavoice's UI reads as smooth. The
+**5. No fade.** The card blinks in and out. OutLoud's UI reads as smooth. The
 constraint is that the fade cannot cost latency: UX principle 2 wants
 visible feedback within ~100ms of key-down. *Fix: `FADE_IN_MS = 90`,
 `FADE_OUT_MS = 140` — in by 90ms, so it is inside the budget, out slower
@@ -202,9 +202,9 @@ Every value below is a real constant in that module, with a unit test.
 | State | Value | Note |
 |---|---|---|
 | Listening | `#4288FF` (cobalt) | full strength |
-| Transcribing | `#67BEFF` (hexavoice) | one step lighter = progress, not a new condition |
-| ModelLoading | `#A7DAFC` (hexavoice-pale) | plus the 0.6Hz pulse |
-| Error | `#FF4A3D` (ember) | ours; Hexavoice publishes no failure token |
+| Transcribing | `#67BEFF` (outloud) | one step lighter = progress, not a new condition |
+| ModelLoading | `#A7DAFC` (outloud-pale) | plus the 0.6Hz pulse |
+| Error | `#FF4A3D` (ember) | ours; OutLoud publishes no failure token |
 | NoPermission | `#FFA033` (amber) | ours |
 | Idle / Injecting / DegradedOffline | `#3E4150` (ink-soft) | invisible on the overlay; used by the tray glyph |
 
@@ -257,7 +257,7 @@ Idle must carry no badge and no colour. UX principle 1: idle is quiet.
 
 ### Settings window (recommended structure)
 
-Hexavoice's own sections, from their guide navigation: General, Keybindings,
+OutLoud's own sections, from their guide navigation: General, Keybindings,
 Dictionary, Custom Instructions, Replacements, History, Languages, File
 Tagging, System.
 
@@ -275,12 +275,12 @@ General · Hotkeys · Dictionary · Custom Instructions · History · Privacy ·
 | Content gutter | 20 pt |
 | Row label column | right-aligned, 180 pt, secondary label colour |
 
-**Privacy is a top-level row and is where we deliberately diverge.** Hexavoice has
+**Privacy is a top-level row and is where we deliberately diverge.** OutLoud has
 no equivalent; ours hosts the live "0 network requests since launch" counter
 from UX principle 3. Copying their chrome is the point; copying their
 omissions is not.
 
-## Where Hexavoice's choice is worse, and we should not copy it
+## Where OutLoud's choice is worse, and we should not copy it
 
 **Bottom-of-screen placement.** Their bar is at the bottom of the display
 regardless of where the user is typing. That puts the feedback outside the
@@ -289,7 +289,7 @@ have to look away from your own sentence. Our caret anchoring
 (`02-core-interaction.md`) is better and we keep it.
 
 We do add `layout::place_bottom_center()` so "bottom centre" is available as
-an explicit preference for people migrating from Hexavoice, and as a stable
+an explicit preference for people migrating from OutLoud, and as a stable
 target for screenshots. It is a free function rather than an `Anchor`
 variant on purpose: an `Anchor` describes something the host *discovered*
 about the user's attention, while this is a fixed preference that ignores

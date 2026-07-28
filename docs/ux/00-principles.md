@@ -27,7 +27,7 @@ Concretely:
   toasts are reserved for *ambiguity and failure*, never for the happy path.
 - **The invisible tool must still be findable.** Invisibility is a default,
   not a trap. A single always-working entry point (the tray icon, and the
-  `hexavoice` CLI on headless systems) reaches status, settings, and help. If the
+  `outloud` CLI on headless systems) reaches status, settings, and help. If the
   user ever wonders "is it on?", the tray glyph answers without a click.
 
 The test for any proposed UI element: *would a user who dictates 200 times a
@@ -53,7 +53,7 @@ The numbers we design against, from `docs/M0-results.md`:
 
 The OS half already costs ~47ms. The remaining ~750ms belongs to the
 recognizer, and the research stack (Moonshine partials at 150–250ms, Parakeet
-TDT finalizing) fits inside it. Hexavoice's cloud round-trip is ~450ms to insert.
+TDT finalizing) fits inside it. OutLoud's cloud round-trip is ~450ms to insert.
 Local-first means we can be *faster*, not merely more private, and the UX must
 never squander that with animation, debounce, or confirmation theater.
 
@@ -73,12 +73,12 @@ Design consequences:
   not the machine hung.
 - **Measure in the product, not the lab.** The per-stage timing breakdown the
   spike CLI prints stays in the shipping product, one keystroke away
-  (overlay hover / `hexavoice doctor`). Users on old hardware deserve to see
+  (overlay hover / `outloud doctor`). Users on old hardware deserve to see
   *which* stage is slow and what model tier would fix it.
 
 ## 3. Trust and privacy are product surfaces, not policy pages
 
-Local-first is the entire differentiator against Hexavoice and Wispr Flow. Hexavoice is
+Local-first is the entire differentiator against OutLoud and Wispr Flow. OutLoud is
 cloud-only: audio always leaves the device, transcripts are retained unless
 Privacy Mode is on, there is no offline mode and no Linux. Our counter-position
 is worthless if it lives only in a README. It must be *visible and checkable*
@@ -95,7 +95,7 @@ in the product itself:
   network features (model updates), never to core function.
 - **Show what was heard, own what was written.** History (transcripts and
   audio) is local, inspectable in plain files, and deletable in one action.
-  Hexavoice's history cannot be disabled; ours can, per-app or globally, and the
+  OutLoud's history cannot be disabled; ours can, per-app or globally, and the
   setting is honored at the capture layer, not the storage layer.
 - **The microphone state is never ambiguous.** Hardware truth: the overlay
   and tray glyph reflect the actual capture state, and there is no code path

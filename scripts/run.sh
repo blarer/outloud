@@ -10,13 +10,13 @@
 # Launching the bundle with `open` makes the app responsible for itself, which
 # is exactly how a user will start the shipping product. The trade-off is that
 # LaunchServices detaches the process, so the binary mirrors its output to a log
-# file (HEXA_SPIKE_LOG) that this script tails.
+# file (OUTLOUD_SPIKE_LOG) that this script tails.
 
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 APP_DIR="$ROOT/dist/AquaSpike.app"
-LOG="${TMPDIR:-/tmp}/hexavoice-spike-$$.log"
+LOG="${TMPDIR:-/tmp}/outloud-spike-$$.log"
 
 if [[ ! -d "$APP_DIR" ]]; then
     "$ROOT/scripts/bundle-macos.sh" >/dev/null
@@ -26,7 +26,7 @@ fi
 
 # `--wait-apps` would block until the app quits, which is what we want, but it
 # also swallows the exit status, so the status is carried through the log.
-open -a "$APP_DIR" --env "HEXA_SPIKE_LOG=$LOG" --args "$@"
+open -a "$APP_DIR" --env "OUTLOUD_SPIKE_LOG=$LOG" --args "$@"
 
 # Wait for the run to finish, signalled by the sentinel the binary writes last.
 for _ in $(seq 1 200); do

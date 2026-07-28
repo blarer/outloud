@@ -15,7 +15,7 @@ body:
 
         ```bash
         ./scripts/doctor.sh                             # diagnoses, and says which failures are bugs
-        ./dist/Hexavoice.app/Contents/MacOS/Hexavoice --version   # or `hexad --version`
+        ./dist/OutLoud.app/Contents/MacOS/OutLoud --version   # or `outloud --version`
         ```
 
         The doctor classifies every check as permission, configuration,
@@ -91,9 +91,9 @@ body:
     attributes:
       label: Project version or commit
       description: >-
-        From `hexad --version`. A commit hash is even better if you built
+        From `outloud --version`. A commit hash is even better if you built
         from source.
-      placeholder: "hexad 0.1.0, or commit bfb4e47"
+      placeholder: "outloud 0.1.0, or commit bfb4e47"
     validations:
       required: true
   - type: textarea

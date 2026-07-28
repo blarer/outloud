@@ -145,7 +145,7 @@ pub async fn run(
                 recognizer_ready = true;
                 match r {
                     Ok(Ok(name)) => {
-                        eprintln!("hexad: recognizer ready: {name}");
+                        eprintln!("outloud: recognizer ready: {name}");
                         engine.transition(OverlayState::Idle, None);
                         if pending_listen {
                             pending_listen = false;
@@ -184,7 +184,7 @@ pub async fn run(
                             // Utterance still finalizing: refuse overlap. A
                             // queued double-capture would interleave two
                             // recognizer utterances on one channel.
-                            eprintln!("hexad: key-down ignored, previous utterance still committing");
+                            eprintln!("outloud: key-down ignored, previous utterance still committing");
                             continue;
                         }
                         // Error-shaped states exit through Idle on the next
@@ -203,17 +203,17 @@ pub async fn run(
                         let mode = inject::mode_at_keydown();
                         recorder.finish(span);
                         if let Mode::Edit { selected } = &mode {
-                            eprintln!("hexad: edit mode on selection: \"{selected}\"");
+                            eprintln!("outloud: edit mode on selection: \"{selected}\"");
                         }
                         segmenter = new_segmenter();
                         // Open the device HERE, not at startup. Holding a
                         // stream open all session lights the system's
                         // recording indicator permanently, which tells the
                         // user they are being recorded while idle. See
-                        // crates/hexad/src/mic.rs.
+                        // crates/outloud/src/mic.rs.
                         if let Some(m) = mic.as_mut() {
                             if let Err(e) = m.open() {
-                                eprintln!("hexad: could not open the microphone: {e}");
+                                eprintln!("outloud: could not open the microphone: {e}");
                                 engine.transition(
                                     OverlayState::Error,
                                     Some("could not open the microphone -> check Privacy settings".into()),
@@ -275,13 +275,13 @@ pub async fn run(
                         }
                     }
                     FrontendEvent::CaptureUp(device) => {
-                        eprintln!("hexad: capturing from {device}");
+                        eprintln!("outloud: capturing from {device}");
                     }
                     FrontendEvent::CaptureIssue(msg) => {
                         // Capture self-heals (rebuild loop); a total absence of
                         // input is the one unrecoverable case worth the Error
                         // state, with the next action named.
-                        eprintln!("hexad: capture: {msg}");
+                        eprintln!("outloud: capture: {msg}");
                         if msg.contains("no input device") && engine.state() == OverlayState::Idle {
                             engine.transition(
                                 OverlayState::Error,
@@ -308,7 +308,7 @@ pub async fn run(
                     }
                     AsrEvent::Final(result) => {
                         let Some(fl) = in_flight.take() else {
-                            eprintln!("hexad: stray final transcript ignored");
+                            eprintln!("outloud: stray final transcript ignored");
                             continue;
                         };
                         let finalize_ms = fl.released_at.elapsed().as_secs_f64() * 1000.0;
@@ -318,7 +318,7 @@ pub async fn run(
                                     &mut engine, &fl, t.text.trim(), finalize_ms, &feed, recorder,
                                 ).await;
                                 if let Some(r) = report {
-                                    eprintln!("hexad: {}", r.render());
+                                    eprintln!("outloud: {}", r.render());
                                     reports.push(r);
                                 }
                             }

@@ -82,7 +82,7 @@ impl Engine {
     pub fn transition(&mut self, next: OverlayState, detail: Option<String>) {
         if self.state != next && !self.state.can_transition_to(next) {
             eprintln!(
-                "hexad: BUG: illegal state transition {} -> {} (staying in {})",
+                "outloud: BUG: illegal state transition {} -> {} (staying in {})",
                 self.state, next, self.state
             );
             self.saw_illegal = true;

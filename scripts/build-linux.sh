@@ -54,10 +54,10 @@ case "$TARGET" in
 esac
 
 mkdir -p "$OUT"
-cp "$BIN" "$OUT/hexavoice-spike"
+cp "$BIN" "$OUT/outloud-spike"
 
 echo "==> tarball"
-tar -C "$OUT" -czf "$OUT/hexavoice-spike-$VERSION-$TARGET.tar.gz" hexavoice-spike
+tar -C "$OUT" -czf "$OUT/outloud-spike-$VERSION-$TARGET.tar.gz" outloud-spike
 
 # ---------------------------------------------------------------- AppImage
 if command -v appimagetool >/dev/null 2>&1; then
@@ -65,27 +65,27 @@ if command -v appimagetool >/dev/null 2>&1; then
     APPDIR="$OUT/AppDir"
     rm -rf "$APPDIR"
     mkdir -p "$APPDIR/usr/bin"
-    cp "$OUT/hexavoice-spike" "$APPDIR/usr/bin/"
-    cat > "$APPDIR/hexavoice-spike.desktop" <<DESKTOP
+    cp "$OUT/outloud-spike" "$APPDIR/usr/bin/"
+    cat > "$APPDIR/outloud-spike.desktop" <<DESKTOP
 [Desktop Entry]
-Name=Hexavoice Spike
-Exec=hexavoice-spike
-Icon=hexavoice-spike
+Name=OutLoud Spike
+Exec=outloud-spike
+Icon=outloud-spike
 Type=Application
 Categories=Utility;Accessibility;
 Terminal=true
 DESKTOP
     # 1x1 placeholder icon; appimagetool requires one to exist.
-    printf '\x89PNG\r\n\x1a\n' > "$APPDIR/hexavoice-spike.png" || true
+    printf '\x89PNG\r\n\x1a\n' > "$APPDIR/outloud-spike.png" || true
     cat > "$APPDIR/AppRun" <<'APPRUN'
 #!/bin/sh
 # AppRun decides nothing about Wayland/X11: the binary itself does runtime
 # detection (WAYLAND_DISPLAY, then DISPLAY) so one AppImage serves both.
-exec "$(dirname "$0")/usr/bin/hexavoice-spike" "$@"
+exec "$(dirname "$0")/usr/bin/outloud-spike" "$@"
 APPRUN
     chmod +x "$APPDIR/AppRun"
     # ARCH is read by appimagetool for the AppImage metadata.
-    ARCH="$ARCH" appimagetool "$APPDIR" "$OUT/hexavoice-spike-$VERSION-$ARCH.AppImage"
+    ARCH="$ARCH" appimagetool "$APPDIR" "$OUT/outloud-spike-$VERSION-$ARCH.AppImage"
 else
     echo "==> appimagetool not found: skipping AppImage"
 fi
@@ -95,11 +95,11 @@ if command -v dpkg-deb >/dev/null 2>&1; then
     echo "==> .deb"
     DEB="$OUT/deb"
     rm -rf "$DEB"
-    mkdir -p "$DEB/usr/bin" "$DEB/DEBIAN" "$DEB/usr/share/doc/hexavoice-spike"
-    cp "$OUT/hexavoice-spike" "$DEB/usr/bin/"
-    cp LICENSE* "$DEB/usr/share/doc/hexavoice-spike/" 2>/dev/null || true
+    mkdir -p "$DEB/usr/bin" "$DEB/DEBIAN" "$DEB/usr/share/doc/outloud-spike"
+    cp "$OUT/outloud-spike" "$DEB/usr/bin/"
+    cp LICENSE* "$DEB/usr/share/doc/outloud-spike/" 2>/dev/null || true
     cat > "$DEB/DEBIAN/control" <<CONTROL
-Package: hexavoice-spike
+Package: outloud-spike
 Version: $VERSION
 Architecture: $DEB_ARCH
 Maintainer: aquaoss project
@@ -108,7 +108,7 @@ Priority: optional
 Description: Local edit-by-voice spike harness
  Milestone-zero harness for reading and rewriting focused text fields.
 CONTROL
-    dpkg-deb --build --root-owner-group "$DEB" "$OUT/hexavoice-spike_${VERSION}_${DEB_ARCH}.deb"
+    dpkg-deb --build --root-owner-group "$DEB" "$OUT/outloud-spike_${VERSION}_${DEB_ARCH}.deb"
 else
     echo "==> dpkg-deb not found: skipping .deb"
 fi
@@ -119,8 +119,8 @@ if command -v rpmbuild >/dev/null 2>&1; then
     RPMTOP="$OUT/rpmbuild"
     rm -rf "$RPMTOP"
     mkdir -p "$RPMTOP"/{SPECS,BUILD,RPMS,SOURCES}
-    cat > "$RPMTOP/SPECS/hexavoice-spike.spec" <<SPEC
-Name: hexavoice-spike
+    cat > "$RPMTOP/SPECS/outloud-spike.spec" <<SPEC
+Name: outloud-spike
 Version: $VERSION
 Release: 1
 Summary: Local edit-by-voice spike harness
@@ -129,13 +129,13 @@ License: MIT
 Milestone-zero harness for reading and rewriting focused text fields.
 %install
 mkdir -p %{buildroot}/usr/bin
-install -m 0755 $ROOT/$OUT/hexavoice-spike %{buildroot}/usr/bin/hexavoice-spike
+install -m 0755 $ROOT/$OUT/outloud-spike %{buildroot}/usr/bin/outloud-spike
 %files
-/usr/bin/hexavoice-spike
+/usr/bin/outloud-spike
 SPEC
     rpmbuild --define "_topdir $ROOT/$RPMTOP" \
              --define "_rpmdir $ROOT/$OUT" \
-             --target "$ARCH" -bb "$RPMTOP/SPECS/hexavoice-spike.spec"
+             --target "$ARCH" -bb "$RPMTOP/SPECS/outloud-spike.spec"
 else
     echo "==> rpmbuild not found: skipping .rpm"
 fi
@@ -168,7 +168,7 @@ runtime-version: '24.08'
 sdk: org.freedesktop.Sdk
 sdk-extensions:
   - org.freedesktop.Sdk.Extension.rust-stable
-command: hexavoice-spike
+command: outloud-spike
 finish-args:
   - --socket=wayland
   - --socket=fallback-x11
@@ -179,16 +179,16 @@ finish-args:
 build-options:
   append-path: /usr/lib/sdk/rust-stable/bin
   env:
-    CARGO_HOME: /run/build/hexavoice-spike/cargo
+    CARGO_HOME: /run/build/outloud-spike/cargo
 modules:
-  - name: hexavoice-spike
+  - name: outloud-spike
     buildsystem: simple
     build-commands:
       # --offline: flatpak-builder builds have no network; cargo sources are
       # vendored by the generated cargo-sources.json (flatpak-cargo-generator
       # from Cargo.lock, run by the CI flatpak job).
       - cargo --offline build --release --locked --package spike-cli
-      - install -Dm755 target/release/spike-cli /app/bin/hexavoice-spike
+      - install -Dm755 target/release/spike-cli /app/bin/outloud-spike
     sources:
       - type: dir
         path: ../../..

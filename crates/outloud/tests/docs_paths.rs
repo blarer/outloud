@@ -25,7 +25,7 @@ use std::path::{Path, PathBuf};
 
 /// Repository root, from this test's manifest directory.
 fn repo_root() -> PathBuf {
-    // CARGO_MANIFEST_DIR is <root>/crates/hexad; go up twice.
+    // CARGO_MANIFEST_DIR is <root>/crates/outloud; go up twice.
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .parent()
         .and_then(Path::parent)

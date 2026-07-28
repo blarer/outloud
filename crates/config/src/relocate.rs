@@ -28,7 +28,15 @@ use crate::validate::validate_document;
 
 /// The previous product's config directory name, kept so an upgrader's
 /// settings survive the rename. Frozen: this is history, not configuration.
-const LEGACY_DIR: &str = "aqua";
+/// Every directory name this product has used, newest first.
+///
+/// A list rather than a single name because the product has been renamed
+/// twice (aqua -> hexavoice -> outloud) and a user may be sitting on either
+/// older generation. Checking newest-first means someone who upgraded once
+/// already gets their most recent settings rather than their oldest.
+///
+/// Frozen history: entries are only ever appended to, never edited.
+const LEGACY_DIRS: &[&str] = &["hexavoice", "aqua"];
 
 /// What a location migration did, so the caller can tell the user.
 #[derive(Debug, Clone, PartialEq)]
@@ -66,31 +74,48 @@ impl std::fmt::Display for Outcome {
 }
 
 /// The legacy config path that sits beside `new_path`, if one can exist.
-fn legacy_path_for(new_path: &Path) -> Option<PathBuf> {
-    // .../<something>/config.toml -> .../aqua/config.toml
-    let dir = new_path.parent()?;
-    let file = new_path.file_name()?;
-    Some(dir.parent()?.join(LEGACY_DIR).join(file))
+fn legacy_paths_for(new_path: &Path) -> Vec<PathBuf> {
+    // .../<current>/config.toml -> .../<each older name>/config.toml
+    let Some(dir) = new_path.parent() else {
+        return Vec::new();
+    };
+    let Some(file) = new_path.file_name() else {
+        return Vec::new();
+    };
+    let Some(root) = dir.parent() else {
+        return Vec::new();
+    };
+    LEGACY_DIRS
+        .iter()
+        .map(|name| root.join(name).join(file))
+        .collect()
 }
 
 /// Copy a previous-generation config into the current location if that is
 /// the right thing to do. Pure decision-making lives in
 /// [`decide`]; this is the thin I/O wrapper.
 pub fn adopt_legacy_config(new_path: &Path) -> std::io::Result<Outcome> {
-    let Some(old) = legacy_path_for(new_path) else {
+    if new_path.exists() {
+        return Ok(Outcome::NothingToDo);
+    }
+    // Newest generation first: someone who already upgraded once should get
+    // the settings they last edited, not the ones they abandoned.
+    let Some((old, old_text)) = legacy_paths_for(new_path)
+        .into_iter()
+        .find_map(|p| std::fs::read_to_string(&p).ok().map(|t| (p, t)))
+    else {
         return Ok(Outcome::NothingToDo);
     };
-    let new_exists = new_path.exists();
-    let old_text = std::fs::read_to_string(&old).ok();
+    let new_exists = false;
 
-    match decide(new_exists, old_text.as_deref(), &old, new_path) {
+    match decide(new_exists, Some(old_text.as_str()), &old, new_path) {
         Outcome::Copied { from, to } => {
             if let Some(parent) = to.parent() {
                 std::fs::create_dir_all(parent)?;
             }
             // The text we validated, not a re-read: re-reading would open a
             // window where the file changes between check and copy.
-            std::fs::write(&to, old_text.unwrap_or_default())?;
+            std::fs::write(&to, &old_text)?;
             Ok(Outcome::Copied { from, to })
         }
         other => Ok(other),
@@ -124,8 +149,33 @@ mod tests {
     use super::*;
 
     fn new_path() -> PathBuf {
-        PathBuf::from("/home/u/.config/hexavoice/config.toml")
+        PathBuf::from("/home/u/.config/outloud/config.toml")
     }
+    /// The legacy list is FROZEN HISTORY, and a rename script cannot be
+    /// trusted to know that: the aqua -> hexavoice -> outloud rename rewrote
+    /// "hexavoice" to "outloud" inside these very fixtures, leaving tests that
+    /// asserted outloud migrates to outloud. They passed, and migration from
+    /// the real previous generation was silently untested.
+    ///
+    /// This asserts the names literally so the next blanket replace fails
+    /// here instead of shipping. If you are renaming the product and this
+    /// test fails, APPEND the previous directory name to LEGACY_DIRS and to
+    /// the list below; do not edit the existing entries.
+    #[test]
+    fn legacy_generations_are_frozen_history() {
+        assert_eq!(
+            LEGACY_DIRS,
+            ["hexavoice", "aqua"],
+            "legacy directory names are history and may only be appended to; \
+             a rename must not rewrite them"
+        );
+        assert!(
+            !LEGACY_DIRS.contains(&"outloud"),
+            "the CURRENT directory must never appear in the legacy list, or \
+             migration would search the place it is migrating to"
+        );
+    }
+
     fn old_path() -> PathBuf {
         // The PREVIOUS product's directory. Deliberately spelled out rather
         // than derived from LEGACY_DIR: this fixture is the thing that
@@ -135,8 +185,43 @@ mod tests {
     }
 
     #[test]
-    fn legacy_path_sits_beside_the_new_one() {
-        assert_eq!(legacy_path_for(&new_path()), Some(old_path()));
+    fn every_previous_generation_is_searched_newest_first() {
+        // Two renames means two older locations. Order matters: a user who
+        // already upgraded once must get the settings they last edited.
+        let paths = legacy_paths_for(&new_path());
+        assert_eq!(
+            paths,
+            vec![
+                PathBuf::from("/home/u/.config/hexavoice/config.toml"),
+                PathBuf::from("/home/u/.config/aqua/config.toml"),
+            ]
+        );
+    }
+
+    #[test]
+    fn the_newest_previous_generation_wins() {
+        // Both older directories exist. The one the user most recently used
+        // is the one whose settings they expect to survive.
+        let root = std::env::temp_dir().join(format!("outloud-chain-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        for (dir, body) in [
+            ("aqua", "hotkey = \"f13\"\n"),
+            ("hexavoice", "hotkey = \"fn\"\n"),
+        ] {
+            let p = root.join(dir);
+            std::fs::create_dir_all(&p).unwrap();
+            std::fs::write(p.join("config.toml"), body).unwrap();
+        }
+        let new = root.join("outloud").join("config.toml");
+        let outcome = adopt_legacy_config(&new).unwrap();
+        match outcome {
+            Outcome::Copied { from, .. } => {
+                assert!(from.ends_with("hexavoice/config.toml"), "{from:?}");
+            }
+            other => panic!("expected a copy from the newest generation, got {other:?}"),
+        }
+        assert_eq!(std::fs::read_to_string(&new).unwrap(), "hotkey = \"fn\"\n");
+        let _ = std::fs::remove_dir_all(&root);
     }
 
     /// The four cases ant asked for, as one table so a fifth cannot be
@@ -216,16 +301,16 @@ mod tests {
         }
         .to_string();
         assert!(msg.contains("aqua/config.toml"), "{msg}");
-        assert!(msg.contains("hexavoice/config.toml"), "{msg}");
+        assert!(msg.contains("outloud/config.toml"), "{msg}");
         assert!(msg.contains("untouched"), "{msg}");
     }
 
     #[test]
     fn end_to_end_copy_leaves_the_original_in_place() {
-        let root = std::env::temp_dir().join(format!("hexa-adopt-{}", std::process::id()));
+        let root = std::env::temp_dir().join(format!("outloud-adopt-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&root);
         let old = root.join("aqua").join("config.toml");
-        let new = root.join("hexavoice").join("config.toml");
+        let new = root.join("outloud").join("config.toml");
         std::fs::create_dir_all(old.parent().unwrap()).unwrap();
         std::fs::write(&old, "# mine\nhotkey = \"f13\"\n").unwrap();
 

@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 
-# DELIBERATELY NOT RENAMED to Hexavoice. This bundles spike-cli, the internal
+# DELIBERATELY NOT RENAMED to OutLoud. This bundles spike-cli, the internal
 # accessibility development harness, not the shipping product, so the name is
 # never seen by a user. docs/planning/ also references the AquaSpike paths and
 # is owned elsewhere, so renaming here would force edits into a directory this
@@ -37,7 +37,7 @@ cat > "$APP_DIR/Contents/Info.plist" <<PLIST
     <key>CFBundleName</key>
     <string>$APP_NAME</string>
     <key>CFBundleDisplayName</key>
-    <string>Hexavoice Spike</string>
+    <string>OutLoud Spike</string>
     <key>CFBundleIdentifier</key>
     <string>$BUNDLE_ID</string>
     <key>CFBundleExecutable</key>
@@ -55,7 +55,7 @@ cat > "$APP_DIR/Contents/Info.plist" <<PLIST
     <true/>
     <!-- Required so the frontmost-application lookup can drive System Events. -->
     <key>NSAppleEventsUsageDescription</key>
-    <string>Hexavoice Spike identifies the frontmost application to choose formatting rules.</string>
+    <string>OutLoud Spike identifies the frontmost application to choose formatting rules.</string>
 </dict>
 </plist>
 PLIST

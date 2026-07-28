@@ -25,11 +25,11 @@ sockdir="$work/run"
 mkdir -p "$zdot" "$sockdir"
 socket="$sockdir/shell.sock"
 
-cp "$root/shell/hexavoice.zsh" "$zdot/hexavoice.zsh"
+cp "$root/shell/outloud.zsh" "$zdot/outloud.zsh"
 {
-    echo 'PS1="hexavoice-demo% "'
-    echo "export HEXA_BRIDGE_SOCKET=$socket"
-    echo "source $zdot/hexavoice.zsh"
+    echo 'PS1="outloud-demo% "'
+    echo "export OUTLOUD_BRIDGE_SOCKET=$socket"
+    echo "source $zdot/outloud.zsh"
 } > "$zdot/.zshrc"
 
 if ! command -v expect >/dev/null 2>&1; then

@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
-# Package the hexad daemon as a macOS .app bundle.
+# Package the outloud daemon as a macOS .app bundle.
 #
 # WHY this exists alongside scripts/bundle-macos.sh: that script bundles
 # spike-cli, the accessibility development harness. The thing a user actually
-# runs is hexad, and it needs the same two things spike-cli needs:
+# runs is outloud, and it needs the same two things spike-cli needs:
 #
 #   1. A stable bundle identity, because TCC attaches the Accessibility grant
 #      to a CFBundleIdentifier + code signature, not to a path.
@@ -12,19 +12,19 @@
 #      *terminal's* permissions and ignores the binary's own grant entirely.
 #      See docs/macos-permissions.md.
 #
-# Running ./target/release/hexad directly still works, but then the grants you
+# Running ./target/release/outloud directly still works, but then the grants you
 # must approve are the terminal's, which is a confusing thing to ask of a user
 # and silently changes meaning when they switch terminals.
 
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-APP_NAME="Hexavoice"
+APP_NAME="OutLoud"
 BUNDLE_ID="dev.hexavoice.hexad"
 APP_DIR="$ROOT/dist/$APP_NAME.app"
 
-echo "==> Building hexad (release)"
-cargo build --release -p hexad --manifest-path "$ROOT/Cargo.toml"
+echo "==> Building outloud (release)"
+cargo build --release -p outloud --manifest-path "$ROOT/Cargo.toml"
 
 # The Apple recognizer is a Swift child process, not a linked library, so it
 # has to be built and shipped separately. It is gitignored (a compiled
@@ -41,13 +41,13 @@ if command -v swiftc >/dev/null 2>&1; then
     fi
 else
     echo "warning: swiftc not found; skipping the speech helper." >&2
-    echo "         hexad will start but cannot transcribe (use --asr mock)." >&2
+    echo "         outloud will start but cannot transcribe (use --asr mock)." >&2
 fi
 
 echo "==> Assembling $APP_DIR"
 rm -rf "$APP_DIR"
 mkdir -p "$APP_DIR/Contents/MacOS"
-cp "$ROOT/target/release/hexad" "$APP_DIR/Contents/MacOS/$APP_NAME"
+cp "$ROOT/target/release/outloud" "$APP_DIR/Contents/MacOS/$APP_NAME"
 # NOT renamed with the product: crates/asr's find_helper() looks for this
 # exact filename, and that crate is owned elsewhere. Renaming here alone
 # would produce a bundle that builds and silently cannot transcribe, which
@@ -70,7 +70,7 @@ cat > "$APP_DIR/Contents/Info.plist" <<PLIST
     <key>CFBundleName</key>
     <string>$APP_NAME</string>
     <key>CFBundleDisplayName</key>
-    <string>Hexavoice</string>
+    <string>OutLoud</string>
     <key>CFBundleIdentifier</key>
     <string>$BUNDLE_ID</string>
     <key>CFBundleExecutable</key>
@@ -87,11 +87,11 @@ cat > "$APP_DIR/Contents/Info.plist" <<PLIST
     <key>LSUIElement</key>
     <true/>
     <key>NSMicrophoneUsageDescription</key>
-    <string>Hexavoice transcribes your speech on this device to type it for you.</string>
+    <string>OutLoud transcribes your speech on this device to type it for you.</string>
     <key>NSSpeechRecognitionUsageDescription</key>
-    <string>Hexavoice uses the on-device speech recognizer; no audio leaves this Mac.</string>
+    <string>OutLoud uses the on-device speech recognizer; no audio leaves this Mac.</string>
     <key>NSAppleEventsUsageDescription</key>
-    <string>Hexavoice identifies the frontmost application to choose formatting rules.</string>
+    <string>OutLoud identifies the frontmost application to choose formatting rules.</string>
 </dict>
 </plist>
 PLIST
@@ -101,7 +101,7 @@ echo "==> Signing ad-hoc"
 # rebuild, and an earlier version of this comment claimed it did, which sent
 # a user chasing a permission bug that was really this:
 #
-#   $ codesign -d -r- dist/Hexavoice.app
+#   $ codesign -d -r- dist/OutLoud.app
 #   designated => cdhash H"19c2e3f9..."
 #
 # An ad-hoc signature has no signing identity, so the Designated Requirement
@@ -117,7 +117,7 @@ echo "==> Signing ad-hoc"
 codesign --force --sign - --identifier "$BUNDLE_ID" "$APP_DIR"
 codesign --verify --verbose=2 "$APP_DIR" 2>&1 | sed 's/^/    /'
 
-if [[ "${HEXA_KEEP_TCC:-0}" != "1" ]]; then
+if [[ "${OUTLOUD_KEEP_TCC:-0}" != "1" ]]; then
     # Best-effort: fails harmlessly when nothing was granted yet.
     tccutil reset Accessibility "$BUNDLE_ID" >/dev/null 2>&1 || true
     tccutil reset ListenEvent "$BUNDLE_ID" >/dev/null 2>&1 || true
@@ -130,7 +130,7 @@ Built: $APP_DIR
 
 Grant permissions once (macOS gives no programmatic way to do this):
   System Settings > Privacy & Security > Accessibility  -> add $APP_DIR, toggle on
-  System Settings > Privacy & Security > Microphone     -> toggle Hexavoice on
+  System Settings > Privacy & Security > Microphone     -> toggle OutLoud on
                                                            (prompted on first run)
 
 Then start it so it is its own responsible process:

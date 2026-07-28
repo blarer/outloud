@@ -2,7 +2,7 @@
 //!
 //! Path policy is here, next to the file format, rather than in each host,
 //! because "which file am I editing?" must have exactly one answer: the
-//! daemon, `hexa set`, the menu-bar Settings items, and the docs all have to
+//! daemon, `outloud set`, the menu-bar Settings items, and the docs all have to
 //! name the same path or the user's edit lands somewhere nothing reads.
 //!
 //! I/O still stays at the edges: these functions compute paths and never
@@ -14,10 +14,10 @@ use std::path::PathBuf;
 /// The product's directory name under the config root. One constant, so the
 /// daemon, the docs, and the relocation logic cannot disagree about where
 /// settings live.
-pub const APP_DIR: &str = "hexavoice";
+pub const APP_DIR: &str = "outloud";
 
-/// The user's config file: `$XDG_CONFIG_HOME/hexavoice/config.toml`, else
-/// `~/.config/hexavoice/config.toml`.
+/// The user's config file: `$XDG_CONFIG_HOME/outloud/config.toml`, else
+/// `~/.config/outloud/config.toml`.
 ///
 /// `~/.config` on macOS too, deliberately: this is a developer-facing tool
 /// whose config is meant to be read, edited, diffed and synced like any
@@ -36,7 +36,7 @@ pub fn user_config_path() -> Option<PathBuf> {
 /// The machine-wide file for managed deployments. Read-only as far as the
 /// daemon is concerned; it never writes here.
 pub fn system_config_path() -> PathBuf {
-    PathBuf::from("/etc/hexavoice/config.toml")
+    PathBuf::from("/etc/outloud/config.toml")
 }
 
 /// The vocabulary folder, beside the user's config file.
@@ -65,8 +65,8 @@ pub fn ensure_user_config() -> std::io::Result<(PathBuf, String)> {
     // user re-enters their settings, and refusing to start would be worse.
     match crate::relocate::adopt_legacy_config(&path) {
         Ok(crate::relocate::Outcome::NothingToDo) => {}
-        Ok(outcome) => eprintln!("hexad: {outcome}"),
-        Err(e) => eprintln!("hexad: could not check for older settings: {e}"),
+        Ok(outcome) => eprintln!("outloud: {outcome}"),
+        Err(e) => eprintln!("outloud: could not check for older settings: {e}"),
     }
     match std::fs::read_to_string(&path) {
         Ok(text) => Ok((path, text)),
@@ -87,7 +87,7 @@ pub fn ensure_user_config() -> std::io::Result<(PathBuf, String)> {
 /// rather than "hope the default matches what was written here".
 fn starter_file() -> String {
     let mut out = String::from(
-        "# Hexavoice configuration. Every setting below is shown at its built-in\n\
+        "# OutLoud configuration. Every setting below is shown at its built-in\n\
          # default and commented out; uncomment a line to change it.\n\
          #\n\
          # Edits apply live (no restart) except the hotkey, which binds at\n\
@@ -121,13 +121,13 @@ mod tests {
         std::env::set_var("XDG_CONFIG_HOME", "/cfg");
         assert_eq!(
             user_config_path().unwrap(),
-            PathBuf::from("/cfg/hexavoice/config.toml")
+            PathBuf::from("/cfg/outloud/config.toml")
         );
 
         std::env::remove_var("XDG_CONFIG_HOME");
         assert_eq!(
             user_config_path().unwrap(),
-            PathBuf::from("/home/u/.config/hexavoice/config.toml")
+            PathBuf::from("/home/u/.config/outloud/config.toml")
         );
 
         restore("XDG_CONFIG_HOME", old_xdg);
@@ -160,7 +160,7 @@ mod tests {
         std::env::set_var("XDG_CONFIG_HOME", "/cfg");
         assert_eq!(
             vocabulary_dir().unwrap(),
-            PathBuf::from("/cfg/hexavoice/vocabulary")
+            PathBuf::from("/cfg/outloud/vocabulary")
         );
         restore("XDG_CONFIG_HOME", old);
     }

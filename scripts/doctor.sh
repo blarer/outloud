@@ -10,7 +10,7 @@
 # must measure. See docs/macos-permissions.md.
 #
 # LaunchServices detaches the process from the terminal, so the binary mirrors
-# its output to HEXA_SPIKE_LOG and this script tails it, same contract as
+# its output to OUTLOUD_SPIKE_LOG and this script tails it, same contract as
 # scripts/run.sh.
 #
 # On non-macOS systems there is no LaunchServices and no responsible-process
@@ -24,10 +24,10 @@ if [[ "$(uname)" != "Darwin" ]]; then
     exec cargo run --quiet --manifest-path "$ROOT/Cargo.toml" --bin doctor -- "$@"
 fi
 
-APP_NAME="HexavoiceDoctor"
+APP_NAME="OutLoudDoctor"
 BUNDLE_ID="dev.hexavoice.doctor"
 APP_DIR="$ROOT/dist/$APP_NAME.app"
-LOG="${TMPDIR:-/tmp}/hexavoice-doctor-$$.log"
+LOG="${TMPDIR:-/tmp}/outloud-doctor-$$.log"
 
 echo "==> Building doctor" >&2
 cargo build --quiet --release --manifest-path "$ROOT/Cargo.toml" --bin doctor
@@ -67,10 +67,10 @@ PLIST
 codesign --force --sign - --identifier "$BUNDLE_ID" "$APP_DIR" 2>/dev/null
 
 : > "$LOG"
-# HEXA_LAUNCHED_VIA_LS tells the doctor it is genuinely under LaunchServices:
+# OUTLOUD_LAUNCHED_VIA_LS tells the doctor it is genuinely under LaunchServices:
 # `open --env` leaks the caller's TERM through, which would otherwise trip the
 # shell-launch heuristic even in a correct launch.
-open -a "$APP_DIR" --env "HEXA_SPIKE_LOG=$LOG" --env "HEXA_LAUNCHED_VIA_LS=1" --args "$@"
+open -a "$APP_DIR" --env "OUTLOUD_SPIKE_LOG=$LOG" --env "OUTLOUD_LAUNCHED_VIA_LS=1" --args "$@"
 
 # Wait for the sentinel the binary writes last; `open` gives no exit status.
 for _ in $(seq 1 600); do

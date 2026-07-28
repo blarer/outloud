@@ -1,4 +1,4 @@
-//! `hexad` binary: argument parsing, frontend selection, thread layout.
+//! `outloud` binary: argument parsing, frontend selection, thread layout.
 //!
 //! Thread layout on macOS with a display: the MAIN thread runs the AppKit
 //! overlay (NSPanel requires it), and the entire tokio pipeline runs on a
@@ -8,21 +8,21 @@
 //! doc means by "one machine, many surfaces".
 //!
 //! Usage:
-//!   hexad                       # daemon: hold right-option, speak, release
-//!   hexad --chord fn            # different hotkey
-//!   hexad --once                # one dictation cycle from the mic, then exit
-//!   hexad --once --wav f.wav    # one cycle fed from a file (no mic needed)
-//!   hexad --once --say "text"   # synthesize with `say`, then run the cycle
-//!   hexad --asr mock            # deterministic recognizer (CI / no helper)
-//!   hexad --no-overlay          # log states instead of drawing the panel
+//!   outloud                       # daemon: hold right-option, speak, release
+//!   outloud --chord fn            # different hotkey
+//!   outloud --once                # one dictation cycle from the mic, then exit
+//!   outloud --once --wav f.wav    # one cycle fed from a file (no mic needed)
+//!   outloud --once --say "text"   # synthesize with `say`, then run the cycle
+//!   outloud --asr mock            # deterministic recognizer (CI / no helper)
+//!   outloud --no-overlay          # log states instead of drawing the panel
 
 use asr::Recognizer;
 use diag::timing::Recorder;
-use hexad::mic::Mic;
-use hexad::pipeline::{self, Config};
-use hexad::recognize;
-use hexad::source;
-use hexad::state::Engine;
+use outloud::mic::Mic;
+use outloud::pipeline::{self, Config};
+use outloud::recognize;
+use outloud::source;
+use outloud::state::Engine;
 
 struct Args {
     once: bool,
@@ -72,12 +72,12 @@ fn parse_args() -> anyhow::Result<Args> {
                 // Beta support: "what version are you on?" must be
                 // answerable by a user who has no idea where the bundle's
                 // Info.plist lives, or that it has one.
-                println!("hexad {}", env!("CARGO_PKG_VERSION"));
+                println!("outloud {}", env!("CARGO_PKG_VERSION"));
                 std::process::exit(0);
             }
             "--help" | "-h" => {
                 println!(
-                    "hexad: hold the hotkey, speak, release, text appears\n\
+                    "outloud: hold the hotkey, speak, release, text appears\n\
                      --once           run one dictation cycle and exit\n\
                      --wav FILE       feed FILE instead of the microphone (with --once)\n\
                      --say TEXT       synthesize TEXT with `say` and feed it (with --once)\n\
@@ -119,7 +119,7 @@ fn synthesize(text: &str) -> anyhow::Result<std::path::PathBuf> {
     // over the same file: the loser died with `ExtAudioFileCreateWithURL
     // failed (-48)`, which is `dupFNErr` and reads as a corrupt install
     // rather than as two processes colliding.
-    let dir = std::env::temp_dir().join(format!("hexad-say-{}", std::process::id()));
+    let dir = std::env::temp_dir().join(format!("outloud-say-{}", std::process::id()));
     std::fs::create_dir_all(&dir)?;
     let aiff = dir.join("utterance.aiff");
     let wav = dir.join("utterance.wav");
@@ -191,7 +191,7 @@ fn main() -> anyhow::Result<()> {
     let _instance = if args.once {
         None
     } else {
-        let lock = hexad::instance::acquire().map_err(|e| {
+        let lock = outloud::instance::acquire().map_err(|e| {
             // A bundled launch has no terminal, so this message would go
             // nowhere: double-clicking Aqua.app while a daemon is running
             // would simply do nothing at all, which reads as "the app is
@@ -206,9 +206,9 @@ fn main() -> anyhow::Result<()> {
         // was found on a dev machine eight hours after its parent died,
         // still holding an OS speech session. The trigger was never
         // reproduced, so this kills the class rather than the cause.
-        match hexad::instance::reap_stale_helpers() {
+        match outloud::instance::reap_stale_helpers() {
             0 => {}
-            n => eprintln!("hexad: cleaned up {n} stale speech helper(s) from a previous run"),
+            n => eprintln!("outloud: cleaned up {n} stale speech helper(s) from a previous run"),
         }
         Some(lock)
     };
@@ -218,13 +218,13 @@ fn main() -> anyhow::Result<()> {
     // What the daemon actually bound and opened, plus the live switches the
     // pipeline reads. Created first because the menu host writes the master
     // switch into it as soon as it loads the config.
-    let runtime = hexad::runtime::RuntimeShared::new();
+    let runtime = outloud::runtime::RuntimeShared::new();
 
     // The menu bar owns the configuration the user can see and change, so
     // it is also where the daemon learns which hotkey to bind. Skipped for
     // --once, which is a one-shot measurement that should neither create a
     // config file nor read the user's settings.
-    let mut menu_host = (!args.once).then(|| hexad::menuhost::MenuHost::new(runtime.clone()));
+    let mut menu_host = (!args.once).then(|| outloud::menuhost::MenuHost::new(runtime.clone()));
     if let Some(host) = &menu_host {
         // An explicit --chord is a per-run override and beats the file,
         // matching the config crate's layer order.
@@ -236,10 +236,10 @@ fn main() -> anyhow::Result<()> {
     // The pipeline future, boxed so both thread layouts can run it.
     let file_samples = match (&args.wav, &args.say) {
         (Some(_), Some(_)) => anyhow::bail!("--wav and --say are mutually exclusive"),
-        (Some(p), None) => Some(hexad::wav::load_16k_mono(p)?),
+        (Some(p), None) => Some(outloud::wav::load_16k_mono(p)?),
         (None, Some(text)) => {
             let p = synthesize(text)?;
-            Some(hexad::wav::load_16k_mono(&p)?)
+            Some(outloud::wav::load_16k_mono(&p)?)
         }
         (None, None) => None,
     };
@@ -284,7 +284,7 @@ fn main() -> anyhow::Result<()> {
                     // The microphone is NOT opened here. The pipeline opens
                     // it on key-down and closes it on commit, so the system's
                     // recording indicator means "dictating right now" rather
-                    // than "this app is running". See crates/hexad/src/mic.rs.
+                    // than "this app is running". See crates/outloud/src/mic.rs.
                     mic = Some(Mic::new(ftx.clone(), runtime_for_pipeline.clone()));
                     if args.once {
                         // No key to hold: capture starts immediately.
@@ -298,7 +298,7 @@ fn main() -> anyhow::Result<()> {
                             ftx.clone(),
                             runtime_for_pipeline.clone(),
                         ) {
-                            Ok(display) => eprintln!("hexad: hold {display} to dictate"),
+                            Ok(display) => eprintln!("outloud: hold {display} to dictate"),
                             Err(e) => {
                                 // A dead hotkey is a dead product: fail loudly
                                 // with the permission fix named, do not run a
@@ -346,15 +346,15 @@ fn main() -> anyhow::Result<()> {
     if args.no_overlay || !has_overlay {
         // No GUI: the pipeline owns the main thread; states go to stderr.
         std::thread::Builder::new()
-            .name("hexad-status-log".into())
+            .name("outloud-status-log".into())
             .spawn(move || {
                 let mut last = None;
                 loop {
                     let f = shared.snapshot();
                     if last != Some(f.state) {
                         match &f.detail {
-                            Some(d) => eprintln!("hexad: state {} ({d})", f.state),
-                            None => eprintln!("hexad: state {}", f.state),
+                            Some(d) => eprintln!("outloud: state {} ({d})", f.state),
+                            None => eprintln!("outloud: state {}", f.state),
                         }
                         last = Some(f.state);
                     }
@@ -370,9 +370,9 @@ fn main() -> anyhow::Result<()> {
 /// macOS + display: overlay on the main thread, pipeline behind it.
 #[cfg(all(target_os = "macos", feature = "display"))]
 fn overlay_main(
-    shared: hexad::state::StatusShared,
-    menu_host: Option<hexad::menuhost::MenuHost>,
-    runtime: hexad::runtime::RuntimeShared,
+    shared: outloud::state::StatusShared,
+    menu_host: Option<outloud::menuhost::MenuHost>,
+    runtime: outloud::runtime::RuntimeShared,
     run_pipeline: impl FnOnce() -> anyhow::Result<()> + Send + 'static,
 ) -> anyhow::Result<()> {
     use objc2::rc::Retained;
@@ -405,7 +405,7 @@ fn overlay_main(
         Err(e) => {
             // A missing status item leaves the app invisible but still
             // functional, so it is a loud warning, not a fatal error.
-            eprintln!("hexad: could not create the menu bar item: {e}");
+            eprintln!("outloud: could not create the menu bar item: {e}");
             None
         }
     };
@@ -415,7 +415,7 @@ fn overlay_main(
     // process. A channel (not a join) so the run loop below stays simple.
     let (done_tx, done_rx) = std::sync::mpsc::channel::<anyhow::Result<()>>();
     std::thread::Builder::new()
-        .name("hexad-pipeline".into())
+        .name("outloud-pipeline".into())
         .spawn(move || {
             let _ = done_tx.send(run_pipeline());
         })?;
@@ -471,7 +471,7 @@ fn overlay_main(
         // Render errors are logged, never fatal: the overlay is an
         // indicator, and dictation must outlive its cosmetic failures.
         if let Err(e) = render {
-            eprintln!("hexad: overlay render failed: {e}");
+            eprintln!("outloud: overlay render failed: {e}");
         }
 
         // Menu bar: publish the current state, then perform whatever the
@@ -537,18 +537,18 @@ fn overlay_main(
 /// the macOS structure without AppKit's run-loop pumping.
 #[cfg(all(target_os = "windows", feature = "display"))]
 fn overlay_main(
-    shared: hexad::state::StatusShared,
+    shared: outloud::state::StatusShared,
     // No tray backend on Windows yet: the notification-area equivalent
     // (Shell_NotifyIcon) is separate work and belongs to the Windows port.
-    _menu_host: Option<hexad::menuhost::MenuHost>,
-    _runtime: hexad::runtime::RuntimeShared,
+    _menu_host: Option<outloud::menuhost::MenuHost>,
+    _runtime: outloud::runtime::RuntimeShared,
     run_pipeline: impl FnOnce() -> anyhow::Result<()> + Send + 'static,
 ) -> anyhow::Result<()> {
     let mut ov = overlay::platform_overlay()?;
 
     let (done_tx, done_rx) = std::sync::mpsc::channel::<anyhow::Result<()>>();
     std::thread::Builder::new()
-        .name("hexad-pipeline".into())
+        .name("outloud-pipeline".into())
         .spawn(move || {
             let _ = done_tx.send(run_pipeline());
         })?;
@@ -558,7 +558,7 @@ fn overlay_main(
         // Render errors are logged, never fatal: the overlay is an
         // indicator, and dictation must outlive its cosmetic failures.
         if let Err(e) = ov.render(&frame) {
-            eprintln!("hexad: overlay render failed: {e}");
+            eprintln!("outloud: overlay render failed: {e}");
         }
         std::thread::sleep(std::time::Duration::from_millis(33));
         match done_rx.try_recv() {
@@ -579,9 +579,9 @@ fn overlay_main(
     all(target_os = "windows", feature = "display")
 )))]
 fn overlay_main(
-    _shared: hexad::state::StatusShared,
-    _menu_host: Option<hexad::menuhost::MenuHost>,
-    _runtime: hexad::runtime::RuntimeShared,
+    _shared: outloud::state::StatusShared,
+    _menu_host: Option<outloud::menuhost::MenuHost>,
+    _runtime: outloud::runtime::RuntimeShared,
     run_pipeline: impl FnOnce() -> anyhow::Result<()> + Send + 'static,
 ) -> anyhow::Result<()> {
     // Unreachable in practice (main() branches on the same cfg), kept so the

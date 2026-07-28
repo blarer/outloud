@@ -6,7 +6,7 @@
 //!   doctor --bench    also run the AX latency micro-benchmark (needs trust)
 //!
 //! Exit code is the worst status seen (0 pass, 1 warn, 2 fail) so scripts can
-//! gate on it. Output mirrors to HEXA_SPIKE_LOG when set, because a
+//! gate on it. Output mirrors to OUTLOUD_SPIKE_LOG when set, because a
 //! LaunchServices launch (the correct way, see docs/macos-permissions.md)
 //! detaches from the terminal.
 
@@ -19,7 +19,7 @@ use diag::{run_all, Env, Status};
 fn main() {
     // Same log-mirroring contract as spike-cli: a LaunchServices launch has
     // no terminal, so the wrapper script tails this file instead.
-    let log = std::env::var("HEXA_SPIKE_LOG")
+    let log = std::env::var("OUTLOUD_SPIKE_LOG")
         .ok()
         .and_then(|p| std::fs::File::create(p).ok());
     let mut sink = MultiSink { log };
@@ -32,7 +32,7 @@ fn main() {
     let reports = run_all(&env);
 
     let mut worst = Status::Pass;
-    writeln!(sink, "hexavoice doctor\n").ok();
+    writeln!(sink, "outloud doctor\n").ok();
     for r in &reports {
         worst = worst.max(r.outcome.status);
         writeln!(
@@ -82,7 +82,7 @@ fn main() {
         Status::Warn => 1,
         Status::Fail => 2,
     };
-    if std::env::var("HEXA_SPIKE_LOG").is_ok() {
+    if std::env::var("OUTLOUD_SPIKE_LOG").is_ok() {
         writeln!(sink, "__EXIT__{code}").ok();
     }
     std::process::exit(code);

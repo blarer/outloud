@@ -19,7 +19,7 @@ use config::layers::{Config, Layer};
 use config::schema::Value;
 
 fn user_path() -> PathBuf {
-    PathBuf::from("/home/u/.config/hexavoice/config.toml")
+    PathBuf::from("/home/u/.config/outloud/config.toml")
 }
 
 fn build(

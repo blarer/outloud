@@ -30,7 +30,7 @@ resolved in priority order:
 
 1. **Explicit selection.** If the focused field has a selection when the key
    goes down, the edit scope is exactly that selection. This is the power-user
-   path and matches Hexavoice's Edit Mode gesture (select, hold, speak), so
+   path and matches OutLoud's Edit Mode gesture (select, hold, speak), so
    switchers keep their habit. Selecting *is* disambiguation: "delete this" on
    a selection needs no search text at all.
 2. **No selection: the search text scopes it.** "change quick to slow" with no
@@ -46,7 +46,7 @@ resolved in priority order:
    region ± one paragraph, because "delete the" against a whole document is a
    footgun no one intends.
 
-There is deliberately **no command prefix word**. Hexavoice's Edit Mode uses no
+There is deliberately **no command prefix word**. OutLoud's Edit Mode uses no
 command words; a raw utterance while text is selected is treated as a
 replacement dictation ("just say the corrected version"). We adopt the same
 rule: selection + utterance that parses to no intent = replace the selection
@@ -168,7 +168,7 @@ Stackable undo: every applied edit pushes onto the product's own undo ring
 (`02-core-interaction.md`), because `AXValue` writes reset host undo and the
 client must keep its own (M0 next-steps #5). "undo that" pops one; "go back to
 the original" rewinds the whole stack for that field. Both phrases work while
-holding the key, matching Hexavoice's stackable-undo behavior head-on.
+holding the key, matching OutLoud's stackable-undo behavior head-on.
 
 ### The preview path (freeform)
 
@@ -228,7 +228,7 @@ flowchart TD
   users want the four verbs plus freeform to be flawless.
 - **No auto-applied freeform.** However good the model gets, generated text
   always previews. This line is what lets us say "the model never touches
-  your text without you seeing it first", which is a sentence Hexavoice cannot say
+  your text without you seeing it first", which is a sentence OutLoud cannot say
   about a cloud pipeline.
 - **No modal "edit mode" the user enters and exits.** One gesture; the
   selection state and the utterance determine everything. Modes rot.

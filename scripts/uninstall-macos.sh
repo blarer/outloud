@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
-# Remove Hexavoice from this Mac: processes, app bundle, TCC grants, shell plugin,
+# Remove OutLoud from this Mac: processes, app bundle, TCC grants, shell plugin,
 # and (optionally) the user's configuration.
 #
 # Why this script exists at all: a beta tester who decides the tool is not for
-# them must be able to get their machine back. Without this, removing Hexavoice by
+# them must be able to get their machine back. Without this, removing OutLoud by
 # hand means knowing about four separate locations, two of which (the TCC
 # grant and the `.zshrc` line) are invisible in Finder and neither of which a
 # user would think to look for. "How do I uninstall it?" going unanswered is
@@ -29,7 +29,7 @@ for arg in "$@"; do
             cat <<'USAGE'
 usage: uninstall-macos.sh [--purge] [--dry-run]
 
-  --purge     also delete ~/.config/hexavoice (your settings and vocabulary)
+  --purge     also delete ~/.config/outloud (your settings and vocabulary)
   --dry-run   print what would happen, change nothing
 
 Without --purge your configuration is kept, so reinstalling restores your
@@ -54,7 +54,7 @@ act() {
 
 say() { echo "$*"; }
 
-say "Uninstalling Hexavoice from this Mac."
+say "Uninstalling OutLoud from this Mac."
 [[ "$DRY_RUN" == 1 ]] && say "(dry run: nothing will be changed)"
 say ""
 
@@ -67,8 +67,8 @@ STOPPED=0
 # The old binary names too: an upgrader may still have the previous daemon
 # running, and uninstalling around a live process is how a "removed" tool
 # keeps answering the hotkey.
-for pattern in 'Hexavoice.app/Contents/MacOS/Hexavoice' 'Aqua.app/Contents/MacOS/Aqua' \
-               'target/release/hexad' 'target/release/aquad' \
+for pattern in 'OutLoud.app/Contents/MacOS/OutLoud' 'Aqua.app/Contents/MacOS/Aqua' \
+               'target/release/outloud' 'target/release/aquad' \
                'aqua-speech-helper' 'shell-bridge'; do
     # pgrep exits 1 when nothing matches, which is the common case and not an
     # error; `|| true` keeps `set -e` from treating a clean machine as failure.
@@ -97,18 +97,18 @@ REMOVED_BUNDLE=0
 # Both generations: an upgrader has the old bundles on disk too, and leaving
 # them behind is how a "clean" uninstall leaves a working daemon running.
 for app in Aqua.app AquaSpike.app AquaDoctor.app \
-           Hexavoice.app HexavoiceSpike.app HexavoiceDoctor.app; do
+           OutLoud.app OutLoudSpike.app OutLoudDoctor.app; do
     if [[ -d "$ROOT/dist/$app" ]]; then
         act rm -rf "$ROOT/dist/$app"
         REMOVED_BUNDLE=1
     fi
 done
-if [[ -d "/Applications/Hexavoice.app" ]]; then
-    act rm -rf "/Applications/Hexavoice.app"
+if [[ -d "/Applications/OutLoud.app" ]]; then
+    act rm -rf "/Applications/OutLoud.app"
     REMOVED_BUNDLE=1
 fi
-if [[ -d "/Applications/Hexavoice.app" ]]; then
-    act rm -rf "/Applications/Hexavoice.app"
+if [[ -d "/Applications/OutLoud.app" ]]; then
+    act rm -rf "/Applications/OutLoud.app"
     REMOVED_BUNDLE=1
 fi
 [[ "$REMOVED_BUNDLE" == 0 ]] && say "    no app bundles found"
@@ -155,8 +155,8 @@ say ""
 say "4. Removing the shell plugin line"
 REMOVED_RC=0
 # One pattern for both generations; also matches the sourced plugin line.
-RC_MARKER='\(aqua\|hexavoice\) shell-bridge'
-RC_SOURCED='shell/\(aqua\|hexavoice\)\.\(zsh\|bash\|fish\)'
+RC_MARKER='\(aqua\|outloud\) shell-bridge'
+RC_SOURCED='shell/\(aqua\|outloud\)\.\(zsh\|bash\|fish\)'
 for rc in "$HOME/.zshrc" "$HOME/.bashrc" "$HOME/.bash_profile" "$HOME/.config/fish/config.fish"; do
     [[ -f "$rc" ]] || continue
     if grep -q "$RC_MARKER" "$rc" 2>/dev/null; then
@@ -165,10 +165,10 @@ for rc in "$HOME/.zshrc" "$HOME/.bashrc" "$HOME/.bash_profile" "$HOME/.config/fi
         else
             # Keep a backup: editing someone's rc file is the one step here
             # that could cost them work that is not ours.
-            cp "$rc" "$rc.hexavoice-uninstall-backup"
+            cp "$rc" "$rc.outloud-uninstall-backup"
             grep -v "$RC_MARKER" "$rc" | grep -v "$RC_SOURCED" > "$rc.tmp"
             mv "$rc.tmp" "$rc"
-            say "==> cleaned $rc (backup at $rc.hexavoice-uninstall-backup)"
+            say "==> cleaned $rc (backup at $rc.outloud-uninstall-backup)"
         fi
         REMOVED_RC=1
     fi
@@ -191,11 +191,11 @@ REMOVED_STATE=0
 RUNTIME_BASE="${XDG_RUNTIME_DIR:-${TMPDIR:-/tmp}}"
 for path in \
     "$RUNTIME_BASE/aqua/shell.sock" \
-    "$RUNTIME_BASE/hexavoice/shell.sock" \
+    "$RUNTIME_BASE/outloud/shell.sock" \
     "${TMPDIR:-/tmp}/aqua-shell-bridge.sock" \
-    "${TMPDIR:-/tmp}/hexavoice-shell-bridge.sock" \
+    "${TMPDIR:-/tmp}/outloud-shell-bridge.sock" \
     "$HOME/.aqua-oss/models" \
-    "$HOME/.hexavoice/models"; do
+    "$HOME/.outloud/models"; do
     if [[ -e "$path" ]]; then
         act rm -rf "$path"
         REMOVED_STATE=1
@@ -208,12 +208,12 @@ say ""
 #    same as consenting to lose your settings.
 #
 #    Both directory names, for the same reason as the bundle ids above. The
-#    daemon adopts a pre-rename `aqua/` config into `hexavoice/` on first run,
+#    daemon adopts a pre-rename `aqua/` config into `outloud/` on first run,
 #    but a user who never launched the renamed build still has only the old
 #    one, and --purge that left it behind would not be a purge.
 say "6. Configuration"
 CONFIG_HOME="${XDG_CONFIG_HOME:-$HOME/.config}"
-CONFIG_DIRS=("$CONFIG_HOME/hexavoice" "$CONFIG_HOME/aqua")
+CONFIG_DIRS=("$CONFIG_HOME/outloud" "$CONFIG_HOME/aqua")
 if [[ "$PURGE" == 1 ]]; then
     PURGED=0
     for dir in "${CONFIG_DIRS[@]}"; do
@@ -239,6 +239,6 @@ say "Done."
 say ""
 say "One thing this script cannot do for you: macOS keeps a stale entry in"
 say "System Settings > Privacy & Security > Accessibility until you remove it"
-say "by hand. Select 'Hexavoice' there and press the minus button if it is still"
+say "by hand. Select 'OutLoud' there and press the minus button if it is still"
 say "listed. Apple provides no API to remove a row, only to reset the grant"
 say "behind it, which step 3 already did."

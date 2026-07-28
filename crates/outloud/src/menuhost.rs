@@ -119,7 +119,7 @@ impl MenuHost {
                 // terminal to print to at all.
                 for spec in cfg.inert_settings() {
                     eprintln!(
-                        "hexad: config sets \"{}\" but nothing reads it yet; it has no effect",
+                        "outloud: config sets \"{}\" but nothing reads it yet; it has no effect",
                         spec.key
                     );
                     self.problems.push(format!(
@@ -184,7 +184,7 @@ impl MenuHost {
         match action {
             Action::Set { key, value } => {
                 if let Err(e) = self.write_setting(&key, &value) {
-                    eprintln!("hexad: could not save {key}: {e}");
+                    eprintln!("outloud: could not save {key}: {e}");
                     self.problems.push(format!("could not save {key}: {e}"));
                 }
                 self.reload();
@@ -280,7 +280,7 @@ impl MenuHost {
             // the report is long, copy-pasteable into an issue, and an alert
             // from an accessory app would need activation we refuse to take.
             Ok(()) => open_with(&["-t"], &path),
-            Err(e) => eprintln!("hexad: could not write the diagnostics report: {e}"),
+            Err(e) => eprintln!("outloud: could not write the diagnostics report: {e}"),
         }
     }
 }
@@ -293,7 +293,7 @@ impl MenuHost {
 pub fn open_privacy_pane(pane: &str) {
     let url = format!("x-apple.systempreferences:com.apple.preference.security?{pane}");
     if let Err(e) = std::process::Command::new("open").arg(&url).spawn() {
-        eprintln!("hexad: could not open {url}: {e}");
+        eprintln!("outloud: could not open {url}: {e}");
     }
 }
 
@@ -325,7 +325,7 @@ fn open_with(flags: &[&str], path: &std::path::Path) {
 
     cmd.arg(path);
     if let Err(e) = cmd.spawn() {
-        eprintln!("hexad: could not open {}: {e}", path.display());
+        eprintln!("outloud: could not open {}: {e}", path.display());
     }
 }
 
@@ -372,7 +372,7 @@ mod tests {
         // mutexes are not. Driving the write path directly needs no
         // environment at all, and tests that fight over global state fail on
         // whichever machine happens to interleave them.
-        let dir = std::env::temp_dir().join(format!("hexa-nowrite-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("outloud-nowrite-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         let path = dir.join("config.toml");
