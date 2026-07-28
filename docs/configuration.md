@@ -30,7 +30,14 @@ deployments; the daemon never writes to it.
 
 The macOS menu bar item's **Settings** submenu is a view over this same
 file: choosing a value writes it here, preserving your comments, and editing
-the file by hand is picked up by the menu on its next reload.
+the file by hand is picked up by the menu within a second.
+
+The menu deliberately surfaces only the settings that are implemented today
+(`hotkey`, `enabled`, and hiding the overlay). The rest of the table below is
+schema and documentation ahead of the code: the keys validate, migrate, and
+report provenance, but the pipeline does not read them yet. They are listed
+here rather than offered as menu rows because a settings control that writes
+a key nothing consumes is worse than no control at all.
 
 ## Layering
 

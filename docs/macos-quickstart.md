@@ -134,29 +134,41 @@ Click the icon for the menu:
 Aqua: ready
 ─────────────────────────────
 Hold right-option to dictate
+Microphone: MacBook Pro Microphone
+─────────────────────────────
+✓ Pause Dictation
 ─────────────────────────────
 Settings                    >
-Edit /Users/you/.config/aqua/config.toml…
-Open vocabulary folder…
+Edit Config File…
+Open Vocabulary Folder…
 ─────────────────────────────
-Run diagnostics…
-Reload configuration
+Run Diagnostics…
+Reload Config
 ─────────────────────────────
 Quit Aqua
 ```
 
-- **Settings** changes the hotkey, model, insertion mode, casing, overlay
-  position, and the enabled / launch-at-login switches. The current value
-  carries a checkmark. Every change is written straight into your
-  `config.toml`, comments and all, so the menu and the file are two views of
-  the same thing and neither hides an edit made in the other.
-- **Run diagnostics** runs the same checks as `./scripts/doctor.sh`, but from
+- **Pause Dictation** drops the hotkey without stopping the daemon. Paused
+  means the microphone is never opened, not that audio is recorded and
+  discarded.
+- **Settings** holds the hotkey presets, and a switch for the floating
+  overlay. It deliberately offers only settings that are actually
+  implemented: `config.toml` lists every key the schema knows, and several of
+  them are not wired to anything yet. A menu row that writes a key nothing
+  reads would be a lie, so those live in the file until they work.
+  Changing the hotkey needs a quit and reopen, and the menu says so.
+- **Run Diagnostics** runs the same checks as `./scripts/doctor.sh`, but from
   inside the bundled app, so it reports on the permissions *Aqua* has rather
   than the ones your terminal has. The report opens in your text editor.
 - If a permission is missing, an extra item appears at the top of the menu
-  that opens the exact System Settings pane you need.
+  that opens the exact System Settings pane you need. Accessibility and
+  Microphone are separate grants and get separate rows.
 - **Quit Aqua** stops the daemon. It is the reason you no longer need
   `pkill`.
+
+Every change writes straight into your `config.toml`, comments and all, and
+edits you make in a text editor show up in the menu within a second. The menu
+and the file are two views of the same thing; neither hides the other's edits.
 
 The config file is created on first launch, fully commented, at
 `~/.config/aqua/config.toml` (or `$XDG_CONFIG_HOME/aqua/config.toml`).
