@@ -364,26 +364,35 @@ mod tests {
     /// reload, watcher polling, model rebuilds -- leave the file untouched.
     #[test]
     fn nothing_but_a_click_writes_the_config() {
-        let dir = std::env::temp_dir().join(format!("aqua-nowrite-{}", std::process::id()));
+        // Deliberately does NOT touch XDG_CONFIG_HOME. An earlier version
+        // did, and raced a config-crate test that sets the same variable:
+        // the two crates each guarded it with their own mutex, which cannot
+        // serialize anything because the variable is process-global and the
+        // mutexes are not. Driving the write path directly needs no
+        // environment at all, and tests that fight over global state fail on
+        // whichever machine happens to interleave them.
+        let dir = std::env::temp_dir().join(format!("hexa-nowrite-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
-        // XDG_CONFIG_HOME is process-global, so this test owns it while it
-        // runs and restores it afterwards.
-        let _guard = crate::menuhost::tests::env_lock();
-        let old = std::env::var_os("XDG_CONFIG_HOME");
-        std::env::set_var("XDG_CONFIG_HOME", &dir);
+        let path = dir.join("config.toml");
+        std::fs::write(&path, "# mine\nhotkey = \"f13\"\n").unwrap();
 
-        let mut host = MenuHost::new(RuntimeShared::new());
-        // Derive the directory from the constant the code writes to, rather
-        // than repeating the literal. The rename moved it from "aqua" to
-        // "hexavoice" and this assertion was left behind, failing on a path
-        // that no longer exists; naming the constant makes that impossible.
-        let path = dir.join(config::APP_DIR).join("config.toml");
-        let before = std::fs::read(&path).expect("first run writes the starter file");
+        let mut host = MenuHost {
+            settings: Settings {
+                config_path: Some(path.clone()),
+                ..Settings::default()
+            },
+            problems: Vec::new(),
+            actions: Vec::new(),
+            model: None,
+            watcher: None,
+            runtime: RuntimeShared::new(),
+        };
+        let before = std::fs::read(&path).unwrap();
 
-        // Every passive path a running daemon takes between clicks.
+        // Every passive path a running daemon takes between clicks: building
+        // a model, polling the watcher, and reacting to a device change.
         for _ in 0..5 {
-            host.reload();
             host.poll_file_changes();
             let _ = host.model(
                 overlay::OverlayState::Idle,
@@ -402,17 +411,17 @@ mod tests {
             "the daemon rewrote config.toml without a click"
         );
 
-        match old {
-            Some(v) => std::env::set_var("XDG_CONFIG_HOME", v),
-            None => std::env::remove_var("XDG_CONFIG_HOME"),
-        }
-        let _ = std::fs::remove_dir_all(&dir);
-    }
+        // And a click that changes nothing must also leave the bytes alone,
+        // which is the guard that stops a stray activation persisting a key
+        // the user never chose.
+        host.write_setting("hotkey", &Value::Str("f13".into()))
+            .unwrap();
+        assert_eq!(
+            before,
+            std::fs::read(&path).unwrap(),
+            "a no-op write must not rewrite the file"
+        );
 
-    /// Environment variables are process-global; tests that set them must
-    /// not run concurrently.
-    pub(crate) fn env_lock() -> std::sync::MutexGuard<'static, ()> {
-        static LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
-        LOCK.lock().unwrap_or_else(|e| e.into_inner())
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }
