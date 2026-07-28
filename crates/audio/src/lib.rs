@@ -33,6 +33,12 @@
 // platform-native backend (e.g. WASAPI on Windows) can sit beside it and be
 // selected by `cfg` without churning every `audio::capture::*` call site.
 // cpal covers CoreAudio/WASAPI/ALSA today, so it is the only backend.
+//
+// Feature-gated because cpal is the crate's only system-library dependency
+// (alsa-sys on Linux). A headless build takes its audio from a file or a
+// socket and must not link an audio stack it never calls; see the `capture`
+// feature in Cargo.toml for the full rationale.
+#[cfg(feature = "capture")]
 #[path = "capture_cpal.rs"]
 pub mod capture;
 pub mod resample;

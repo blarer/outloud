@@ -10,7 +10,25 @@ publish = false
 description = "Microphone capture, resampling, VAD, and speech segmentation for the recognizer pipeline"
 
 [features]
-default = []
+# `capture` is on by default because a desktop build dictates from a
+# microphone, and off is the deliberate choice a headless build makes.
+#
+# WHY this gate exists at all: cpal is the ONLY thing in this crate that
+# needs a system audio library, and on Linux that means alsa-sys running
+# pkg-config in a build script. Because cpal was an unconditional
+# dependency, every Linux build needed libasound2-dev even to run clippy,
+# and musl/cross builds failed outright with "pkg-config has not been
+# configured to support cross-compilation". A statically linked headless
+# daemon has no business linking ALSA, so the honest fix is to make the
+# microphone optional rather than to teach every CI job to cross-compile a
+# library it never calls.
+#
+# Everything else here (ring, resample, vad, segment) is pure DSP over
+# in-memory samples and stays available with `--no-default-features`, which
+# is what lets the WAV paths and the whole segmenter state machine build and
+# be tested with no audio stack present.
+default = ["capture"]
+capture = ["dep:cpal"]
 # Silero VAD via the vad-rs crate (pulls ONNX Runtime). Off by default so CI
 # and contributors without the ~50MB ort download still build and test the
 # whole segmenter state machine, which is VAD-implementation-agnostic.
@@ -25,7 +43,7 @@ silero = ["dep:vad-rs"]
 
 [dependencies]
 anyhow = { workspace = true }
-cpal = "0.18"
+cpal = { version = "0.18", optional = true }
 crossbeam-channel = "0.5"
 thiserror = "2"
 vad-rs = { version = "0.1", optional = true }
