@@ -337,24 +337,63 @@ fn insert_with_fallback(text: &str) -> Outcome {
             // Checked before the selection branch as well as the caret one,
             // because AXSelectedText is refused on the same elements.
             if is_read_only(&snap) {
-                return deliver_without_ax(text, &AxError::NotSettable);
+                // A readable-but-unwritable field is the accessibility
+                // signature of a terminal scrollback, so the typing
+                // strategy is forced to the paced per-character path here
+                // regardless of the app's name (an unknown terminal
+                // emulator presents exactly this way).
+                return deliver_without_ax(
+                    text,
+                    &AxError::NotSettable,
+                    typing_strategy(snap.app.as_deref(), true),
+                );
             }
             // A non-empty selection at commit time: typing replaces it, so
             // dictation does too. replace_focused takes the undo-preserving
             // AXSelectedText path here.
             if snap.is_selection_edit() {
-                return write_focused(text);
+                return write_focused(text, typing_strategy(snap.app.as_deref(), false));
             }
             match spliced_at_caret(&snap, text) {
-                Some(new_value) => write_focused(&new_value),
+                Some(new_value) => {
+                    write_focused(&new_value, typing_strategy(snap.app.as_deref(), false))
+                }
                 // Field readable but caret unknown/unmappable: paste inserts
                 // at the caret without us knowing where it is.
-                None => deliver_without_ax(text, &AxError::NoTextValue),
+                None => deliver_without_ax(
+                    text,
+                    &AxError::NoTextValue,
+                    typing_strategy(snap.app.as_deref(), false),
+                ),
             }
         }
-        Err(e) => deliver_without_ax(text, &e),
+        // No snapshot at all, so the snapshot cannot name the destination.
+        // Ask for the frontmost application separately: knowing the app is
+        // what allows the fast batched typing path, and one extra AX call
+        // is cheap next to the 40ms the per-character path would cost.
+        Err(e) => deliver_without_ax(
+            text,
+            &e,
+            typing_strategy(ax_edit::frontmost_app().as_deref(), false),
+        ),
     }
 }
+
+/// The typing-strategy decision, in one place so both fallback entry points
+/// agree. Delegates to the pure, unit-tested rule in `text-target`; this
+/// wrapper only exists because a headless build has no `keys` module.
+#[cfg(all(target_os = "macos", feature = "display"))]
+fn typing_strategy(
+    app: Option<&str>,
+    field_reads_but_refuses_writes: bool,
+) -> text_target::targets::keys::TypingStrategy {
+    text_target::targets::keys::typing_strategy_for(app, field_reads_but_refuses_writes)
+}
+
+/// Headless builds have no synthetic-keys tier to choose a strategy for;
+/// a unit type keeps the call sites identical.
+#[cfg(all(target_os = "macos", not(feature = "display")))]
+fn typing_strategy(_app: Option<&str>, _field_reads_but_refuses_writes: bool) {}
 
 /// Whether the focused element refuses every write the AX tier has.
 ///
@@ -406,15 +445,17 @@ fn spliced_at_caret(snap: &TextSnapshot, text: &str) -> Option<String> {
     Some(out)
 }
 
-/// One AX write with clipboard fallback, shared by both paths.
+/// One AX write with typed/clipboard fallback, shared by both paths.
+/// `typing` is decided by the caller, which has the snapshot naming the
+/// destination app; recomputing it here would race a focus change.
 #[cfg(target_os = "macos")]
-fn write_focused(text: &str) -> Outcome {
+fn write_focused(text: &str, typing: TypingChoice) -> Outcome {
     match ax_edit::replace_focused(text) {
         Ok(strategy) => Outcome::Wrote {
             text: text.to_string(),
             via: strategy.to_string(),
         },
-        Err(e) => deliver_without_ax(text, &e),
+        Err(e) => deliver_without_ax(text, &e, typing),
     }
 }
 
@@ -426,7 +467,57 @@ fn write_focused(text: &str) -> Outcome {
 /// AXSelectedTextRange comparison in ax-edit.
 #[cfg(target_os = "macos")]
 fn replace_selection(rewritten: &str) -> Outcome {
-    write_focused(rewritten)
+    // The edit path never targets a terminal (a terminal field is
+    // read-only and dictation-only), but the destination is re-read here
+    // for the same reason as the dictation path: the app name decides
+    // whether a typing fallback may batch.
+    write_focused(
+        rewritten,
+        typing_strategy(ax_edit::frontmost_app().as_deref(), false),
+    )
+}
+
+/// The typing strategy type as this build knows it: the real enum on a
+/// display build, unit on headless where no synthetic-keys tier exists.
+#[cfg(all(target_os = "macos", feature = "display"))]
+type TypingChoice = text_target::targets::keys::TypingStrategy;
+#[cfg(all(target_os = "macos", not(feature = "display")))]
+type TypingChoice = ();
+
+/// Type `text` using the chosen strategy and name the transport used.
+///
+/// Returns the `via` string rather than a bool so the log and overlay say
+/// WHICH typing path ran: "synthetic-keys-batched" is expected to be ~1ms,
+/// "synthetic-keys-paced" is the deliberate slow path for ttys, and seeing
+/// the wrong one against a given app is the diagnosis.
+#[cfg(all(target_os = "macos", feature = "display"))]
+fn type_with_strategy(text: &str, typing: TypingChoice) -> Result<String, String> {
+    use text_target::targets::keys::{CgEventTarget, TypingStrategy};
+    use text_target::TextTarget;
+    match typing {
+        TypingStrategy::Batched => match CgEventTarget.insert(text) {
+            Ok(()) => Ok("synthetic-keys-batched".into()),
+            // A refused batch (no trust, event creation failed) still has
+            // the paced path to try before giving up on typing entirely.
+            Err(e) => match ax_edit::synth::type_text(text) {
+                Ok(()) => Ok(format!("synthetic-keys-paced (batched refused: {e})")),
+                Err(e2) => Err(format!("batched: {e}; paced: {e2}")),
+            },
+        },
+        TypingStrategy::PerCharPaced => match ax_edit::synth::type_text(text) {
+            Ok(()) => Ok("synthetic-keys-paced".into()),
+            Err(e) => Err(e.to_string()),
+        },
+    }
+}
+
+/// Headless macOS build: only the per-character path exists (ax-edit is
+/// always linked), so the strategy is moot.
+#[cfg(all(target_os = "macos", not(feature = "display")))]
+fn type_with_strategy(text: &str, _typing: TypingChoice) -> Result<String, String> {
+    ax_edit::synth::type_text(text)
+        .map(|()| "synthetic-keys-paced".into())
+        .map_err(|e| e.to_string())
 }
 
 /// The last-resort transport, for destinations with no writable
@@ -462,17 +553,22 @@ fn replace_selection(rewritten: &str) -> Outcome {
 /// than granting a general-purpose scripting interpreter blanket input
 /// synthesis.
 #[cfg(target_os = "macos")]
-fn deliver_without_ax(text: &str, ax_err: &AxError) -> Outcome {
+fn deliver_without_ax(text: &str, ax_err: &AxError, typing: TypingChoice) -> Outcome {
     // Logged, not just folded into the outcome: the fallback usually
     // succeeds, and the AX refusal that caused it would otherwise vanish.
     eprintln!("outloud: AX write path refused ({ax_err}); typing it instead");
 
-    // Tier 1: type it. Leaves the clipboard alone entirely.
-    match ax_edit::synth::type_text(text) {
-        Ok(()) => {
+    // Tier 1: type it. Leaves the clipboard alone entirely. Two typing
+    // paths, chosen per destination (see `typing_strategy_for` in
+    // text-target): GUI apps take batched multi-character events (~1ms),
+    // terminals take the paced per-character path that a tty can keep up
+    // with. The `via` string names which, so a slow injection in the log
+    // is diagnosable to the strategy rather than a mystery.
+    match type_with_strategy(text, typing) {
+        Ok(via) => {
             return Outcome::Wrote {
                 text: text.to_string(),
-                via: "synthetic-keys".into(),
+                via,
             }
         }
         Err(e) => {
@@ -487,10 +583,19 @@ fn deliver_without_ax(text: &str, ax_err: &AxError) -> Outcome {
         match ClipboardTarget::new() {
             Ok(mut clip) => match clip.insert(text) {
                 Ok(()) => {
-                    // Give the target app a beat to consume the paste before
-                    // handing the user's original clipboard back.
-                    std::thread::sleep(std::time::Duration::from_millis(150));
-                    let _ = clip.restore();
+                    // The paste keystroke is already delivered; only the
+                    // clipboard *restore* must wait for the app to consume
+                    // the pasteboard. That wait is not the user's latency,
+                    // so it happens on a detached thread: the outcome (and
+                    // the injection timer) returns immediately, and the
+                    // user's original clipboard comes back ~300ms later.
+                    // 300ms rather than the old inline 150ms because a
+                    // busy app reading the pasteboard late now costs
+                    // nothing visible.
+                    std::thread::spawn(move || {
+                        std::thread::sleep(std::time::Duration::from_millis(300));
+                        let _ = clip.restore();
+                    });
                     Outcome::Wrote {
                         text: text.to_string(),
                         via: "clipboard-paste".into(),

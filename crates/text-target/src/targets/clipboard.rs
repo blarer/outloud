@@ -157,9 +157,18 @@ impl ClipboardTarget {
     }
 
     fn send_paste_keystroke(&self) -> Result<(), TargetError> {
-        // macOS can do this cheaply through System Events; it needs the same
-        // Accessibility grant the AX tier needs, which is fine because this
-        // tier only runs once that grant already failed to find a text field.
+        // macOS: post Cmd+V ourselves via CGEvent when trusted. This is both
+        // ~100ms faster than spawning osascript and more reliable: System
+        // Events keystroke synthesis is TCC-gated against *osascript*, not
+        // against us, so on a correctly-configured machine the osascript
+        // route fails with "osascript is not allowed to send keystrokes"
+        // while our own grant works (see ax-edit::synth module docs).
+        #[cfg(target_os = "macos")]
+        if ax_edit::is_trusted(false) && ax_edit::synth::press_cmd_v().is_ok() {
+            return Ok(());
+        }
+        // Untrusted (or the CGEvent post refused): System Events is the
+        // remaining hope, and its failure message names the real fix.
         if cfg!(target_os = "macos") {
             let status = Command::new("osascript")
                 .args([

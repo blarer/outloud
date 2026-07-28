@@ -9,16 +9,215 @@
 
 use crate::{Capabilities, Snapshot, TargetError, TextTarget, Tier};
 
-/// macOS CGEvent keyboard synthesis. Stub.
+/// How synthetic keystrokes should be paced for a given destination.
 ///
-/// Needs: `CGEventCreateKeyboardEvent` plus
-/// `CGEventKeyboardSetUnicodeString`, which sidesteps layouts entirely by
-/// attaching the literal string to a single event pair, and the same
-/// Accessibility trust the AX tier needs. When AX trust exists the AX tier
-/// is strictly better, so on macOS this only matters for apps that take
-/// keys but expose no AX field, which is exactly the secure-input and
-/// game-window cases where synthesis is often blocked too.
+/// The distinction exists because the two kinds of destination consume key
+/// events through entirely different machinery:
+///
+/// - A GUI text field receives the event's attached unicode *string* and
+///   inserts all of it, so a multi-character payload arrives intact and a
+///   whole sentence costs a handful of events (~1ms instead of ~40ms).
+/// - A terminal's input path is a tty line discipline reading from a pty.
+///   It samples the key event rather than reading the whole attached
+///   buffer: measured against `cat > file` in Terminal.app, a 20-unit
+///   payload delivered "hello from cgevent" as "bat". Terminals therefore
+///   need one character per event, paced so the tty keeps up.
+///
+/// Getting this wrong in the fast direction corrupts text (the "bat" case);
+/// getting it wrong in the slow direction merely wastes 40ms. The policy
+/// below errs slow only for destinations that look terminal-like.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TypingStrategy {
+    /// Multi-character unicode payloads, no inter-event pacing.
+    Batched,
+    /// One character per event with pacing, for tty-backed input.
+    PerCharPaced,
+}
+
+/// Applications whose focused "text field" is a tty behind a pty, where a
+/// batched unicode payload is dropped or mangled (see [`TypingStrategy`]).
+///
+/// Matched against the accessibility title of the frontmost application.
+/// The list errs toward inclusion: an unnecessary entry only costs speed in
+/// that one app, while a missing terminal corrupts what the user dictated.
+const TTY_BACKED_APPS: &[&str] = &[
+    "terminal", // Terminal.app
+    "iterm",    // iTerm2 reports "iTerm2" or "iTerm"
+    "wezterm",
+    "kitty",
+    "alacritty",
+    "ghostty",
+    "warp",
+    "hyper",
+    "tabby",
+    "rio",
+    "zellij",
+];
+
+/// Decide how to type into the destination, as a pure function so the rule
+/// is unit-testable without a display (the same discipline as
+/// [`crate::detect::Env`]).
+///
+/// `field_reads_but_refuses_writes` is the accessibility signature of a
+/// terminal scrollback: a readable `AXTextArea` that refuses both AXValue
+/// and AXSelectedText writes (the Terminal.app case measured in M0). Any
+/// destination showing it is treated as tty-backed even when its name is
+/// not on the list, because that signature is how an unknown terminal
+/// emulator presents.
+///
+/// Deliberately keyed on the DESTINATION application, never on whether this
+/// process has a tty: a daemon launched from a shell always has one while
+/// the user dictates into a browser, and that exact confusion was a real
+/// bug in tier selection once already (see `Env::destination_is_terminal`).
+pub fn typing_strategy_for(
+    destination_app: Option<&str>,
+    field_reads_but_refuses_writes: bool,
+) -> TypingStrategy {
+    if field_reads_but_refuses_writes {
+        return TypingStrategy::PerCharPaced;
+    }
+    let Some(app) = destination_app else {
+        // Unknown destination: the slow path is the one that cannot corrupt.
+        return TypingStrategy::PerCharPaced;
+    };
+    let app = app.to_ascii_lowercase();
+    if TTY_BACKED_APPS.iter().any(|t| app.contains(t)) {
+        TypingStrategy::PerCharPaced
+    } else {
+        TypingStrategy::Batched
+    }
+}
+
+/// Split `text` into chunks of at most `max_units` UTF-16 code units,
+/// never splitting a `char` (a surrogate pair must ride one event: half a
+/// pair is not a character and renders as a replacement glyph).
+///
+/// Pure so the chunking rule is asserted on in tests rather than buried in
+/// the FFI call. `max_units` exists because very long payloads on a single
+/// CGEvent have historically been truncated by some consumers; 20 units per
+/// event is the conservative, widely-used bound and still turns a sentence
+/// into a handful of events instead of one per character.
+pub fn unicode_event_chunks(text: &str, max_units: usize) -> Vec<Vec<u16>> {
+    let max_units = max_units.max(2); // a lone astral char needs 2 units
+    let mut chunks: Vec<Vec<u16>> = Vec::new();
+    let mut current: Vec<u16> = Vec::new();
+    let mut buf = [0u16; 2];
+    for ch in text.chars() {
+        let units = ch.encode_utf16(&mut buf);
+        if current.len() + units.len() > max_units {
+            chunks.push(std::mem::take(&mut current));
+        }
+        current.extend_from_slice(units);
+    }
+    if !current.is_empty() {
+        chunks.push(current);
+    }
+    chunks
+}
+
+/// macOS CGEvent keyboard synthesis, batched.
+///
+/// Uses `CGEventCreateKeyboardEvent` plus `CGEventKeyboardSetUnicodeString`,
+/// which sidesteps layouts entirely by attaching a literal UTF-16 string to
+/// each event pair, and needs the same Accessibility trust the AX tier
+/// needs. Unlike the per-character path in `ax_edit::synth` (which exists
+/// for tty-backed destinations, see [`TypingStrategy`]), this target sends
+/// multi-character payloads with no pacing, so a whole sentence costs a few
+/// events rather than one pair per character: ~1ms instead of ~40ms.
 pub struct CgEventTarget;
+
+/// Same event-tap constants as `ax_edit::synth`, and for the same reasons:
+/// posting at the session tap keeps our own hotkey CGEventTap from seeing
+/// (and reentrantly mangling) our synthetic events, and a private source
+/// prevents a physically-held hotkey modifier from combining with the
+/// payload into chords.
+#[cfg(all(target_os = "macos", feature = "display"))]
+mod cgevent {
+    use std::ffi::c_void;
+
+    type CGEventRef = *const c_void;
+    type CGEventSourceRef = *const c_void;
+
+    #[link(name = "CoreGraphics", kind = "framework")]
+    extern "C" {
+        fn CGEventSourceCreate(state_id: u32) -> CGEventSourceRef;
+        fn CGEventCreateKeyboardEvent(
+            source: CGEventSourceRef,
+            keycode: u16,
+            keydown: bool,
+        ) -> CGEventRef;
+        fn CGEventKeyboardSetUnicodeString(event: CGEventRef, length: u32, string: *const u16);
+        fn CGEventSetFlags(event: CGEventRef, flags: u64);
+        fn CGEventPost(tap_location: u32, event: CGEventRef);
+    }
+
+    #[link(name = "CoreFoundation", kind = "framework")]
+    extern "C" {
+        fn CFRelease(cf: *const c_void);
+    }
+
+    /// `kCGSessionEventTap`: below the HID insertion point, so our own
+    /// listen-only hotkey tap never sees these events (see ax-edit::synth
+    /// for the reentrancy incident this prevents).
+    const SESSION_TAP: u32 = 1;
+    /// `kCGEventSourceStatePrivate`: do not inherit held modifiers.
+    const PRIVATE_SOURCE: u32 = -1i32 as u32;
+
+    struct Event(CGEventRef);
+    impl Drop for Event {
+        fn drop(&mut self) {
+            if !self.0.is_null() {
+                unsafe { CFRelease(self.0) };
+            }
+        }
+    }
+
+    /// Post every chunk as a down+up event pair carrying the chunk as its
+    /// unicode payload. No pacing: GUI event queues are ordered and
+    /// buffered, and pacing is exactly what made the per-character path
+    /// cost 40ms per sentence.
+    pub(super) fn post_chunks(chunks: &[Vec<u16>]) -> Result<(), super::TargetError> {
+        let source = unsafe { CGEventSourceCreate(PRIVATE_SOURCE) };
+        // A null source is legal ("no source state"): degraded, not fatal.
+        let release_source = scopeguard(source);
+        for chunk in chunks {
+            for &down in &[true, false] {
+                let ev = Event(unsafe { CGEventCreateKeyboardEvent(source, 0, down) });
+                if ev.0.is_null() {
+                    return Err(super::TargetError::Transport(
+                        "CGEventCreateKeyboardEvent returned null".into(),
+                    ));
+                }
+                unsafe {
+                    // Belt and braces with the private source: a stray
+                    // Command flag turns dictated text into menu shortcuts.
+                    CGEventSetFlags(ev.0, 0);
+                    CGEventKeyboardSetUnicodeString(ev.0, chunk.len() as u32, chunk.as_ptr());
+                    CGEventPost(SESSION_TAP, ev.0);
+                }
+            }
+        }
+        drop(release_source);
+        Ok(())
+    }
+
+    /// Minimal drop guard for the event source (a full scopeguard dep is
+    /// not worth one release call).
+    struct SourceGuard(CGEventSourceRef);
+    impl Drop for SourceGuard {
+        fn drop(&mut self) {
+            if !self.0.is_null() {
+                unsafe { CFRelease(self.0) };
+            }
+        }
+    }
+    fn scopeguard(source: CGEventSourceRef) -> SourceGuard {
+        SourceGuard(source)
+    }
+}
+
+/// UTF-16 units per event. See [`unicode_event_chunks`] for why 20.
+const CGEVENT_CHUNK_UNITS: usize = 20;
 
 impl TextTarget for CgEventTarget {
     fn name(&self) -> &'static str {
@@ -37,9 +236,25 @@ impl TextTarget for CgEventTarget {
         Err(TargetError::NotReadable("keystroke synthesis cannot read"))
     }
 
+    #[cfg(all(target_os = "macos", feature = "display"))]
+    fn insert(&mut self, text: &str) -> Result<(), TargetError> {
+        if text.is_empty() {
+            return Ok(());
+        }
+        // Without trust CGEventPost silently does nothing, which would look
+        // like a successful write that delivered no text: check and refuse.
+        if !ax_edit::is_trusted(false) {
+            return Err(TargetError::Unsupported(
+                "CGEvent synthesis needs Accessibility trust",
+            ));
+        }
+        cgevent::post_chunks(&unicode_event_chunks(text, CGEVENT_CHUNK_UNITS))
+    }
+
+    #[cfg(not(all(target_os = "macos", feature = "display")))]
     fn insert(&mut self, _text: &str) -> Result<(), TargetError> {
         Err(TargetError::Unsupported(
-            "CGEvent keystroke synthesis not yet implemented",
+            "CGEvent synthesis exists only on macOS display builds",
         ))
     }
 
@@ -228,6 +443,148 @@ impl TextTarget for UinputTarget {
         Err(TargetError::Unsupported(
             "keystroke synthesis cannot address existing text",
         ))
+    }
+}
+
+#[cfg(test)]
+mod strategy_tests {
+    use super::*;
+
+    /// The iMessage regression class: a native GUI app whose AX write was
+    /// refused must get BATCHED typing, not the per-character tty pacing
+    /// that made a sentence take 40ms and visibly stream.
+    #[test]
+    fn gui_apps_get_batched_typing() {
+        for app in [
+            "Messages",
+            "Mail",
+            "Notes",
+            "Slack",
+            "Safari",
+            "Google Chrome",
+        ] {
+            assert_eq!(
+                typing_strategy_for(Some(app), false),
+                TypingStrategy::Batched,
+                "{app} is a GUI app and must not be typed character by character"
+            );
+        }
+    }
+
+    /// The corruption direction: a tty samples key events instead of
+    /// reading the attached string (a 20-unit payload rendered "hello from
+    /// cgevent" as "bat" in Terminal.app), so terminals must stay paced.
+    #[test]
+    fn terminals_get_paced_typing() {
+        for app in [
+            "Terminal",
+            "iTerm2",
+            "WezTerm",
+            "kitty",
+            "Alacritty",
+            "Ghostty",
+            "Warp",
+        ] {
+            assert_eq!(
+                typing_strategy_for(Some(app), false),
+                TypingStrategy::PerCharPaced,
+                "{app} is tty-backed and a batched payload would be mangled"
+            );
+        }
+    }
+
+    /// A readable-but-unwritable field is how an UNKNOWN terminal emulator
+    /// presents (the Terminal.app scrollback signature), so that signal
+    /// forces pacing even for an app whose name says nothing.
+    #[test]
+    fn read_only_field_forces_pacing_regardless_of_name() {
+        assert_eq!(
+            typing_strategy_for(Some("SomeNewTerm"), true),
+            TypingStrategy::PerCharPaced
+        );
+        assert_eq!(
+            typing_strategy_for(Some("Messages"), true),
+            TypingStrategy::PerCharPaced,
+            "the field signature outranks the app name: wrong-fast corrupts"
+        );
+    }
+
+    /// No app name at all: err toward the path that cannot corrupt.
+    #[test]
+    fn unknown_destination_stays_paced() {
+        assert_eq!(
+            typing_strategy_for(None, false),
+            TypingStrategy::PerCharPaced
+        );
+    }
+
+    /// The prior real bug in this area was keying on OUR process's tty
+    /// rather than the destination. The signature of this function makes
+    /// that impossible to reintroduce silently: it takes only destination
+    /// facts, and matching is case-insensitive so "terminal" and
+    /// "Terminal" agree.
+    #[test]
+    fn matching_is_case_insensitive() {
+        assert_eq!(
+            typing_strategy_for(Some("TERMINAL"), false),
+            TypingStrategy::PerCharPaced
+        );
+    }
+
+    fn rejoin(chunks: &[Vec<u16>]) -> String {
+        let units: Vec<u16> = chunks.iter().flatten().copied().collect();
+        String::from_utf16(&units).unwrap()
+    }
+
+    /// The strongest chunking property: what is posted must decode back to
+    /// exactly the transcript, for any chunk bound.
+    #[test]
+    fn chunks_round_trip_to_the_original() {
+        for s in [
+            "",
+            "hello",
+            "The quick brown fox jumps over the lazy dog.",
+            "émoji 🎤👍🏽 日本語",
+        ] {
+            for max in [2, 3, 20, 1000] {
+                assert_eq!(
+                    rejoin(&unicode_event_chunks(s, max)),
+                    s,
+                    "max={max} s={s:?}"
+                );
+            }
+        }
+    }
+
+    /// A surrogate pair must never straddle a chunk boundary: half a pair
+    /// on its own event renders as a replacement glyph.
+    #[test]
+    fn surrogate_pairs_never_split_across_chunks() {
+        // max=3 forces awkward boundaries around every 2-unit char.
+        for chunk in unicode_event_chunks("a🎤b🎤c🎤", 3) {
+            assert!(chunk.len() <= 3);
+            // A chunk must not END with an unmatched high surrogate.
+            if let Some(&last) = chunk.last() {
+                assert!(
+                    !(0xD800..0xDC00).contains(&last),
+                    "chunk ends with a lone high surrogate: {chunk:?}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn empty_text_produces_no_chunks() {
+        assert!(unicode_event_chunks("", 20).is_empty());
+    }
+
+    /// Chunk bound is respected: a 44-char sentence at 20 units per event
+    /// is 3 events, which is the entire speedup over 44 paced events.
+    #[test]
+    fn chunk_bound_is_respected() {
+        let chunks = unicode_event_chunks("The quick brown fox jumps over the lazy dog.", 20);
+        assert_eq!(chunks.len(), 3);
+        assert!(chunks.iter().all(|c| c.len() <= 20));
     }
 }
 
