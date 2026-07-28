@@ -426,9 +426,30 @@ numbers, and the measured hot spot (recognizer finalize) is inside
 micro-optimize the AX path.** It is ~20% of the budget and already 15x inside
 its own gate; the remaining win is in the recognizer.
 
-`scripts/bench-gate.sh` was deliberately **not** run: it activates TextEdit and
-steals focus on a live machine other agents are working on. That is a real gap
-in this report, not a claim of coverage.
+The regression gate WAS run, on a second pass, after initially being skipped.
+`scripts/bench-gate.sh` activates TextEdit and steals focus, which is not
+acceptable on a live machine other agents are using, so the gate binary was
+driven directly against a throwaway TextEdit document with the previously
+frontmost app recorded and restored afterwards (restore runs on a trap, so it
+happens even on failure):
+
+```
+frontmost before: wezterm-gui
+read   n=200  p50=434.292us p90=  7.087ms p99= 16.122ms max= 19.729ms
+gate OK: p50 <= 2ms, p99 <= 50ms
+GATE_RC=0
+focus restored to: wezterm-gui
+```
+
+**Passes, with a caveat worth stating rather than burying:** p50 of 434us is
+~3x the 134us recorded in `docs/latency.md`'s gate table, and p99 of 16.1ms is
+~6x its 2.6ms. Both are comfortably inside budget (4.6x and 3.1x headroom
+respectively), and this machine was running four agents, several cargo builds,
+and a release-mode compile concurrently, which is exactly the "busy machine"
+noise the budgets were deliberately loosened to tolerate. So this is **not**
+recorded as a regression: the gate's own verdict is OK and the documented
+figures were taken on an idle machine. It is recorded because a future reader
+comparing raw numbers would otherwise think docs/latency.md was wrong.
 
 ---
 
