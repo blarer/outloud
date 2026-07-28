@@ -42,12 +42,39 @@ pub fn osc52_query_clipboard() -> Vec<u8> {
 /// The markers themselves (ESC [200~ / ESC [201~) are what the *terminal*
 /// sends to the application; a program writing to the pty master, or a
 /// multiplexer's paste command, sends them directly.
+/// The paste bracket is a COMMAND EXECUTION BOUNDARY, so the payload is
+/// sanitised first: see [`strip_paste_markers`]. Without that, a transcript
+/// containing the terminator closes the bracket early and a following
+/// newline runs whatever comes after it. The transcript is untrusted input
+/// by construction (it is whatever the microphone heard, or whatever a
+/// caller handed us) and it lands one keypress away from a shell.
 pub fn bracketed_paste(text: &str) -> Vec<u8> {
-    let mut out = Vec::with_capacity(text.len() + 12);
+    let safe = strip_paste_markers(text);
+    let mut out = Vec::with_capacity(safe.len() + 12);
     out.extend_from_slice(b"\x1b[200~");
-    out.extend_from_slice(text.as_bytes());
+    out.extend_from_slice(safe.as_bytes());
     out.extend_from_slice(b"\x1b[201~");
     out
+}
+
+/// Remove any bracketed-paste markers already present in `text`.
+///
+/// Why remove rather than escape: there is no escaping mechanism inside a
+/// paste bracket. The terminator ends it, full stop, so the only safe
+/// payload is one that does not contain it. Dropping the markers changes
+/// what the user sees only in the pathological case (a literal control
+/// sequence in dictated text, which no speech recognizer produces), while
+/// keeping them would mean arbitrary command execution.
+///
+/// Returns a borrowed string in the overwhelmingly common case where the
+/// text is already clean, so the safe path costs one scan and no allocation.
+pub fn strip_paste_markers(text: &str) -> std::borrow::Cow<'_, str> {
+    const START: &str = "\x1b[200~";
+    const END: &str = "\x1b[201~";
+    if !text.contains(START) && !text.contains(END) {
+        return std::borrow::Cow::Borrowed(text);
+    }
+    std::borrow::Cow::Owned(text.replace(START, "").replace(END, ""))
 }
 
 /// iTerm2 proprietary OSC 1337 `Copy` variant: like OSC 52 but iTerm-only.
@@ -85,6 +112,54 @@ pub fn tmux_passthrough(seq: &[u8]) -> Vec<u8> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// SECURITY: the paste bracket is a command-execution boundary, so a
+    /// payload containing the terminator must not be able to close it.
+    #[test]
+    fn a_payload_cannot_escape_the_paste_bracket() {
+        // The attack: a transcript containing ESC[201~ closes the bracket
+        // early, after which a newline EXECUTES whatever follows. The
+        // recognizer output is untrusted input here: it is whatever the
+        // microphone heard, and this text lands one keypress from a shell.
+        let hostile = "hi\x1b[201~\nid\n";
+        let out = bracketed_paste(hostile);
+        let s = String::from_utf8_lossy(&out);
+        assert_eq!(
+            s.matches("\x1b[201~").count(),
+            1,
+            "exactly one terminator may appear, and it must be OURS at the end"
+        );
+        assert!(
+            s.ends_with("\x1b[201~"),
+            "the only terminator must be the closing one we appended"
+        );
+    }
+
+    #[test]
+    fn a_payload_cannot_forge_an_opening_bracket_either() {
+        // A forged OPENING marker is less dangerous but still desynchronises
+        // the receiving line editor's paste state.
+        let out = bracketed_paste("a\x1b[200~b");
+        let s = String::from_utf8_lossy(&out);
+        assert_eq!(s.matches("\x1b[200~").count(), 1);
+        assert!(s.starts_with("\x1b[200~"));
+    }
+
+    #[test]
+    fn ordinary_text_is_passed_through_untouched() {
+        // Sanitising must not corrupt normal dictation, including text with
+        // newlines and non-ASCII, which is the overwhelmingly common case.
+        for t in ["hello world", "line one\nline two", "café 日本 🎉", ""] {
+            let out = bracketed_paste(t);
+            let s = String::from_utf8_lossy(&out);
+            let inner = s
+                .strip_prefix("\x1b[200~")
+                .unwrap()
+                .strip_suffix("\x1b[201~")
+                .unwrap();
+            assert_eq!(inner, t, "payload was altered for {t:?}");
+        }
+    }
 
     #[test]
     fn osc52_encodes_payload_as_base64() {
