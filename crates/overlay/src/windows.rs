@@ -41,6 +41,7 @@
 //! shortest correct path just as direct AppKit drawing is on macOS.
 
 use crate::layout::{place, Anchor, Point, Rect, Size};
+use crate::pixel::{premultiply, PANEL_ALPHA};
 use crate::state::OverlayState;
 use crate::{Overlay, OverlayFrame};
 
@@ -291,22 +292,17 @@ impl WinOverlay {
             SelectObject(mem_dc, old_font);
             let _ = DeleteObject(HGDIOBJ(font.0));
 
-            // Alpha fixup: GDI wrote alpha=0 everywhere it drew. Give every
-            // pixel the panel's alpha and premultiply, which for a uniform
-            // alpha is a scale of each channel.
+            // Alpha fixup: GDI wrote alpha=0 everywhere it drew, and
+            // UpdateLayeredWindow with AC_SRC_ALPHA demands PREMULTIPLIED
+            // pixels. The per-pixel maths lives in `premultiply` so it can
+            // be unit-tested; a wrong formula here yields an invisible or
+            // black-boxed overlay, which is a bug you can only see by
+            // looking at a Windows screen.
             let px = bits as *mut u32;
             let count = (OVERLAY_W * OVERLAY_H) as isize;
-            const ALPHA: u32 = 230; // ~90%
             for i in 0..count {
                 let p = px.offset(i);
-                let v = *p;
-                let r = (v >> 16) & 0xFF;
-                let g = (v >> 8) & 0xFF;
-                let b = v & 0xFF;
-                *p = (ALPHA << 24)
-                    | ((r * ALPHA / 255) << 16)
-                    | ((g * ALPHA / 255) << 8)
-                    | (b * ALPHA / 255);
+                *p = premultiply(*p, PANEL_ALPHA);
             }
 
             let blend = BLENDFUNCTION {

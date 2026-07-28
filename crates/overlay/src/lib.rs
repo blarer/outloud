@@ -34,6 +34,7 @@
 //! compiled and unit-tested on every platform including headless CI.
 
 pub mod layout;
+pub mod pixel;
 pub mod state;
 
 #[cfg(all(target_os = "macos", feature = "display"))]
