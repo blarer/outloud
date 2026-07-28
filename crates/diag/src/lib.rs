@@ -18,6 +18,22 @@
 //!    bundler that strips everything the user typed, because this tool sees
 //!    everything the user types.
 
+/// The bundle identifier the shipped application is signed with.
+///
+/// This is duplicated in `scripts/bundle-outloud-macos.sh`, which is the file
+/// that actually writes it into `Info.plist`; a shell script cannot read a
+/// Rust constant, so the two are kept in step by a test in `checks.rs` that
+/// parses the script.
+///
+/// It exists as a constant because the alternative already failed. The value
+/// was written out by hand in the diagnostics, the remedy strings, and the
+/// microphone probe. Two product renames later, those copies still said
+/// `dev.aquaoss.spike` while the app shipped as `dev.hexavoice.hexad`, so the
+/// doctor told users to run a `tccutil reset` against an identifier no
+/// installed app had. `tccutil` prints "Successfully reset" for an unknown
+/// identifier, so the advice looked like it worked and changed nothing.
+pub const BUNDLE_ID: &str = "dev.hexavoice.hexad";
+
 pub mod checks;
 pub mod redact;
 pub mod replay;

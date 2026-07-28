@@ -81,9 +81,12 @@ impl Check for AccessibilityPermission {
         CheckOutcome::fail(
             "not trusted for accessibility",
             ErrorClass::Permission,
-            "System Settings > Privacy & Security > Accessibility: enable the toggle for this \
-             app. If the toggle already reads 'on', the signature changed since the grant; run \
-             `tccutil reset Accessibility dev.aquaoss.spike` and re-grant",
+            format!(
+                "System Settings > Privacy & Security > Accessibility: enable the toggle for \
+                 this app. If the toggle already reads 'on', the signature changed since the \
+                 grant; run `tccutil reset Accessibility {}` and re-grant",
+                crate::BUNDLE_ID
+            ),
         )
     }
 }
@@ -164,7 +167,7 @@ fn tcc_microphone_state() -> Option<bool> {
     // auth_value 2 = allowed. Any row for our bundle id decides; absence of
     // any readable row means unknown.
     for line in text.lines() {
-        if line.contains("aquaoss") {
+        if line.contains(crate::BUNDLE_ID) {
             return Some(line.trim_end().ends_with("|2"));
         }
     }
@@ -236,9 +239,11 @@ pub fn classify_codesign_output(success: bool, stderr: &str) -> CheckOutcome {
             "signature is AD-HOC: the accessibility grant is pinned to this exact build's \
              cdhash and will silently die on the next rebuild (toggle will still read 'on')",
             ErrorClass::Configuration,
-            "after every rebuild run `tccutil reset Accessibility dev.aquaoss.spike` and \
-             re-grant; long term, sign with a Developer ID certificate so the grant survives \
-             rebuilds",
+            format!(
+                "after every rebuild run `tccutil reset Accessibility {}` and re-grant; long \
+                 term, sign with a Developer ID certificate so the grant survives rebuilds",
+                crate::BUNDLE_ID
+            ),
         );
     }
     let identity = stderr
@@ -1081,5 +1086,65 @@ mod tests {
         assert_eq!(macos_major("14.5"), Some(14));
         assert_eq!(macos_major("26.0.1"), Some(26));
         assert_eq!(macos_major("beta"), None);
+    }
+
+    /// The constant must match what the bundle script actually writes.
+    ///
+    /// A shell script cannot read a Rust constant, so this is the seam where
+    /// the two can drift apart, and it has drifted before: after two product
+    /// renames the diagnostics still named `dev.aquaoss.spike` while the app
+    /// shipped as something else entirely. Nothing failed loudly, because
+    /// `tccutil` prints "Successfully reset" for an identifier it has never
+    /// heard of, so the doctor's advice looked like it worked while changing
+    /// nothing at all.
+    #[test]
+    fn bundle_id_matches_the_bundle_script() {
+        let script = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../scripts/bundle-outloud-macos.sh");
+        let Ok(text) = std::fs::read_to_string(&script) else {
+            // Absent in a packaged crate; nothing to compare against.
+            return;
+        };
+
+        let declared = text
+            .lines()
+            .find_map(|l| l.trim().strip_prefix("BUNDLE_ID="))
+            .map(|v| v.trim().trim_matches('"').to_string())
+            .expect("bundle script no longer declares BUNDLE_ID");
+
+        assert_eq!(
+            declared,
+            crate::BUNDLE_ID,
+            "diag::BUNDLE_ID is {}, but {} signs the app as {}. Every remedy \
+             string that tells a user to run `tccutil reset` is now wrong, and \
+             wrong silently.",
+            crate::BUNDLE_ID,
+            script.display(),
+            declared
+        );
+    }
+
+    /// No remedy may hardcode a bundle identifier.
+    ///
+    /// The constant only helps if it is the single source. This catches a new
+    /// literal being pasted back in, which is exactly how the last drift
+    /// happened.
+    #[test]
+    fn no_remedy_hardcodes_a_bundle_id() {
+        let source = include_str!("checks.rs");
+        // Split the needle so this test does not match its own source.
+        let needle = concat!("tccutil reset Accessibility ", "dev.");
+        for (n, line) in source.lines().enumerate() {
+            // Skip prose, including this test's own explanation of the bug.
+            if line.trim_start().starts_with("//") {
+                continue;
+            }
+            assert!(
+                !line.contains(needle),
+                "line {} hardcodes a bundle id in a remedy; use crate::BUNDLE_ID: {}",
+                n + 1,
+                line.trim()
+            );
+        }
     }
 }
