@@ -1,16 +1,85 @@
-# Hexavoice
+<div align="center">
 
-A fully local, open-source alternative to [Aqua Voice](https://withaqua.com):
-hold a key, speak, and text appears in whatever you are typing into. Select
+<img src="docs/assets/logo.svg" alt="OutLoud" width="140">
+
+# OutLoud
+
+**Talk to your computer. The words land where you are already typing.**
+
+</div>
+
+Hold a key, speak, and text appears in whatever you are typing into. Select
 text, speak a change, and it is rewritten in place.
 
-Nothing leaves your machine.
+Your audio never leaves your machine.
+
+**Open-source software, proprietary model.** Every line of this project is MIT
+licensed and auditable. The speech recognition it currently depends on is
+Apple's on-device `SpeechTranscriber`, whose weights are Apple's and closed.
+That is a real limitation and it is stated here rather than in a footnote:
+
+- The recognizer runs **on your device**, so "nothing leaves your machine"
+  holds. It is local, and it is not open.
+- It requires **macOS 26 or newer**. On macOS 13-25 the app installs, runs, and
+  shows its menu bar icon, but **cannot transcribe a word**.
+- The open-weights backends (Parakeet TDT, whisper.cpp) are **stubs**, not
+  implementations. Until one lands, there is no fully-open path end to end, and
+  no working recognizer on Windows or Linux at all.
+
+If a fully open stack is what you need today, this is not yet that. It is the
+rest of the machine built around one, and the recognizer is a seam designed to
+be swapped ([`crates/asr`](crates/asr)).
 
 **Status: working prototype.** Dictation, edit-by-voice, and shell command-line
 editing are verified end to end on macOS. Windows backends (UI Automation,
 keyboard hook, layered overlay) are implemented and compile in CI on real
 Windows runners, but have not been exercised on Windows hardware. Linux is
 still designed and stubbed. See [what works](#what-works-today).
+
+## How it works
+
+```mermaid
+flowchart LR
+    K([Hold hotkey]) --> M[Microphone]
+    M --> V[Voice activity<br/>detection]
+    V --> R[Recognizer<br/>on-device]
+    R --> I{Text selected<br/>when you pressed?}
+    I -->|No| D[Insert at cursor]
+    I -->|Yes| E[Parse as an edit<br/>command]
+    E --> W[Rewrite the selection<br/>in place]
+    D --> T[Your app]
+    W --> T
+
+    style K fill:#2d3748,color:#fff
+    style R fill:#c05621,color:#fff
+    style T fill:#2b6cb0,color:#fff
+```
+
+The orange step is the only closed component. Everything else is in this repo.
+
+Text is delivered through whichever transport the focused application actually
+supports, best first, falling back until something works:
+
+```mermaid
+flowchart TB
+    S([Text to deliver]) --> A{Accessibility API<br/>exposes a text field?}
+    A -->|Yes| A1[Write in place<br/>undo preserved]
+    A -->|No| C{In a terminal?}
+    C -->|Yes| C1[Talk to the line editor<br/>shell undo preserved]
+    C -->|No| K{Can we synthesize keys?}
+    K -->|Yes| K1[Type it]
+    K -->|No| P[Clipboard, paste, restore]
+
+    style A1 fill:#38a169,color:#fff
+    style C1 fill:#38a169,color:#fff
+    style K1 fill:#c05621,color:#fff
+    style P fill:#c05621,color:#fff
+```
+
+Green paths can *read* the existing text, which is what makes edit-by-voice
+possible. Orange paths are insert-only: dictation works, editing does not.
+Why each tier exists, and which applications land in which, is in
+[`docs/compat-matrix.md`](docs/compat-matrix.md).
 
 ## Why this exists
 
@@ -34,9 +103,10 @@ open source:
    SSH sessions and servers.
 
 It is also faster. Measured end to end on an M4 Pro: **131-215ms** from key
-release to text on screen, against Hexavoice's advertised ~450ms insert latency.
-The spread is real and depends on the transport: an accessibility write into a
-native field is the fast end, synthesized keys into a terminal the slow end.
+release to text on screen, against Aqua Voice's advertised ~450ms insert
+latency. The spread is real and depends on the transport: an accessibility
+write into a native field is the fast end, synthesized keys into a terminal the
+slow end.
 
 ## What works today
 
@@ -50,8 +120,12 @@ Every number below was measured on this machine, not estimated.
 | Clipboard fallback (unfocused) | text still delivered | 445ms |
 
 Recognition is Apple's on-device `SpeechTranscriber` (macOS 26+), which needs no
-model download. Parakeet TDT and whisper.cpp backends are stubbed with
-documented model URLs for platforms without it.
+model download and whose weights are Apple's, not ours. Parakeet TDT and
+whisper.cpp backends are **stubbed, not implemented**: the files exist with a
+documented integration plan and model URLs, and they return an error if you
+select them. Implementing one is the single highest-value contribution
+available here, because it is what would make the stack open end to end and
+give Windows and Linux a working recognizer.
 
 Not yet built: Linux transports, a Windows shell integration (the unix-socket
 bridge needs a named-pipe plus PSReadLine equivalent), streaming partial
@@ -85,18 +159,18 @@ while an admin app has focus and recovers when focus moves. Details in
 
 Requires macOS 13 or newer (26+ for the zero-install recognizer), a Rust
 toolchain, and Xcode Command Line Tools for `swiftc`. Windows builds and
-installs (`scripts/build-windows.sh` ships `hexad.exe` and `hexavoice-spike.exe`)
+installs (`scripts/build-windows.sh` ships `outloud.exe` and `outloud-spike.exe`)
 but is untested on hardware; Linux does not work yet.
 
 ```bash
-git clone https://github.com/blarer/hexavoice
-cd hexavoice
+git clone https://github.com/blarer/outloud
+cd outloud
 
 # Builds the daemon, compiles the Swift speech helper, packages the .app, and
 # signs it. Use this rather than a bare `cargo build`: the recognizer is a
 # Swift child process, not a linked library, so cargo alone does not produce
 # it and the daemon comes up unable to transcribe anything.
-./scripts/bundle-hexad-macos.sh
+./scripts/bundle-outloud-macos.sh
 
 # Grant Accessibility against the bundle. macOS attaches the grant to a signed
 # bundle rather than to a bare binary, and reading and rewriting text in other
@@ -108,7 +182,7 @@ Then launch it through LaunchServices, so the app is its own responsible
 process rather than inheriting your terminal's permissions:
 
 ```bash
-open -a "$PWD/dist/Hexavoice.app"
+open -a "$PWD/dist/OutLoud.app"
 ```
 
 It has no Dock icon by design. Look for its icon at the right end of your menu
@@ -140,7 +214,7 @@ permission look denied, see
 Start the daemon and leave it running:
 
 ```bash
-open -a "$PWD/dist/Hexavoice.app"
+open -a "$PWD/dist/OutLoud.app"
 ```
 
 Then, in any application:
@@ -155,12 +229,12 @@ this runs the *bundled* binary, which is the one that ships with the speech
 helper beside it.
 
 ```bash
-./dist/Hexavoice.app/Contents/MacOS/Hexavoice --once --say "hello from a local dictation daemon" --no-overlay
+./dist/OutLoud.app/Contents/MacOS/OutLoud --once --say "hello from a local dictation daemon" --no-overlay
 ```
 
 ### The menu bar item
 
-Hexavoice has no Dock icon and no window on purpose: it types into whatever field
+OutLoud has no Dock icon and no window on purpose: it types into whatever field
 you are focused on, so it must never steal that focus. Its whole visible
 presence is one icon at the right of the menu bar, and the glyph is the
 answer to "is it on?" without a click. A waveform means ready; a filled
@@ -168,7 +242,7 @@ microphone means the microphone is open right now.
 
 Clicking it gives you the current state, the hotkey it actually bound, the
 microphone it actually opened, **Pause Dictation**, a Settings submenu,
-**Run Diagnostics**, and **Quit Hexavoice**. When a permission is missing, a row
+**Run Diagnostics**, and **Quit OutLoud**. When a permission is missing, a row
 appears that opens the exact System Settings pane rather than telling you to
 go find it.
 
@@ -270,13 +344,13 @@ flowchart LR
     ST --> TT[text-target<br/>transport selection]
     EI --> TT
     TT --> OUT[(focused app<br/>terminal, or shell)]
-    AQ[hexad] -.orchestrates.-> HK & AU & ASR & EI & TT & OV
+    AQ[outloud] -.orchestrates.-> HK & AU & ASR & EI & TT & OV
     OV[overlay<br/>non-activating panel]
 ```
 
 | Crate | Responsibility |
 |---|---|
-| `hexad` | The daemon. Wires everything together and owns the state machine |
+| `outloud` | The daemon. Wires everything together and owns the state machine |
 | `audio` | Capture, ring buffer, resampling, VAD, speech segmentation |
 | `asr` | Streaming recognizer trait, Apple/Parakeet/whisper backends, model manager |
 | `stream` | Commit horizon, minimal diffs, coalescing, undo ring |
@@ -323,8 +397,8 @@ evidence in [`docs/beta-readiness.md`](docs/beta-readiness.md).
 
 | Limitation | What you will see | Workaround |
 |---|---|---|
-| Unsigned and un-notarized | An app copied or downloaded from another machine silently refuses to open. `spctl -a -t exec dist/Hexavoice.app` says `rejected` | Build it locally; local builds carry no quarantine flag |
-| `cargo build` alone is not enough | `recognizer failed to load (speech helper not found...)` | Use `./scripts/bundle-hexad-macos.sh`, which compiles the Swift helper |
+| Unsigned and un-notarized | An app copied or downloaded from another machine silently refuses to open. `spctl -a -t exec dist/OutLoud.app` says `rejected` | Build it locally; local builds carry no quarantine flag |
+| `cargo build` alone is not enough | `recognizer failed to load (speech helper not found...)` | Use `./scripts/bundle-outloud-macos.sh`, which compiles the Swift helper |
 | Only one copy may run | A second launch is refused, naming the pid to quit | Quit the first from the menu bar, or `kill N` |
 | Accessibility grant dies on every rebuild | Toggle reads "on", every call fails. The menu bar glyph turns into a warning triangle within a second | `tccutil reset Accessibility dev.hexavoice.hexad`, then re-grant |
 | macOS 13-25 has no bundled recognizer | `recognizer never becomes ready` | Only macOS 26+ has `SpeechTranscriber`; other backends are stubbed |

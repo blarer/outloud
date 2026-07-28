@@ -1,0 +1,39 @@
+<!--
+  OutLoud mark: a megaphone whose sound waves double as the "speech leaving
+  your machine and landing as text" idea.
+
+  WHY an SVG rather than a PNG: it is text, so it diffs in review, scales to
+  any README width or app icon size without a second asset, and carries no
+  binary weight in git. The repo already learned that lesson the expensive
+  way when a rename committed two 98KB binaries nobody noticed.
+
+  WHY currentColor is NOT used: GitHub renders README images in both light
+  and dark themes, and an unresolved currentColor renders black-on-black in
+  dark mode. This project has already shipped that exact bug once, in the
+  menu bar icon, where every programmatic check reported healthy while
+  nothing was visible on screen. Explicit colours only.
+-->
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" role="img" aria-label="OutLoud">
+  <defs>
+    <linearGradient id="body" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#3b82f6"/>
+      <stop offset="100%" stop-color="#1d4ed8"/>
+    </linearGradient>
+  </defs>
+
+  <!-- Rounded field. Sized so the mark still reads at 16px in a menu bar. -->
+  <rect x="4" y="4" width="120" height="120" rx="28" fill="#0f172a"/>
+
+  <!-- Megaphone horn, pointing right: speech travelling toward the text. -->
+  <path d="M34 52 L34 76 L48 76 L70 92 L70 36 L48 52 Z"
+        fill="url(#body)" stroke="#93c5fd" stroke-width="3" stroke-linejoin="round"/>
+
+  <!-- Handle. -->
+  <path d="M44 76 L44 92 Q44 98 50 98 L54 98 Q60 98 60 92 L60 83"
+        fill="none" stroke="#93c5fd" stroke-width="6" stroke-linecap="round"/>
+
+  <!-- Three sound arcs, increasing in radius: the audio becoming words. -->
+  <path d="M82 50 Q90 64 82 78" fill="none" stroke="#60a5fa" stroke-width="6" stroke-linecap="round"/>
+  <path d="M94 42 Q106 64 94 86" fill="none" stroke="#60a5fa" stroke-width="6" stroke-linecap="round" opacity="0.75"/>
+  <path d="M106 34 Q122 64 106 94" fill="none" stroke="#60a5fa" stroke-width="6" stroke-linecap="round" opacity="0.45"/>
+</svg>
