@@ -26,6 +26,11 @@ Do **not** ship a downloadable `.app` yet. That path is blocked by
 notarization, which needs a paid Apple Developer account and cannot be worked
 around. The conditional in "conditional go" is that sentence and nothing else.
 
+Every blocker and every major except one were closed during this assessment,
+most of them in code rather than in prose. The single remaining open item (M6,
+settings that are accepted but not read) has its detection built and tested and
+is waiting only on a call site.
+
 The reason this is a GO rather than a NO-GO: the product's hard parts are
 genuinely done. Dictation, edit-by-voice, and terminal injection work, latency
 beats the commercial competition, error messages are unusually good, and the
@@ -419,7 +424,8 @@ export PAGER=less                                 export PAGER=less
 
 ### M3. Permission revocation while running is never noticed
 
-**Frequency: moderate. Guaranteed for anyone who experiments with the toggle.**
+**Frequency: moderate. Guaranteed for anyone who experiments with the toggle.
+Status: FIXED in `c1ca678`.**
 
 Nothing polls accessibility trust after startup. `AXIsProcessTrusted` is called
 in `ax-edit` and once at startup, never on a timer. `crates/ax-edit/src/macos.rs`
@@ -439,22 +445,39 @@ grant did not work, and files a bug. That is the direction that will actually
 generate support mail, because granting-while-running is what the documentation
 tells people to do.
 
-**Left open deliberately, with the design written down.** The fix touches
-`runtime.rs`, `menubar.rs`, and the run loop in `main.rs` simultaneously, all of
-which were in flight with the menu bar agent, and it degrades rather than
-breaks, so it was handed over rather than half-built across someone else's
-files. The shape:
+**Fixed in `c1ca678`, and improved on the recommendation above.** `Runtime`
+gained `accessibility_blocked`, the run loop polls `ax_edit::is_trusted(false)`
+on a 30-frame tick primed to fire immediately at launch, and the menu copies
+the `microphone_blocked` row including the deep link.
 
-- `Runtime` gains `accessibility_blocked: bool` beside the existing
-  `microphone_blocked`, whose comment ("Distinct from 'no Accessibility':
-  different pane, different fix") already anticipates it.
-- `RuntimeShared` gains a setter mirroring `set_microphone_blocked`, including
-  the recovery behaviour that `recovery_clears_the_blocked_warning` pins.
-- The 30Hz run loop polls `ax_edit::is_trusted(false)` on a decimated tick,
-  once a second being ample. That variant never prompts, so it is safe to call
-  repeatedly.
-- `menubar.rs` already has the `microphone_blocked` row to copy for the message
-  and the deep link into the correct Settings pane.
+Two departures from the design sketched here, both better than what was
+proposed:
+
+1. The setter takes the **positive** sense, `set_accessibility_trusted(bool)`,
+   rather than mirroring the `set_microphone_blocked` event shape. The
+   microphone flags are events (a stream came up, a stream died) while trust is
+   a *level* that is polled, so every poll must be able to clear the flag as
+   well as set it. That is precisely what makes the grant-while-running
+   direction work, which is the common case.
+2. The **glyph itself** changes, not only a menu row. A permission problem you
+   can only discover by clicking leaves a daemon that still looks healthy while
+   dictation is broken, and answering "is it on?" without a click is the entire
+   reason the status item exists. The override applies only to `Idle`, so it
+   can never replace the microphone-hot glyph mid-utterance, which is the one
+   state a user must be able to trust absolutely. Pinned by
+   `a_live_utterance_is_never_interrupted_by_the_permission_glyph`.
+
+Verified on the real thing, not only in tests: an ad-hoc build genuinely lost
+its grant when its `cdhash` changed on rebuild, and the running app showed the
+amber warning triangle, the tooltip "Aqua: Accessibility permission needed",
+and the row that opens the pane. The recovery direction is covered by unit test
+rather than live, because `TCC.db` is not readable, correctly.
+
+Related, from the same agent: the single-instance refusal now also shows a
+**dialog** when stderr is not a terminal. The message this assessment added was
+only ever seen by someone watching a terminal, and a bundled launch has none,
+so double-clicking `Aqua.app` while a daemon was already running still appeared
+to do nothing at all. The wording and the menu-bar-first ordering are unchanged.
 
 ### M4. Stale ASR helper process, trigger unidentified
 
@@ -759,7 +782,8 @@ Landed in the README's "Known limitations" section in this commit:
    which pid to quit.
 4. ~~No `--version` on the daemon.~~ Fixed; `aquad --version` prints `aquad 0.1.0`.
 5. The Accessibility grant dies on every rebuild (cdhash pinning).
-6. Revoking a permission while running is not noticed until relaunch.
+6. ~~Revoking a permission while running is not noticed until relaunch.~~
+   Fixed; the menu bar glyph changes within a second either way.
 7. macOS 13-25 has no bundled recognizer; only 26+ has `SpeechTranscriber`.
 8. Most config settings are accepted but not yet read by anything.
 9. Freeform edits are not wired to the language model.
@@ -780,7 +804,7 @@ Ordered by user pain per unit of effort.
 | 5 | ~~Single-instance guard (`flock` on a lock file)~~ | done | Two hot microphones was the worst remaining bug |
 | 6 | ~~`--version` on the daemon~~ | done | Blocked every bug report |
 | 7 | ~~Reap stale helpers at daemon startup~~ | done | Killed M4's whole class without finding the trigger |
-| 8 | Poll accessibility trust once a second | ~25 lines | Turns a silent failure into a visible state |
+| 8 | ~~Poll accessibility trust once a second~~ | done | Turned a silent failure into a visible glyph |
 | 9 | Call `inert_settings()` at startup (detection landed in 22f579b, no caller yet) | ~4 lines | Twelve silent no-ops become one honest line |
 | 10 | Make `bundle-aquad-macos.sh` fail, not warn, without `swiftc` | 2 lines | Stops shipping a recognizer-less bundle |
 | 11 | Always rebuild the helper, or hash-check it | 2 lines | The staleness that hid blocker B1 |
@@ -789,9 +813,9 @@ Ordered by user pain per unit of effort.
 | 14 | Wire `migrate()` into the config load path | ~15 lines | Must exist before schema version 2, not after |
 | 15 | Buy the Developer ID certificate | 99 USD, days | Unblocks binary distribution and fixes cdhash pain |
 
-Items 1 through 7 landed during this assessment. Items 8 and 9 are the
-remaining quality work; neither is a ship-stopper for a source beta, and
-neither requires a design decision.
+Items 1 through 8 landed during this assessment. Item 9 is the only remaining
+item with a user-visible effect, and its hard half is already done: the
+detection exists and is tested, it just has no call site yet.
 
 ---
 
