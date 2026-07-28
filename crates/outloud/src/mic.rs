@@ -18,6 +18,28 @@
 //! because it overlaps the user beginning to speak: nobody starts a word in
 //! the same millisecond they press a key, and the VAD discards the leading
 //! silence anyway.
+//!
+//! # Dictating while another app holds the microphone
+//!
+//! Dictating into a Discord or FaceTime call is a normal thing to want, and it
+//! works: CoreAudio shares input devices between processes rather than handing
+//! one owner an exclusive lock. Measured on macOS 26 with an `AVAudioEngine`
+//! tap held open throughout, both streams captured a full 1.2M frames with no
+//! error on either side (`crates/audio/tests/shared_device.rs`).
+//!
+//! Two decisions keep that true, and both are easy to break:
+//!
+//! - We never set `kAudioDevicePropertyHogMode`. Hog mode is the one call that
+//!   *would* take the device exclusively, and taking it would break every call
+//!   app on the machine the moment a user pressed the hotkey.
+//! - We accept the device's own `default_input_config()` and resample to 16kHz
+//!   ourselves, rather than requesting a rate. A process that demands a format
+//!   the device is not already in can force a reconfiguration that interrupts
+//!   whoever was there first.
+//!
+//! The open-on-keydown lifetime above helps here too: we hold the device for
+//! the length of an utterance rather than the length of a session, so even a
+//! driver that dislikes sharing has a small window in which to prove it.
 
 use tokio::sync::mpsc::UnboundedSender;
 
