@@ -13,7 +13,7 @@
 //! 5. `AQUA_*` environment variables
 //!
 //! Every resolved value reports which layer set it ([`Provenance`]), because
-//! "why is my hotkey not what I set" must be answerable from `aqua status`
+//! "why is my hotkey not what I set" must be answerable from `hexa status`
 //! rather than by bisecting files.
 //!
 //! I/O lives at the edges ([`watch`], [`update_file`]); parsing, merging,
@@ -45,7 +45,7 @@ pub use watch::{Debouncer, Reload, Watcher};
 use toml_edit::DocumentMut;
 
 /// Set one key in a config file's text, preserving the user's comments and
-/// formatting. This is the primitive the GUI editor and `aqua set` share:
+/// formatting. This is the primitive the GUI editor and `hexa set` share:
 /// both are views over the same file, so both must be comment-safe
 /// (docs/ux/05: "the GUI is a convenience view over the files").
 ///

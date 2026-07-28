@@ -19,7 +19,7 @@ use crate::schema::{self, Value, SCHEMA_VERSION};
 
 /// Everything wrong (or worth flagging) about a config source. Displayed
 /// text is the product surface here: these strings go straight to the tray
-/// notice and `aqua doctor`.
+/// notice and `hexa doctor`.
 #[derive(Debug, Clone, PartialEq)]
 pub enum ConfigError {
     /// The file is not valid TOML at all. Fatal for that file (there is no
@@ -81,7 +81,7 @@ impl fmt::Display for ConfigError {
                 write!(f, "{layer}: unknown setting \"{key}\"")?;
                 match suggestion {
                     Some(s) => write!(f, "; did you mean \"{s}\"?"),
-                    None => write!(f, " (run `aqua set --list` for all settings)"),
+                    None => write!(f, " (run `hexa set --list` for all settings)"),
                 }
             }
             ConfigError::WrongType {
@@ -521,7 +521,7 @@ mod tests {
     fn unknown_key_without_a_near_miss_points_at_the_list() {
         let doc = validate("frobnicator = 7\n");
         let msg = doc.errors[0].to_string();
-        assert!(msg.contains("aqua set --list"), "{msg}");
+        assert!(msg.contains("hexa set --list"), "{msg}");
     }
 
     #[test]

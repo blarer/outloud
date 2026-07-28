@@ -3,7 +3,7 @@
 //! This is a direct transcription of the state diagram and state-by-state
 //! contract in `docs/ux/05-settings-and-states.md`. One machine is shared by
 //! every rendering surface (GUI overlay, tray glyph, OSC cursor color, tmux
-//! widget, `aqua status --json`), so this enum lives in the
+//! widget, `hexa status --json`), so this enum lives in the
 //! platform-independent half of the crate and carries the *contract* for each
 //! state — visibility, label — not just the name. Keeping the transition
 //! table here, rather than implicit in engine code, is what lets a unit test
@@ -102,7 +102,7 @@ impl OverlayState {
 
 impl fmt::Display for OverlayState {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        // The kebab-case names match `aqua status --json` so every surface
+        // The kebab-case names match `hexa status --json` so every surface
         // speaks the same vocabulary.
         let s = match self {
             OverlayState::Idle => "idle",

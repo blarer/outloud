@@ -444,7 +444,7 @@ mod tests {
 
     fn settings() -> Settings {
         Settings {
-            config_path: Some(PathBuf::from("/home/u/.config/aqua/config.toml")),
+            config_path: Some(PathBuf::from("/home/u/.config/hexavoice/config.toml")),
             ..Settings::default()
         }
     }

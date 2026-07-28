@@ -1,7 +1,7 @@
 //! The layered store: defaults <- system file <- user file <- profile <- env.
 //!
 //! Every resolved value carries the layer it came from, because "why is my
-//! hotkey not what I set" is unanswerable without provenance. `aqua status`
+//! hotkey not what I set" is unanswerable without provenance. `hexa status`
 //! and validation errors both consume the same [`Provenance`].
 
 use std::collections::BTreeMap;
@@ -25,7 +25,7 @@ pub const LEGACY_ENV_PREFIX: &str = "AQUA_";
 pub enum Layer {
     /// Compiled-in default from the schema table.
     Default,
-    /// The machine-wide file (e.g. /etc/aqua/config.toml), for managed
+    /// The machine-wide file (e.g. /etc/hexavoice/config.toml), for managed
     /// deployments. Carries the path actually read.
     SystemFile(PathBuf),
     /// The user's own config.toml.
@@ -234,7 +234,7 @@ impl Config {
     }
 
     /// Which profile would apply to `app`, and why it won. Exposed so the
-    /// settings UI and `aqua status --json` explain profile selection with
+    /// settings UI and `hexa status --json` explain profile selection with
     /// the same logic that performs it.
     pub fn profile_for(&self, app: &AppIdentity) -> Option<(&Profile, WinReason)> {
         select(&self.profiles, app)
@@ -267,7 +267,7 @@ impl Config {
             .collect()
     }
 
-    /// Every known key with its provenance, for `aqua status --json` and the
+    /// Every known key with its provenance, for `hexa status --json` and the
     /// docs generator.
     pub fn all(&self, app: Option<&AppIdentity>) -> Vec<(&'static KeySpec, Provenance)> {
         schema::schema()
@@ -287,7 +287,7 @@ mod tests {
     use super::*;
 
     fn build(user: &str, env: &[(&str, &str)]) -> (Config, Vec<ConfigError>) {
-        let path = PathBuf::from("/home/u/.config/aqua/config.toml");
+        let path = PathBuf::from("/home/u/.config/hexavoice/config.toml");
         let env: BTreeMap<String, String> = env
             .iter()
             .map(|(k, v)| (k.to_string(), v.to_string()))
@@ -320,8 +320,8 @@ mod tests {
 
     #[test]
     fn system_file_sits_below_user_file() {
-        let sys_path = PathBuf::from("/etc/aqua/config.toml");
-        let user_path = PathBuf::from("/home/u/.config/aqua/config.toml");
+        let sys_path = PathBuf::from("/etc/hexavoice/config.toml");
+        let user_path = PathBuf::from("/home/u/.config/hexavoice/config.toml");
         let (cfg, _) = Config::build(
             Some((&sys_path, "model = \"fast\"\nlanguage = \"en\"\n")),
             Some((&user_path, "model = \"accurate\"\n")),

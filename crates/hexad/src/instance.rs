@@ -108,7 +108,7 @@ impl std::error::Error for Error {}
 /// Where the lock file lives: `$XDG_RUNTIME_DIR`, else the temp directory.
 ///
 /// Not beside the config: this is ephemeral machine state, and putting it in
-/// `~/.config/aqua` would mean a crash leaves litter in a directory the user
+/// `~/.config/hexavoice` would mean a crash leaves litter in a directory the user
 /// is invited to read, edit, and check into a dotfiles repository.
 fn lock_path() -> PathBuf {
     let dir = match std::env::var_os("XDG_RUNTIME_DIR") {

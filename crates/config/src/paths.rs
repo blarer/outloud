@@ -2,7 +2,7 @@
 //!
 //! Path policy is here, next to the file format, rather than in each host,
 //! because "which file am I editing?" must have exactly one answer: the
-//! daemon, `aqua set`, the menu-bar Settings items, and the docs all have to
+//! daemon, `hexa set`, the menu-bar Settings items, and the docs all have to
 //! name the same path or the user's edit lands somewhere nothing reads.
 //!
 //! I/O still stays at the edges: these functions compute paths and never
@@ -16,8 +16,8 @@ use std::path::PathBuf;
 /// settings live.
 pub const APP_DIR: &str = "hexavoice";
 
-/// The user's config file: `$XDG_CONFIG_HOME/aqua/config.toml`, else
-/// `~/.config/aqua/config.toml`.
+/// The user's config file: `$XDG_CONFIG_HOME/hexavoice/config.toml`, else
+/// `~/.config/hexavoice/config.toml`.
 ///
 /// `~/.config` on macOS too, deliberately: this is a developer-facing tool
 /// whose config is meant to be read, edited, diffed and synced like any
@@ -36,7 +36,7 @@ pub fn user_config_path() -> Option<PathBuf> {
 /// The machine-wide file for managed deployments. Read-only as far as the
 /// daemon is concerned; it never writes here.
 pub fn system_config_path() -> PathBuf {
-    PathBuf::from("/etc/aqua/config.toml")
+    PathBuf::from("/etc/hexavoice/config.toml")
 }
 
 /// The vocabulary folder, beside the user's config file.
@@ -121,13 +121,13 @@ mod tests {
         std::env::set_var("XDG_CONFIG_HOME", "/cfg");
         assert_eq!(
             user_config_path().unwrap(),
-            PathBuf::from("/cfg/aqua/config.toml")
+            PathBuf::from("/cfg/hexavoice/config.toml")
         );
 
         std::env::remove_var("XDG_CONFIG_HOME");
         assert_eq!(
             user_config_path().unwrap(),
-            PathBuf::from("/home/u/.config/aqua/config.toml")
+            PathBuf::from("/home/u/.config/hexavoice/config.toml")
         );
 
         restore("XDG_CONFIG_HOME", old_xdg);
@@ -160,7 +160,7 @@ mod tests {
         std::env::set_var("XDG_CONFIG_HOME", "/cfg");
         assert_eq!(
             vocabulary_dir().unwrap(),
-            PathBuf::from("/cfg/aqua/vocabulary")
+            PathBuf::from("/cfg/hexavoice/vocabulary")
         );
         restore("XDG_CONFIG_HOME", old);
     }

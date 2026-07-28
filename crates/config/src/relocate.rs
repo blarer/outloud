@@ -127,6 +127,10 @@ mod tests {
         PathBuf::from("/home/u/.config/hexavoice/config.toml")
     }
     fn old_path() -> PathBuf {
+        // The PREVIOUS product's directory. Deliberately spelled out rather
+        // than derived from LEGACY_DIR: this fixture is the thing that
+        // catches a careless rename sweeping the legacy name away, which is
+        // exactly what happened once already.
         PathBuf::from("/home/u/.config/aqua/config.toml")
     }
 
