@@ -573,6 +573,37 @@ requires a design decision. Items 1 through 4 landed with this document.
 
 ---
 
+## Synthesis: the in-flight UI work
+
+New UI is new failure surface, so the menu bar and overlay work landing
+alongside this assessment was reviewed rather than assumed.
+
+**The menu bar click bug is real and is already fixed.** The daemon pumps
+AppKit itself instead of calling `NSApplication::run()`, and an earlier version
+of the loop only *spun* the run loop. Spinning services timers and sources,
+which is enough to draw, but does not deliver window-server input to AppKit.
+The result was a status item that appeared, updated, and could not be clicked.
+
+That failure deserves recording even though it is fixed, because of how nearly
+it shipped. It looked correct in a screenshot, and it responded to
+accessibility-driven presses, because those invoke the action directly and
+bypass the event queue. Only a real human click could catch it. Any future
+automated check of the menu bar that drives it through the accessibility API
+will pass while the product is broken. The code now carries a comment saying
+exactly this, which is the right outcome.
+
+**`overlay.position = "hidden"` is now wired**, which moves one key off the
+unwired list in M6 and leaves twelve.
+
+**The workspace is green with that work in the tree:** 507 tests pass, up from
+503 when this assessment started, and `cargo fmt --check` and
+`cargo clippy --workspace --all-targets -- -D warnings` are both clean.
+
+Nothing in the new UI code changes the GO/NO-GO. It removes a would-be blocker
+that this assessment would otherwise have had to file.
+
+---
+
 ## What was not covered
 
 Stated plainly so nobody assumes coverage that does not exist.
