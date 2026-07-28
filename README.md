@@ -396,6 +396,34 @@ call profile is quieter and more compressed for everything using it, so
 recognition accuracy drops for the same reason the other participants sound
 worse. Wired and built-in microphones are unaffected.
 
+### Bluetooth microphones clip the first word
+
+Because the microphone opens on key-down, whatever a device takes to deliver
+its first sample lands between your keypress and the first audio anything can
+hear. The built-in microphone measures **71ms**, which is harmless. Bluetooth
+headsets must negotiate their hands-free profile first, which is typically
+several hundred milliseconds.
+
+Measured cost, through the real recognizer, saying "the quick brown fox jumps
+over the lazy dog" with the head of the audio removed:
+
+| Audio lost at the start | What gets transcribed |
+|---|---|
+| 0ms | "The quick brown fox jumps..." |
+| 100ms | "Quick brown fox jumps..." |
+| 200ms | "**Like** brown fox jumps..." |
+| 500ms | "fox jumps over the lazy dog." |
+
+The 200ms row is the one to worry about, and it is not the one that lost the
+most audio: a half-captured word is not dropped, it is *misheard*. A missing
+word is obvious. A plausible wrong word is not.
+
+There is no handling for this yet, and no warning. If you dictate on AirPods
+and the first word is wrong more often than it should be, this is why. Pausing
+briefly between pressing the key and speaking avoids it entirely. Full
+measurements and the options considered are in
+[`docs/input-latency.md`](docs/input-latency.md).
+
 When something goes wrong, `./scripts/doctor.sh` classifies it as permission,
 configuration, or bug, and only the last belongs in an issue.
 
