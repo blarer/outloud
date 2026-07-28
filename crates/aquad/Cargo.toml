@@ -14,12 +14,22 @@ description = "The dictation daemon: hotkey -> capture -> VAD -> recognizer -> i
 # that is what a user runs. Mirrors the `display` gate in text-target and
 # overlay so `--no-default-features` stays a workspace-wide headless guarantee.
 default = ["display"]
-display = ["overlay/display", "text-target/display"]
+# `audio/capture` rides on `display` because they answer the same question:
+# is there a human at this machine? A desktop build needs a microphone and a
+# window; a headless build has neither, takes its audio from --wav or a
+# socket, and must not link an audio stack (alsa-sys on Linux) it never
+# calls. Keeping capture on a separate feature would let someone build a
+# "headless" daemon that still drags in ALSA, which is the bug this closes.
+display = ["overlay/display", "text-target/display", "audio/capture"]
 
 [dependencies]
 anyhow.workspace = true
 asr = { path = "../asr" }
-audio = { path = "../audio" }
+# default-features = false, so `--no-default-features` genuinely reaches the
+# audio crate. Without this the dependency edge re-enables `capture` no
+# matter what the build command says, which is exactly how the musl CI rows
+# kept pulling alsa-sys after capture was made optional.
+audio = { path = "../audio", default-features = false }
 ax-edit = { path = "../ax-edit" }
 # The menu bar's Settings items are a view over config.toml: every change is
 # written through config::update_file, never into a parallel store.

@@ -23,6 +23,11 @@ use crate::runtime::RuntimeShared;
 
 /// Ring-drain cadence, matching the 30ms VAD frame size so each tick hands
 /// the segmenter roughly one frame's worth of audio.
+///
+/// Gated with the capture path it belongs to: only `spawn_mic` drains a
+/// ring, so a headless build would carry this as dead code and fail
+/// `clippy -D warnings`.
+#[cfg(feature = "display")]
 const DRAIN_TICK_MS: u64 = 30;
 
 /// Everything the supervisor reacts to.
@@ -102,10 +107,16 @@ pub fn spawn_hotkey(
 
 /// Start microphone capture and the ring-drain task. The returned handle
 /// keeps the capture supervisor thread alive; drop it to stop.
+///
+/// Only compiled when the `audio/capture` backend is present. A headless
+/// build has no audio stack linked at all (that is the point: it must not
+/// drag ALSA onto a server), so the counterpart below fails with an error
+/// that names the flag to use instead.
+#[cfg(feature = "display")]
 pub fn spawn_mic(
     tx: UnboundedSender<FrontendEvent>,
     runtime: RuntimeShared,
-) -> audio::capture::CaptureHandle {
+) -> anyhow::Result<audio::capture::CaptureHandle> {
     // 10 seconds of ring: deep enough that only a genuinely wedged drain
     // loses audio, and losses are counted, not silent.
     let (producer, consumer) = audio::ring::ring(audio::SAMPLE_RATE as usize * 10);
@@ -153,7 +164,26 @@ pub fn spawn_mic(
             }
         }
     });
-    handle
+    Ok(handle)
+}
+
+/// Headless counterpart: there is no capture backend in this build.
+///
+/// Returns an error rather than panicking or silently producing no audio,
+/// because "the daemon started and then never heard anything" is the single
+/// most confusing failure this program can present. The message names
+/// `--wav` because that is the path that actually works here, and an error
+/// that only says no is an error the user cannot act on.
+#[cfg(not(feature = "display"))]
+pub fn spawn_mic(
+    _tx: UnboundedSender<FrontendEvent>,
+    _runtime: RuntimeShared,
+) -> anyhow::Result<()> {
+    anyhow::bail!(
+        "this build has no microphone support (built without the `display` \
+         feature, so no audio capture backend is linked) -> feed audio from a \
+         file with `--once --wav FILE`, or use a build with default features"
+    )
 }
 
 /// Replay `samples` (16kHz mono) as one utterance: KeyDown, real-time-ish
