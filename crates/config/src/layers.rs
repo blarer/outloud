@@ -219,6 +219,29 @@ impl Config {
         &self.profiles
     }
 
+    /// Settings the user has actually SET that no code reads yet.
+    ///
+    /// The caller warns once at startup. This is the file-level counterpart
+    /// to the menu bar's refusal to offer unwired settings: without it, a
+    /// user edits `insertion.mode`, sees no error, observes no change, and
+    /// reasonably concludes the feature is broken rather than unbuilt.
+    ///
+    /// Only user-supplied values count. A key sitting at its compiled-in
+    /// default is not a broken promise, it is a placeholder, and warning
+    /// about all 13 on every start would be noise a user learns to ignore,
+    /// which is how a warning stops working.
+    pub fn inert_settings(&self) -> Vec<&'static KeySpec> {
+        schema::schema()
+            .iter()
+            .filter(|spec| !spec.wired)
+            .filter(|spec| {
+                // Set by someone other than the defaults layer?
+                self.get(spec.key)
+                    .is_some_and(|p| !matches!(p.layer, Layer::Default))
+            })
+            .collect()
+    }
+
     /// Every known key with its provenance, for `aqua status --json` and the
     /// docs generator.
     pub fn all(&self, app: Option<&AppIdentity>) -> Vec<(&'static KeySpec, Provenance)> {
@@ -396,5 +419,32 @@ formatting.casing = "casual-lowercase"
         assert_eq!(all.len(), schema::schema().len());
         let hotkey = all.iter().find(|(s, _)| s.key == "hotkey").unwrap();
         assert!(matches!(hotkey.1.layer, Layer::UserFile(_)));
+    }
+
+    #[test]
+    fn inert_settings_names_only_what_the_user_actually_set() {
+        // Nothing set: silence. Warning about the 13 unwired defaults on
+        // every start is noise, and noisy warnings stop being read.
+        let (cfg, _) = build("", &[]);
+        assert!(cfg.inert_settings().is_empty());
+
+        // A wired setting the user changed is not inert, so it must not warn.
+        let (cfg, _) = build("hotkey = \"f13\"\n", &[]);
+        assert!(cfg.inert_settings().is_empty());
+
+        // An unwired setting the user changed IS the case worth a warning:
+        // they expect an effect and there is none.
+        let (cfg, _) = build("insertion.mode = \"stream\"\n", &[]);
+        let inert: Vec<&str> = cfg.inert_settings().iter().map(|s| s.key).collect();
+        assert_eq!(inert, vec!["insertion.mode"]);
+    }
+
+    #[test]
+    fn inert_settings_also_catches_env_overrides() {
+        // An AQUA_* override is a per-run command, so a user who reaches for
+        // one is even more certain it will take effect than one editing a file.
+        let (cfg, _) = build("", &[("AQUA_FORMATTING_CASING", "casual-lowercase")]);
+        let inert: Vec<&str> = cfg.inert_settings().iter().map(|s| s.key).collect();
+        assert_eq!(inert, vec!["formatting.casing"]);
     }
 }

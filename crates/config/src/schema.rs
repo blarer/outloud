@@ -145,6 +145,30 @@ pub struct KeySpec {
     pub constraint: Constraint,
     /// One-line effect description, reused by docs/configuration.md.
     pub doc: &'static str,
+    /// Does any code actually READ this setting yet?
+    ///
+    /// A config file that accepts a setting nothing reads is worse than one
+    /// that rejects it: the user changes a value, sees no error, and
+    /// concludes the feature is broken rather than absent. The menu bar
+    /// already guards against this by refusing to offer unwired keys; the
+    /// file had no equivalent protection, so 13 of these 16 settings were
+    /// silently inert.
+    ///
+    /// Deliberately NOT defaulted. Adding a schema row forces an explicit
+    /// true/false, so the next person to add a setting has to answer "does
+    /// anything read this" at the moment they can still answer it cheaply.
+    /// Flip to true in the same commit that wires the setting up.
+    pub wired: bool,
+}
+
+/// Settings the user can set today that no code reads yet.
+///
+/// Callers use this to warn ONCE at startup, and only for keys the user
+/// actually set (a defaulted unwired key is not a lie, it is just a
+/// placeholder). Empty means every setting in the schema does something,
+/// which is the state to aim for.
+pub fn unwired_keys() -> impl Iterator<Item = &'static KeySpec> {
+    schema().iter().filter(|s| !s.wired)
 }
 
 /// The full schema. Adding a setting means adding one row here; everything
@@ -160,72 +184,84 @@ pub fn schema() -> &'static [KeySpec] {
                 default: s("right-option"),
                 constraint: HotkeyChord,
                 doc: "Push-to-talk key. Hold to dictate, tap to latch.",
+                wired: true,
             },
             KeySpec {
                 key: "microphone",
                 default: s("auto"),
                 constraint: None,
                 doc: "Input device name, or \"auto\" to follow the system default.",
+                wired: false,
             },
             KeySpec {
                 key: "language",
                 default: s("auto"),
                 constraint: None,
                 doc: "Recognition language code (e.g. \"en\"), or \"auto\" to detect.",
+                wired: false,
             },
             KeySpec {
                 key: "model",
                 default: s("balanced"),
                 constraint: OneOf(&["fast", "balanced", "accurate"]),
                 doc: "Recognizer size/speed trade-off.",
+                wired: false,
             },
             KeySpec {
                 key: "enabled",
                 default: Value::Bool(true),
                 constraint: None,
                 doc: "Master switch. Profiles set this to false to mute the tool in an app.",
+                wired: true,
             },
             KeySpec {
                 key: "insertion.mode",
                 default: s("on-release"),
                 constraint: OneOf(&["on-release", "stream"]),
                 doc: "Insert the whole utterance on key release, or stream words as spoken.",
+                wired: false,
             },
             KeySpec {
                 key: "insertion.paste-fallback",
                 default: Value::Bool(false),
                 constraint: None,
                 doc: "Force clipboard-paste insertion for apps with broken accessibility.",
+                wired: false,
             },
             KeySpec {
                 key: "formatting.casing",
                 default: s("standard"),
                 constraint: OneOf(&["standard", "casual-lowercase"]),
                 doc: "Sentence casing style; chat apps often read better casual-lowercase.",
+                wired: false,
             },
             KeySpec {
                 key: "formatting.smart-quotes",
                 default: Value::Bool(true),
                 constraint: None,
                 doc: "Convert straight quotes to typographic quotes.",
+                wired: false,
             },
             KeySpec {
                 key: "formatting.trailing-punctuation",
                 default: Value::Bool(true),
                 constraint: None,
                 doc: "End utterances with inferred punctuation.",
+                wired: false,
             },
             KeySpec {
                 key: "history.enabled",
                 default: Value::Bool(true),
                 constraint: None,
                 doc: "Keep a local plain-text transcription history.",
+                wired: false,
             },
             KeySpec {
                 key: "silence-timeout-ms",
                 default: Value::Int(1500),
                 constraint: IntRange(200, 30_000),
                 doc: "Stop listening after this much silence in latch mode.",
+                wired: false,
             },
             KeySpec {
                 key: "overlay.position",
@@ -238,24 +274,28 @@ pub fn schema() -> &'static [KeySpec] {
                     "hidden",
                 ]),
                 doc: "Where the listening overlay appears, or hidden.",
+                wired: true,
             },
             KeySpec {
                 key: "vocabulary.sets",
                 default: Value::List(vec![]),
                 constraint: None,
                 doc: "Named vocabulary sets active by default; profiles override per app.",
+                wired: false,
             },
             KeySpec {
                 key: "telemetry.enabled",
                 default: Value::Bool(false),
                 constraint: None,
                 doc: "Anonymous usage reporting. Off by default, forever.",
+                wired: false,
             },
             KeySpec {
                 key: "launch-at-login",
                 default: Value::Bool(false),
                 constraint: None,
                 doc: "Start the daemon when the user logs in.",
+                wired: false,
             },
         ]
     });
@@ -343,5 +383,47 @@ mod tests {
             Value::parse_env(l, "code, k8s").unwrap(),
             Value::List(vec!["code".into(), "k8s".into()])
         );
+    }
+
+    #[test]
+    fn the_wired_set_matches_what_the_daemon_actually_reads() {
+        // Mirrors the WIRED gate in crates/aquad/src/menubar.rs. Two lists
+        // that must agree is a smell, but they protect different surfaces
+        // (the menu vs the file) and live in different crates, so the
+        // duplication is deliberate and this test is what keeps them honest.
+        //
+        // When a setting is wired up, flip its `wired` flag and update this
+        // list in the same commit. A test failure here means someone either
+        // wired a setting without telling the config layer, or added a
+        // setting the menu will silently refuse to offer.
+        let wired: Vec<&str> = schema().iter().filter(|s| s.wired).map(|s| s.key).collect();
+        assert_eq!(wired, vec!["hotkey", "enabled", "overlay.position"]);
+    }
+
+    #[test]
+    fn unwired_keys_reports_exactly_the_inert_settings() {
+        let inert: Vec<&str> = unwired_keys().map(|s| s.key).collect();
+        // Not asserted as a fixed list on purpose: this number should only
+        // ever go DOWN, and pinning it exactly would make wiring a setting
+        // fail an unrelated-looking test. What must hold is the invariant.
+        assert_eq!(inert.len(), schema().len() - 3);
+        assert!(
+            inert.contains(&"insertion.mode"),
+            "insertion.mode is inert: aquad has no dependency on the stream \
+             crate at all, so \"stream\" cannot possibly take effect"
+        );
+        assert!(
+            !inert.contains(&"hotkey"),
+            "hotkey is the one setting that demonstrably works end to end"
+        );
+    }
+
+    #[test]
+    fn every_key_documents_itself() {
+        // The doc string is the only explanation a user gets in the
+        // generated starter file, so an empty one ships a mystery setting.
+        for spec in schema() {
+            assert!(!spec.doc.trim().is_empty(), "{} has no doc", spec.key);
+        }
     }
 }
