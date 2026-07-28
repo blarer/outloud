@@ -20,6 +20,7 @@ pub mod conflict;
 pub mod keycode;
 pub mod matcher;
 pub mod taphold;
+pub mod winmatch;
 
 pub use chord::{Chord, ChordParseError, Key, Modifier};
 pub use conflict::{check_chord, Conflict, Severity};
@@ -85,7 +86,7 @@ impl HotkeyManager {
             matcher::Matcher::new(&chord).map_err(|e| HotkeyError::BadChord(e.to_string()))?;
         let machine = TapHold::new(timing);
         let (tx, rx) = channel();
-        backend::spawn(matcher, machine, tx)?;
+        backend::spawn(&chord, matcher, machine, tx)?;
         Ok(HotkeyManager {
             chord,
             receiver: rx,

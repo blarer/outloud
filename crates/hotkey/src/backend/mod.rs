@@ -21,23 +21,36 @@ use crate::{HotkeyError, HotkeyEvent};
 /// confirmed installed, so a caller that gets Ok can trust the binding is
 /// live (not merely queued), which matters for the "never silently dead"
 /// requirement.
+///
+/// The chord travels alongside the pre-compiled macOS matcher because the
+/// Windows backend compiles its own matcher (different event vocabulary:
+/// virtual keys, not CGEvent flags) and needs the source chord to do it.
 pub fn spawn(
+    chord: &crate::chord::Chord,
     matcher: Matcher,
     machine: TapHold,
     sender: Sender<HotkeyEvent>,
 ) -> Result<(), HotkeyError> {
     #[cfg(target_os = "macos")]
-    return macos::spawn(matcher, machine, sender);
+    {
+        let _ = chord;
+        macos::spawn(matcher, machine, sender)
+    }
 
     #[cfg(target_os = "windows")]
-    return windows::spawn(matcher, machine, sender);
+    {
+        windows::spawn(chord, matcher, machine, sender)
+    }
 
     #[cfg(all(unix, not(target_os = "macos")))]
-    return linux::spawn(matcher, machine, sender);
+    {
+        let _ = chord;
+        linux::spawn(matcher, machine, sender)
+    }
 
     #[cfg(not(any(target_os = "macos", target_os = "windows", unix)))]
     {
-        let _ = (matcher, machine, sender);
+        let _ = (chord, matcher, machine, sender);
         Err(HotkeyError::Unsupported(
             "no hotkey backend for this platform",
         ))
