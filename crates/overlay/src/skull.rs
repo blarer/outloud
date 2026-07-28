@@ -234,13 +234,16 @@ pub fn posed_geometry(pose: &SkullPose) -> SkullGeometry {
     let sockets = [socket(-EYE_DX), socket(EYE_DX)];
     let eyes = [glow(-EYE_DX), glow(EYE_DX)];
 
-    // Teeth: four uppers fixed to the maxilla, four lowers riding the jaw.
-    // The visible gap between the rows IS the open mouth.
-    let mut teeth = Vec::with_capacity(8);
-    let centers = [0.395, 0.465, 0.535, 0.605];
+    // Teeth: three wide uppers fixed to the maxilla, three lowers riding
+    // the jaw. Three, not a dental chart: at the orb-sized 42pt box a
+    // tooth narrower than ~4pt collapses into noise, and the visible gap
+    // between the two rows IS the open mouth, which is the part that must
+    // read. Legible-at-size beats detailed-and-muddy.
+    let mut teeth = Vec::with_capacity(6);
+    let centers = [0.41, 0.50, 0.59];
     for &cx in &centers {
-        teeth.push(rect(cx - 0.0275, 0.80, 0.055, 0.045));
-        teeth.push(rect(cx - 0.0275, JAW_TOP + drop - 0.045, 0.055, 0.045));
+        teeth.push(rect(cx - 0.038, 0.80, 0.076, 0.05));
+        teeth.push(rect(cx - 0.038, JAW_TOP + drop - 0.05, 0.076, 0.05));
     }
 
     let mut geo = SkullGeometry {

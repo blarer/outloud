@@ -88,17 +88,22 @@ const ANCHOR_X: f64 = PANEL_SIZE.width / 2.0 + 40.0;
 /// Text lane baseline (top-left/flipped coords) and font size.
 const LANE_Y: f64 = 52.0;
 const WORD_FONT: f64 = 17.0;
-/// The skull's bounding box in panel points. The unit-square geometry from
-/// [`crate::skull`] is mapped into this box, so one constant scales the
-/// whole mascot for any panel or Retina factor.
-const SKULL_SIZE: f64 = 132.0;
+/// The skull's bounding box in panel points: EXACTLY the orb's box. The
+/// orb was a circle of radius [`ORB_R`] centred at (panel centre,
+/// height-88); the skull occupies that same 42pt square, because this is
+/// a glanceable status indicator over someone's work, not a focal point.
+/// Legibility at 42pt comes from simplified geometry in [`crate::skull`]
+/// (three wide teeth, bold sockets), not from being bigger.
+const ORB_R: f64 = 21.0;
+const SKULL_SIZE: f64 = ORB_R * 2.0;
 const SKULL_X: f64 = (PANEL_SIZE.width - SKULL_SIZE) / 2.0;
-const SKULL_Y: f64 = PANEL_SIZE.height - SKULL_SIZE - 10.0;
-/// The glow field behind the skull, reusing the orb's Gaussian-ring
-/// technique: centre and reach in panel points.
+const SKULL_Y: f64 = PANEL_SIZE.height - 88.0 - ORB_R;
+/// The glow field behind the skull: the orb's Gaussian-ring aura,
+/// unchanged — same centre, same reach — so the overall footprint is the
+/// one the design already accepted.
 const GLOW_CX: f64 = PANEL_SIZE.width / 2.0;
-const GLOW_CY: f64 = SKULL_Y + SKULL_SIZE * 0.52;
-const GLOW_R: f64 = 86.0;
+const GLOW_CY: f64 = PANEL_SIZE.height - 88.0;
+const GLOW_R: f64 = 78.0;
 /// Gap from the panel's bottom edge to the screen's visible-frame bottom.
 const BOTTOM_GAP: f64 = 8.0;
 /// Fallback animation clock when `CADisplayLink` is unavailable. 0 Hz
@@ -424,7 +429,7 @@ impl OverlayView {
             let rings = 20usize;
             for i in (0..rings).rev() {
                 let f = i as f64 / rings as f64; // 0 center .. 1 edge
-                let r = 18.0 + (reach - 18.0) * f;
+                let r = ORB_R + (reach - ORB_R) * f;
                 // Gaussian falloff reads as light, not as banded disks.
                 let a = (-3.2 * f * f).exp() * 0.10 * (0.55 + 0.45 * gain);
                 ns_color(accent, a).setFill();
