@@ -409,9 +409,21 @@ mod proto {
                 // tint: the tinted zone is the only text allowed to change,
                 // making the commit horizon visible (the redesign's point).
                 let color = if w.committed {
-                    ns_color(theme::Color { a: 0.95, ..theme::palette::PAPER }, w.opacity)
+                    ns_color(
+                        theme::Color {
+                            a: 0.95,
+                            ..theme::palette::PAPER
+                        },
+                        w.opacity,
+                    )
                 } else {
-                    ns_color(theme::Color { a: 0.62, ..theme::palette::AQUA }, w.opacity)
+                    ns_color(
+                        theme::Color {
+                            a: 0.62,
+                            ..theme::palette::AQUA
+                        },
+                        w.opacity,
+                    )
                 };
                 draw_text(&w.text, NSPoint::new(x, LANE_Y), WORD_FONT, &color);
             }
