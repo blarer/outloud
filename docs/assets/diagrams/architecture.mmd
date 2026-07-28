@@ -1,0 +1,11 @@
+flowchart TB
+    HK[hotkey<br/>CGEventTap] --> AU[audio<br/>capture + VAD]
+    AU --> ASR[asr<br/>streaming recognizer]
+    ASR --> ST[stream<br/>commit horizon]
+    ASR --> EI[edit-intent<br/>command parser]
+    EI --> LLM[llm<br/>freeform fallback]
+    ST --> TT[text-target<br/>transport selection]
+    EI --> TT
+    TT --> OUT[(focused app<br/>terminal, or shell)]
+    AQ[outloud] -.orchestrates.-> HK & AU & ASR & EI & TT & OV
+    OV[overlay<br/>non-activating panel]

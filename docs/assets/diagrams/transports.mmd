@@ -1,0 +1,13 @@
+flowchart TB
+    S([Text to deliver]) --> A{Accessibility API<br/>exposes a text field?}
+    A -->|Yes| A1[Write in place<br/>undo preserved]
+    A -->|No| C{In a terminal?}
+    C -->|Yes| C1[Talk to the line editor<br/>shell undo preserved]
+    C -->|No| K{Can we synthesize keys?}
+    K -->|Yes| K1[Type it]
+    K -->|No| P[Clipboard, paste, restore]
+
+    style A1 fill:#38a169,color:#fff
+    style C1 fill:#38a169,color:#fff
+    style K1 fill:#c05621,color:#fff
+    style P fill:#c05621,color:#fff

@@ -1,0 +1,14 @@
+flowchart TB
+    K([Hold hotkey]) --> M[Microphone]
+    M --> V[Voice activity<br/>detection]
+    V --> R[Recognizer<br/>on-device]
+    R --> I{Text selected<br/>when you pressed?}
+    I -->|No| D[Insert at cursor]
+    I -->|Yes| E[Parse as an edit<br/>command]
+    E --> W[Rewrite the selection<br/>in place]
+    D --> T[Your app]
+    W --> T
+
+    style K fill:#2d3748,color:#fff
+    style R fill:#c05621,color:#fff
+    style T fill:#2b6cb0,color:#fff

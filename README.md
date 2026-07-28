@@ -38,43 +38,18 @@ still designed and stubbed. See [what works](#what-works-today).
 
 ## How it works
 
-```mermaid
-flowchart LR
-    K([Hold hotkey]) --> M[Microphone]
-    M --> V[Voice activity<br/>detection]
-    V --> R[Recognizer<br/>on-device]
-    R --> I{Text selected<br/>when you pressed?}
-    I -->|No| D[Insert at cursor]
-    I -->|Yes| E[Parse as an edit<br/>command]
-    E --> W[Rewrite the selection<br/>in place]
-    D --> T[Your app]
-    W --> T
-
-    style K fill:#2d3748,color:#fff
-    style R fill:#c05621,color:#fff
-    style T fill:#2b6cb0,color:#fff
-```
+<p align="center">
+  <img src="docs/assets/pipeline.svg" alt="Hold a hotkey, speak; audio goes to voice-activity detection, then an on-device recognizer. With no selection the text is inserted at the cursor; with a selection it is parsed as an edit command and the selection is rewritten in place.">
+</p>
 
 The orange step is the only closed component. Everything else is in this repo.
 
 Text is delivered through whichever transport the focused application actually
 supports, best first, falling back until something works:
 
-```mermaid
-flowchart TB
-    S([Text to deliver]) --> A{Accessibility API<br/>exposes a text field?}
-    A -->|Yes| A1[Write in place<br/>undo preserved]
-    A -->|No| C{In a terminal?}
-    C -->|Yes| C1[Talk to the line editor<br/>shell undo preserved]
-    C -->|No| K{Can we synthesize keys?}
-    K -->|Yes| K1[Type it]
-    K -->|No| P[Clipboard, paste, restore]
-
-    style A1 fill:#38a169,color:#fff
-    style C1 fill:#38a169,color:#fff
-    style K1 fill:#c05621,color:#fff
-    style P fill:#c05621,color:#fff
-```
+<p align="center">
+  <img src="docs/assets/transports.svg" alt="Transport selection, best first: if the accessibility API exposes a text field, write in place with undo preserved. Otherwise, in a terminal, talk to the line editor. Otherwise synthesize keystrokes. Otherwise use the clipboard and restore it.">
+</p>
 
 Green paths can *read* the existing text, which is what makes edit-by-voice
 possible. Orange paths are insert-only: dictation works, editing does not.
@@ -334,19 +309,9 @@ reported rather than silently failing.
 
 ## How it fits together
 
-```mermaid
-flowchart LR
-    HK[hotkey<br/>CGEventTap] --> AU[audio<br/>capture + VAD]
-    AU --> ASR[asr<br/>streaming recognizer]
-    ASR --> ST[stream<br/>commit horizon]
-    ASR --> EI[edit-intent<br/>command parser]
-    EI --> LLM[llm<br/>freeform fallback]
-    ST --> TT[text-target<br/>transport selection]
-    EI --> TT
-    TT --> OUT[(focused app<br/>terminal, or shell)]
-    AQ[outloud] -.orchestrates.-> HK & AU & ASR & EI & TT & OV
-    OV[overlay<br/>non-activating panel]
-```
+<p align="center">
+  <img src="docs/assets/architecture.svg" alt="Crate dependencies: hotkey feeds audio, which feeds asr; asr feeds both stream and edit-intent; edit-intent can escalate to llm; both reach text-target, which writes to the focused app. The outloud daemon orchestrates all of them plus the overlay.">
+</p>
 
 | Crate | Responsibility |
 |---|---|
