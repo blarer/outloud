@@ -51,8 +51,12 @@ const DOME_RY: f64 = 0.34;
 const DOME_SEGMENTS: usize = 24;
 
 /// Vertical drop of the mandible at `jaw_open == 1.0`, in unit space.
-/// ~10% of the head: cartoonishly readable without dislocating.
-const JAW_DROP: f64 = 0.10;
+/// ~11% of the head: cartoonishly readable without dislocating.
+///
+/// Was 0.10. Nudged up 10% on user feedback that the mouth wanted slightly
+/// more movement at the 42pt overlay size, where a tenth of the head is only
+/// ~4pt of travel and reads as understated on real speech.
+const JAW_DROP: f64 = 0.11;
 
 /// Eye sockets: centres and radii.
 const EYE_Y: f64 = 0.52;
@@ -186,6 +190,11 @@ pub struct SkullPose {
     pub scale: f64,
     /// Rotation about [`PIVOT`] in radians: the idle sway.
     pub tilt: f64,
+    /// Overall opacity, `0.0..=1.0`. Only the entry animation drives this
+    /// below 1.0; a hard cut into view was the one moment of the interaction
+    /// that read as abrupt, and it is also the most-seen frame in the
+    /// product because it happens on every keypress.
+    pub opacity: f64,
 }
 
 impl SkullPose {
@@ -197,6 +206,7 @@ impl SkullPose {
             eye_glow: 0.8,
             scale: 1.0,
             tilt: 0.0,
+            opacity: 1.0,
         }
     }
 
@@ -209,6 +219,7 @@ impl SkullPose {
             || (self.eye_glow - other.eye_glow).abs() > 0.005
             || (self.scale - other.scale).abs() > 0.0005
             || (self.tilt - other.tilt).abs() > 0.0005
+            || (self.opacity - other.opacity).abs() > 0.004
     }
 }
 
@@ -308,6 +319,20 @@ const POP_HZ: f64 = 3.3;
 /// How long after the trigger the pop is over (several decay constants).
 const POP_TOTAL_SECS: f64 = 0.8;
 
+/// Entry: the skull scaling and fading in when the hotkey goes down.
+///
+/// 150ms because this sits between the user pressing a key and being ready
+/// to speak. Slower reads as the UI making them wait, which is worse than
+/// the hard cut it replaces; much faster is indistinguishable from no
+/// animation at all.
+const ENTRY_SECS: f64 = 0.15;
+/// Starting scale. Small enough to read as growing, large enough that the
+/// first frame is recognisably a skull rather than a dot.
+const ENTRY_FROM_SCALE: f64 = 0.72;
+/// Overshoot past rest before settling, matching the commit pop's idiom so
+/// entry and finalize feel like the same object moving.
+const ENTRY_OVERSHOOT: f64 = 0.04;
+
 /// Turns `(state, level, time)` into smooth [`SkullPose`]s. One instance
 /// lives in the render model; `step` is called once per animation frame.
 #[derive(Debug)]
@@ -315,6 +340,8 @@ pub struct SkullAnimator {
     jaw: f64,
     /// When the finalize settle was triggered, in the caller's clock.
     settle_at: Option<f64>,
+    /// When the panel last became visible, in the caller's clock.
+    entry_at: Option<f64>,
 }
 
 impl SkullAnimator {
@@ -322,6 +349,7 @@ impl SkullAnimator {
         SkullAnimator {
             jaw: 0.0,
             settle_at: None,
+            entry_at: None,
         }
     }
 
@@ -330,6 +358,21 @@ impl SkullAnimator {
     /// release envelope; this adds the one-shot spring pop.
     pub fn trigger_settle(&mut self, now: f64) {
         self.settle_at = Some(now);
+    }
+
+    /// The entry gesture: called once when the panel becomes visible, i.e.
+    /// when the user presses the hotkey. Scales and fades the skull in
+    /// instead of cutting to it.
+    pub fn trigger_entry(&mut self, now: f64) {
+        self.entry_at = Some(now);
+    }
+
+    /// Entry progress at `now`: `None` once the animation is over, so the
+    /// steady state costs nothing.
+    fn entry_phase(&self, now: f64) -> Option<f64> {
+        let started = self.entry_at?;
+        let t = (now - started) / ENTRY_SECS;
+        (0.0..1.0).contains(&t).then_some(t)
     }
 
     /// Advance one frame. `level` is the *shaped* mic level (0..=1); `now`
@@ -372,6 +415,9 @@ impl SkullAnimator {
                 eye_glow,
                 scale: 1.0,
                 tilt: 0.0,
+                // No fade: the entry is decoration, so reduce-motion gets
+                // the skull immediately rather than a slower nothing.
+                opacity: 1.0,
             };
         }
 
@@ -388,12 +434,33 @@ impl SkullAnimator {
             }
         }
 
+        // Entry: scale and fade in, overshooting slightly before settling,
+        // so the panel grows into place rather than cutting to it. Applied
+        // last and multiplicatively, so it composes with breathing and the
+        // settle pop instead of fighting them.
+        let mut opacity = 1.0;
+        if let Some(t) = self.entry_phase(now) {
+            // Cubic ease-out: most of the motion is in the first third,
+            // which is what makes a short animation still read as smooth.
+            let eased = 1.0 - (1.0 - t).powi(3);
+            let overshoot = ENTRY_OVERSHOOT * (std::f64::consts::PI * t).sin();
+            scale *= ENTRY_FROM_SCALE + (1.0 - ENTRY_FROM_SCALE) * eased + overshoot;
+            // Opacity leads the scale slightly: fully opaque before the
+            // shape stops moving, so the settle is visible rather than
+            // happening behind a fade.
+            opacity = (t / 0.7).min(1.0);
+        } else if self.entry_at.is_some_and(|t0| now >= t0 + ENTRY_SECS) {
+            // One-shot: stop paying for the branch once it is over.
+            self.entry_at = None;
+        }
+
         SkullPose {
             jaw_open: self.jaw,
             eye_open: blink_openness(now),
             eye_glow,
             scale,
             tilt: SWAY_RAD * (std::f64::consts::TAU * SWAY_HZ * now + 1.0).sin(),
+            opacity,
         }
     }
 }
@@ -623,5 +690,79 @@ mod tests {
             ..p
         };
         assert!(p.visibly_differs(&q));
+    }
+
+    /// The entry starts small and transparent, and ends at rest.
+    ///
+    /// This is the animation the user sees most, because it fires on every
+    /// keypress. The endpoints are what matter: starting at full size is the
+    /// hard cut it replaces, and failing to reach exactly 1.0 leaves the
+    /// skull permanently shrunk or dim.
+    #[test]
+    fn entry_grows_from_small_and_transparent_to_rest() {
+        let mut a = SkullAnimator::new();
+        a.trigger_entry(0.0);
+
+        let first = a.step(0.0, 0.016, OverlayState::Listening, 0.0, false);
+        assert!(
+            first.scale < 0.8,
+            "entry must start visibly smaller than rest, got {}",
+            first.scale
+        );
+        assert!(
+            first.opacity < 0.1,
+            "entry must start near-transparent, got {}",
+            first.opacity
+        );
+
+        // Past the end of the window: the one-shot is over and the pose is
+        // back to the ordinary breathing/sway steady state.
+        let settled = a.step(1.0, 0.016, OverlayState::Listening, 0.0, false);
+        assert!(
+            (settled.opacity - 1.0).abs() < 1e-9,
+            "entry must finish fully opaque, got {}",
+            settled.opacity
+        );
+        assert!(
+            (settled.scale - 1.0).abs() < 0.05,
+            "entry must settle to roughly rest scale, got {}",
+            settled.scale
+        );
+    }
+
+    /// Opacity leads scale, so the settle is watched rather than hidden.
+    ///
+    /// If the fade ran the full duration the shape would still be moving
+    /// while translucent, which reads as blurry rather than as motion.
+    #[test]
+    fn entry_reaches_full_opacity_before_it_stops_moving() {
+        let mut a = SkullAnimator::new();
+        a.trigger_entry(0.0);
+        // 75% through the window: opaque already, by design.
+        let late = a.step(
+            ENTRY_SECS * 0.75,
+            0.016,
+            OverlayState::Listening,
+            0.0,
+            false,
+        );
+        assert!(
+            (late.opacity - 1.0).abs() < 1e-9,
+            "opacity should lead the scale, got {} at 75% through",
+            late.opacity
+        );
+    }
+
+    /// Reduced motion appears immediately: no grow, no fade.
+    ///
+    /// The entry is decoration, unlike the jaw, which is mic feedback and
+    /// stays even under reduce-motion.
+    #[test]
+    fn reduced_motion_skips_the_entry_entirely() {
+        let mut a = SkullAnimator::new();
+        a.trigger_entry(0.0);
+        let pose = a.step(0.0, 0.016, OverlayState::Listening, 0.0, true);
+        assert_eq!(pose.opacity, 1.0);
+        assert_eq!(pose.scale, 1.0);
     }
 }

@@ -445,9 +445,14 @@ impl OverlayView {
         // The skull reads on light and dark desktops because bone is light
         // and every feature is a dark cutout — self-contrast, no theme
         // branch needed.
-        let bone = ns_color(theme::palette::PAPER, 0.96);
-        let bone_shade = ns_color(theme::palette::PAPER.alpha(0.80), 0.96);
-        let dark = ns_color(theme::palette::INK, 0.94);
+        //
+        // Every alpha is scaled by the pose's opacity, which is below 1.0
+        // only during the entry animation. Fading the whole skull as one
+        // object keeps the features from appearing to float in separately.
+        let fade = model.pose.opacity;
+        let bone = ns_color(theme::palette::PAPER, 0.96 * fade);
+        let bone_shade = ns_color(theme::palette::PAPER.alpha(0.80), 0.96 * fade);
+        let dark = ns_color(theme::palette::INK, 0.94 * fade);
 
         fill_poly(&geo.mouth, &dark);
         fill_poly(&geo.cranium, &bone);
@@ -458,7 +463,7 @@ impl OverlayView {
         // Eye glow: the state's accent inside the sockets, alpha from the
         // pose (listening brightens with the voice, transcribing shimmers,
         // loading pulses, errors stare).
-        let glow = ns_color(accent, 0.25 + 0.75 * model.pose.eye_glow);
+        let glow = ns_color(accent, (0.25 + 0.75 * model.pose.eye_glow) * fade);
         for eye in &geo.eyes {
             fill_poly(eye, &glow);
         }
@@ -701,6 +706,16 @@ impl Overlay for MacOverlay {
                 )
             {
                 model.words.reset();
+            }
+            // The entry gesture: the skull scales and fades in rather than
+            // cutting into view. This fires on every keypress, so it is the
+            // most-seen animation in the product, and a hard cut was the one
+            // moment of the interaction that read as abrupt.
+            //
+            // Keyed off `visible` before the show path below sets it, so it
+            // runs exactly once per appearance.
+            if !self.visible {
+                model.animator.trigger_entry(now);
             }
             model.state = frame.state;
             model.target_level = frame.audio_level as f64;
