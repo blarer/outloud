@@ -552,19 +552,46 @@ impl TextTarget for ScreenTarget {
     }
 }
 
-/// Windows ConPTY. Stub.
+/// Windows ConPTY / Windows Terminal, for a pseudoconsole *we own*.
 ///
-/// When we *own* the pseudoconsole (`CreatePseudoConsole`), writing to its
-/// input pipe is exactly the pty-master case: bracketed paste in, VT
-/// stream out, and reading the buffer means parsing our own VT output or
-/// asking the shell (PSReadLine has no external query API). For a foreign
-/// console, `WriteConsoleInput` on an attached console handle can inject
-/// keys, and the legacy `ReadConsoleOutput` can read the cell grid, both
-/// require `AttachConsole(pid)`, which detaches our own console, so it
-/// belongs in a helper process.
-pub struct ConPtyTarget;
+/// When the daemon hosts the shell itself (`CreatePseudoConsole`, or any
+/// ConPTY whose input pipe it holds), writing to that pipe is exactly the
+/// pty-master case on unix: bracketed paste in, VT stream out. Windows
+/// Terminal, PSReadLine, and cmd's line input all consume the input pipe
+/// like a keyboard, and PSReadLine ships with bracketed paste enabled, so
+/// pasted text lands in the line editor as one atomic, undoable unit
+/// rather than as replayed keystrokes that would re-trigger keybindings.
+///
+/// The target owns only the *write* half, deliberately: the pipe handle is
+/// just an `io::Write`, which keeps the delivery logic pure and testable on
+/// every platform (the tests below run on macOS CI), while the
+/// Windows-only plumbing that produces the handle (CreatePseudoConsole +
+/// CreateProcess with a PROC_THREAD_ATTRIBUTE_PSEUDOCONSOLE) lives with
+/// the daemon that spawns the shell.
+///
+/// A *foreign* console (the user's own Windows Terminal tab) is a
+/// different problem: `WriteConsoleInput` and `ReadConsoleOutput` work but
+/// require `AttachConsole(pid)`, which detaches our console, so it belongs
+/// in a helper process. Documented follow-up; until then a foreign
+/// terminal gets the SendInput/clipboard tiers like any focused window.
+///
+/// Reading the buffer back is not offered: it would mean parsing our own
+/// VT output stream, and PSReadLine has no external query API. The honest
+/// read path on Windows is the same shell-integration route as unix
+/// (a PSReadLine module speaking the daemon protocol).
+pub struct ConPtyTarget<W: std::io::Write> {
+    input: W,
+}
 
-impl TextTarget for ConPtyTarget {
+impl<W: std::io::Write> ConPtyTarget<W> {
+    /// Wrap the write half of a ConPTY input pipe (or anything that quacks
+    /// like one).
+    pub fn new(input: W) -> Self {
+        ConPtyTarget { input }
+    }
+}
+
+impl<W: std::io::Write> TextTarget for ConPtyTarget<W> {
     fn name(&self) -> &'static str {
         "windows-conpty"
     }
@@ -575,28 +602,61 @@ impl TextTarget for ConPtyTarget {
 
     fn capabilities(&self) -> Capabilities {
         Capabilities {
-            can_read: true,
+            can_read: false,
             can_write_in_place: false,
             preserves_undo: false,
+            // The pseudoconsole needs no window or desktop session, which
+            // is the point: SSH-into-Windows and service contexts work.
             is_headless: true,
         }
     }
 
     fn read(&mut self) -> Result<Snapshot, TargetError> {
-        Err(TargetError::Unsupported(
-            "ConPTY backend not yet implemented; needs AttachConsole in a helper process",
+        Err(TargetError::NotReadable(
+            "reading a ConPTY means parsing our own VT output; use the shell \
+             integration (PSReadLine module) for read-back",
         ))
     }
 
-    fn insert(&mut self, _text: &str) -> Result<(), TargetError> {
-        Err(TargetError::Unsupported(
-            "ConPTY backend not yet implemented; needs AttachConsole in a helper process",
-        ))
+    fn insert(&mut self, text: &str) -> Result<(), TargetError> {
+        // Bracketed paste, not raw bytes: a raw newline would EXECUTE the
+        // command under every shell, while inside a paste bracket it is
+        // just a buffer character. Same safety argument as the unix
+        // terminal targets above.
+        self.input.write_all(&escape::bracketed_paste(text))?;
+        self.input.flush()?;
+        Ok(())
     }
 
     fn replace(&mut self, _text: &str) -> Result<(), TargetError> {
         Err(TargetError::Unsupported(
-            "ConPTY backend not yet implemented; needs AttachConsole in a helper process",
+            "ConPTY is write-only from the master side; in-place rewrite needs the \
+             shell integration (PSReadLine module)",
         ))
+    }
+}
+
+#[cfg(test)]
+mod conpty_tests {
+    use super::*;
+
+    #[test]
+    fn insert_wraps_in_bracketed_paste_and_flushes() {
+        // The write half is any io::Write, so the contract (bracketed
+        // paste framing around the exact payload) is testable on every
+        // platform, which is the point of the generic parameter.
+        let mut buf: Vec<u8> = Vec::new();
+        {
+            let mut t = ConPtyTarget::new(&mut buf);
+            t.insert("kubectl get pods\n").unwrap();
+        }
+        assert_eq!(buf, escape::bracketed_paste("kubectl get pods\n"));
+    }
+
+    #[test]
+    fn read_and_replace_refuse_with_the_shell_integration_pointer() {
+        let mut t = ConPtyTarget::new(Vec::new());
+        assert!(matches!(t.read(), Err(TargetError::NotReadable(_))));
+        assert!(matches!(t.replace("x"), Err(TargetError::Unsupported(_))));
     }
 }

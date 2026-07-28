@@ -69,7 +69,7 @@ tier is what differentiates them.
 | Ghostty | Term (partial) | no | no | Speaks OSC 52 and bracketed paste; no remote-control read API yet |
 | GNOME Terminal / Konsole | Clip/Keys | no | no | VTE/Konsole expose no buffer-read IPC; AT-SPI shows the grid read-only |
 | xterm | Clip/Keys | no | no | OSC 52 works (allowWindowOps permitting); nothing readable |
-| Windows Terminal (ConPTY) | Term | partial | no | Foreign console: `AttachConsole` + `ReadConsoleOutput` reads the grid from a helper process; UIA gives read-only text too |
+| Windows Terminal (ConPTY) | Term | no | no | Implemented for an *owned* pseudoconsole: bracketed paste into the input pipe (PSReadLine consumes it atomically). Foreign console needs `AttachConsole`+`ReadConsoleOutput` in a helper process (follow-up); UIA shows the grid read-only |
 
 ## Shell line editors (inside any terminal above)
 
@@ -111,3 +111,26 @@ Edit-by-voice needs read. Ranked by setup cost:
 2. **WezTerm `cli get-text` / kitty `@ get-text` / iTerm2 API**: zero to one config line, same pane-not-line caveat.
 3. **Shell widgets** (bash `READLINE_LINE`, zsh `$BUFFER`, fish `commandline`): one rc snippet, and the *only* option that reads the logical line with cursor position and writes back through the editor's own state, preserving its undo. This is the quality bar; everything else approximates it.
 4. **OSC 52 read**: specified, but disabled by default nearly everywhere for exfiltration reasons, and reads the clipboard rather than the line. Not viable.
+
+## Windows platform traps (cross-cutting)
+
+These affect every tier on Windows and are documented once here rather than
+per-row:
+
+- **UIPI / elevation.** User Interface Privilege Isolation blocks a
+  medium-integrity process from observing or injecting input into a
+  high-integrity (elevated) window, and UIA patterns refuse likewise.
+  SendInput *reports success* while the input is discarded, so this is not
+  even detectable at the call site. Symptom: dictation and hotkeys go dead
+  exactly while an elevated app (admin terminal, installer, regedit) has
+  focus, and recover when focus moves. Fixes are all product-level: run
+  elevated (bad default), or ship a signed uiAccess=true binary installed
+  under Program Files. The spike documents the symptom instead.
+- **DPI virtualization.** Without per-monitor-v2 DPI awareness
+  (`SetProcessDpiAwarenessContext`, declared by the overlay at
+  construction), Windows lies about coordinates on scaled monitors and
+  overlay positioning lands offset by the scale factor. Any future code
+  touching screen coordinates must live under the same awareness context.
+- **AVX2 static-initializer crash class.** Already covered in
+  docs/build-and-release.md: Windows builds must respect the baseline
+  policy or pre-Haswell machines crash before main.

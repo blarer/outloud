@@ -120,16 +120,59 @@ XGrabKey. The options all move the binding out of process:
 - **evdev read access** (`input` group): works everywhere, but is literally
   system-wide key visibility and must be an informed opt-in.
 
+### 8. Windows: RegisterHotKey cannot do push-to-talk
+
+The Windows backend (implemented, `backend/windows.rs`) uses a low-level
+keyboard hook (`SetWindowsHookExW` with `WH_KEYBOARD_LL`) on a dedicated
+message-pump thread, with `RegisterHotKey` demoted to a bind-time conflict
+probe. The reasoning, since RegisterHotKey looks like the obvious API:
+
+- **No key-up.** RegisterHotKey delivers `WM_HOTKEY` on the down edge
+  only. Push-to-talk is defined by the release; there is no release
+  notification, and polling `GetAsyncKeyState` to fake one adds latency
+  and misses fast taps.
+- **No bare modifiers.** The API requires a non-modifier VK, so right-Alt
+  (the nearest equivalent of our right-Option default) cannot be bound.
+- What it IS good at: registration fails with
+  `ERROR_HOTKEY_ALREADY_REGISTERED` when any other process holds the
+  chord, which is more reliable conflict detection than macOS offers. So
+  we register, record the result, and unregister immediately.
+
+The hook's own traps:
+
+- **The silent timeout unhook.** A hook callback that exceeds
+  `LowLevelHooksTimeout` (default 300ms, `HKCU\Control Panel\Desktop`) is
+  removed by the OS with no notification, the exact analogue of
+  `kCGEventTapDisabledByTimeout` except *without the courtesy event*. The
+  callback is therefore allocation-free and never blocks; a periodic
+  liveness self-check that re-installs and resets state is the remaining
+  follow-up (a reset matters because a swallowed key-up otherwise leaves
+  the mic hot).
+- **UIPI (the elevation trap).** When an elevated (admin) window has
+  focus, a non-elevated process's hook does not see its keys, and
+  SendInput into it is silently discarded: User Interface Privilege
+  Isolation blocks both observation and injection upward across integrity
+  levels. Symptom: the hotkey (and text delivery) simply dies while an
+  elevated app is focused and comes back when focus moves. The only real
+  outs are running elevated ourselves (unacceptable default) or a signed
+  uiAccess=true binary installed under Program Files (a shipping-product
+  decision, not a spike one). We document the symptom instead.
+- **Fn does not exist.** PC keyboard firmware handles Fn internally; no
+  VK arrives. `fn`-containing chords are refused at bind time with a
+  message, rather than binding a key that can never fire.
+- **Typematic repeat.** Holding a key delivers repeated `WM_KEYDOWN`; the
+  matcher collapses them to one Down edge or tap/hold would re-trigger.
+
 ## Per-platform capability table
 
-| Capability | macOS (CGEventTap) | Windows (planned: WH_KEYBOARD_LL + RegisterHotKey probe) | Linux X11 (planned: XGrabKey/XI2) | Linux Wayland (portal) |
+| Capability | macOS (CGEventTap) | Windows (WH_KEYBOARD_LL + RegisterHotKey probe) | Linux X11 (planned: XGrabKey/XI2) | Linux Wayland (portal) |
 |---|---|---|---|---|
-| Status | **implemented** | stub | stub | stub |
+| Status | **implemented** | **implemented** (compiled in CI; untested on real hardware) | stub | stub |
 | Global key down + up | yes | yes (hook) | yes | via portal Activated/Deactivated |
 | Bare modifier binding (right Option) | yes (flagsChanged + device bits) | yes (VK_RMENU etc.) | XI2 raw events, not XGrabKey | compositor-dependent |
 | Fn/Globe key | yes, with traps above | no standard Fn visibility (vendor drivers) | keyboard-dependent (XF86Fn rarely delivered) | no |
 | Conflict detection | symbolichotkeys + static table; other apps invisible | RegisterHotKey fails on collision (reliable) | XGrabKey BadAccess on collision (reliable) | compositor UI owns conflicts |
-| Silent-death mode | tap disabled on timeout: **handled, re-enabled** | hook silently removed on timeout: needs watchdog | X server grab persists | portal session can be revoked |
+| Silent-death mode | tap disabled on timeout: **handled, re-enabled** | hook silently removed on timeout: watchdog is follow-up | X server grab persists | portal session can be revoked |
 | Permission required | Accessibility (already required) | none for hook (but AV heuristics flag it) | none | user consent dialog |
 
 ## Verifying on a real machine
