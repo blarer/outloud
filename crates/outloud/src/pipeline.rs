@@ -755,6 +755,53 @@ mod tests {
         );
     }
 
+    /// `prefer_streaming: true` with no streamable field (CI has no
+    /// accessibility focus) must degrade to exactly the buffered behaviour:
+    /// one report, one write attempt, no hang waiting for a writer thread
+    /// that was never spawned. This is the degradation-matrix contract at
+    /// the pipeline level, not just the session level.
+    #[tokio::test]
+    async fn streaming_preference_degrades_to_buffered_without_a_field() {
+        let (ftx, frx) = tokio::sync::mpsc::unbounded_channel();
+        let (atx, arx) = tokio::sync::mpsc::unbounded_channel();
+        let (rtx, rrx) = tokio::sync::oneshot::channel();
+        let feed = recognize::spawn(|| Ok(Box::new(MockRecognizer::new()) as _), atx, rtx);
+        let (engine, _shared) = Engine::new();
+        let mut recorder = Recorder::new();
+
+        ftx.send(FrontendEvent::KeyDown).unwrap();
+        for chunk in voiced(3.0).chunks(1600) {
+            ftx.send(FrontendEvent::Chunk(chunk.to_vec())).unwrap();
+        }
+        ftx.send(FrontendEvent::KeyUp).unwrap();
+
+        let cfg = Config {
+            once: true,
+            auto_endpoint: false,
+            prefer_streaming: true,
+        };
+        let reports = tokio::time::timeout(
+            std::time::Duration::from_secs(20),
+            run(
+                cfg,
+                engine,
+                Channels {
+                    frontend: frx,
+                    asr_events: arx,
+                    feed,
+                    ready: rrx,
+                    mic: None,
+                },
+                &mut recorder,
+            ),
+        )
+        .await
+        .expect("degraded streaming run must terminate, not wait on a writer")
+        .unwrap();
+        assert_eq!(reports.len(), 1);
+        assert!(!reports[0].transcript.is_empty());
+    }
+
     /// Silence in, nothing out: the empty-transcript path returns quietly to
     /// Idle with no report and no write.
     #[tokio::test]
