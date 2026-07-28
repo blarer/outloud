@@ -71,6 +71,13 @@ impl MenuHost {
         self.settings.overlay_position != "hidden"
     }
 
+    /// `insertion.mode = "stream"`: stream stable words into the field as
+    /// they prove out. Read once at pipeline start; capable fields stream,
+    /// everything else silently keeps commit-on-release.
+    pub fn prefer_streaming(&self) -> bool {
+        self.settings.insertion_mode == "stream"
+    }
+
     /// Reload if the file changed underneath us. Called every frame by the
     /// render loop; the watcher does the work on its own thread, so this is
     /// a non-blocking channel drain.

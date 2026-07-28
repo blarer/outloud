@@ -38,6 +38,9 @@ diag = { path = "../diag" }
 edit-intent = { path = "../edit-intent" }
 hotkey = { path = "../hotkey" }
 overlay = { path = "../overlay", default-features = false }
+# The streaming commit layer: horizon, coalescer, minimal diffs. Pure
+# logic, no display machinery, safe in headless builds.
+stream = { path = "../stream" }
 text-target = { path = "../text-target", default-features = false }
 # rt-multi-thread because the pipeline stages (recognizer thread, injection)
 # are blocking work that must not stall the async supervisor; time for the
@@ -52,6 +55,11 @@ libc = "0.2.189"
 
 # The overlay itself needs a main-thread AppKit run loop; the daemon hosts it.
 [target.'cfg(target_os = "macos")'.dependencies]
+# ax_stream's AXSelectedTextRange writes: same FFI crates ax-edit uses, for
+# the one primitive (range-addressed replacement) ax-edit does not expose.
+accessibility-sys = "0.1"
+core-foundation = "0.10"
+core-foundation-sys = "0.8"
 objc2 = "0.6"
 objc2-foundation = { version = "0.3", features = ["NSDate", "NSRunLoop"] }
 objc2-app-kit = { version = "0.3", features = ["NSApplication", "NSResponder"] }

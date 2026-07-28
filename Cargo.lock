@@ -1493,12 +1493,15 @@ dependencies = [
 name = "outloud"
 version = "0.1.0"
 dependencies = [
+ "accessibility-sys",
  "anyhow",
  "asr",
  "audio",
  "ax-edit",
  "block2",
  "config",
+ "core-foundation",
+ "core-foundation-sys",
  "diag",
  "edit-intent",
  "hotkey",
@@ -1507,6 +1510,7 @@ dependencies = [
  "objc2-app-kit",
  "objc2-foundation",
  "overlay",
+ "stream",
  "text-target",
  "tokio",
 ]

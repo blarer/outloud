@@ -33,6 +33,8 @@
 //! there is no display (or `--no-overlay`), the pipeline gets the main
 //! thread and state transitions are logged instead of drawn.
 
+pub mod ax_stream;
+pub mod devlatency;
 pub mod inject;
 pub mod instance;
 pub mod menubar;
@@ -43,6 +45,7 @@ pub mod recognize;
 pub mod runtime;
 pub mod source;
 pub mod state;
+pub mod streamer;
 pub mod wav;
 
 /// Convert a UTF-16 code-unit offset (the unit the accessibility API

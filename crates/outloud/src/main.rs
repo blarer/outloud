@@ -254,6 +254,10 @@ fn main() -> anyhow::Result<()> {
         // File-driven runs commit on the synthetic KeyUp; mic-driven --once
         // has nobody holding a key, so the VAD endpoint is the commit.
         auto_endpoint: args.once && file_samples.is_none(),
+        // `insertion.mode = "stream"` in config.toml. `--once` keeps the
+        // buffered path: it is a measurement mode and its numbers must stay
+        // comparable across runs.
+        prefer_streaming: !args.once && menu_host.as_ref().is_some_and(|h| h.prefer_streaming()),
     };
 
     let chord = args.chord.clone();
@@ -464,6 +468,10 @@ fn overlay_main(
         // so hiding the overlay costs visibility of nothing.
         let show_overlay = menu_host.as_ref().is_none_or(|h| h.overlay_visible());
         let render = if show_overlay {
+            // Spectrum bands ride beside the frame: an atomic read per
+            // rendered frame from the lock-free meter slot, so an animated
+            // backend can drive its jaw without new frames being published.
+            ov.set_audio_bands(shared.meter().read().bands);
             ov.render(&frame)
         } else {
             ov.hide()

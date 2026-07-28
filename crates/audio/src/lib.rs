@@ -41,6 +41,7 @@
 #[cfg(feature = "capture")]
 #[path = "capture_cpal.rs"]
 pub mod capture;
+pub mod meter;
 pub mod resample;
 pub mod ring;
 pub mod segment;

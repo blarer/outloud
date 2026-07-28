@@ -57,6 +57,10 @@ pub struct Mic {
     /// stream is rebuilt for every utterance.
     events: UnboundedSender<FrontendEvent>,
     runtime: RuntimeShared,
+    /// The open capture stream. Headless builds link no capture backend
+    /// (`source::spawn_mic` errors there), so the slot only exists when one
+    /// can: this is what keeps `--no-default-features` compiling.
+    #[cfg(feature = "display")]
     open: Option<audio::capture::CaptureHandle>,
 }
 
@@ -65,12 +69,20 @@ impl Mic {
         Mic {
             events,
             runtime,
+            #[cfg(feature = "display")]
             open: None,
         }
     }
 
     pub fn is_open(&self) -> bool {
-        self.open.is_some()
+        #[cfg(feature = "display")]
+        {
+            self.open.is_some()
+        }
+        #[cfg(not(feature = "display"))]
+        {
+            false
+        }
     }
 
     /// Open the stream if it is not already open.
@@ -78,14 +90,22 @@ impl Mic {
     /// Idempotent, because a key-down that arrives while an utterance is
     /// still finalizing must not stack two streams on one device.
     pub fn open(&mut self) -> anyhow::Result<()> {
-        if self.open.is_some() {
-            return Ok(());
+        #[cfg(feature = "display")]
+        {
+            if self.open.is_some() {
+                return Ok(());
+            }
+            self.open = Some(source::spawn_mic(
+                self.events.clone(),
+                self.runtime.clone(),
+            )?);
+            Ok(())
         }
-        self.open = Some(source::spawn_mic(
-            self.events.clone(),
-            self.runtime.clone(),
-        )?);
-        Ok(())
+        #[cfg(not(feature = "display"))]
+        {
+            // The headless spawn_mic names --wav as the working path.
+            source::spawn_mic(self.events.clone(), self.runtime.clone())
+        }
     }
 
     /// Close the stream, releasing the device and clearing the system's
@@ -96,6 +116,7 @@ impl Mic {
     /// be the worst version of this bug, since it is both invisible and
     /// unbounded.
     pub fn close(&mut self) {
+        #[cfg(feature = "display")]
         if let Some(handle) = self.open.take() {
             handle.stop();
         }

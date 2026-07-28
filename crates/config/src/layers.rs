@@ -493,10 +493,11 @@ formatting.casing = "casual-lowercase"
         assert!(cfg.inert_settings().is_empty());
 
         // An unwired setting the user changed IS the case worth a warning:
-        // they expect an effect and there is none.
-        let (cfg, _) = build("insertion.mode = \"stream\"\n", &[]);
+        // they expect an effect and there is none. `model` is the sample
+        // unwired key (insertion.mode graduated when streaming was wired).
+        let (cfg, _) = build("model = \"fast\"\n", &[]);
         let inert: Vec<&str> = cfg.inert_settings().iter().map(|s| s.key).collect();
-        assert_eq!(inert, vec!["insertion.mode"]);
+        assert_eq!(inert, vec!["model"]);
     }
 
     #[test]

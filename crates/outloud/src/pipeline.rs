@@ -14,10 +14,12 @@ use diag::timing::{Recorder, Stage};
 use overlay::OverlayState;
 use tokio::sync::mpsc::UnboundedReceiver;
 
+use crate::devlatency::{StartupWatch, Verdict};
 use crate::inject::{self, Mode, Outcome};
 use crate::recognize::{AsrEvent, AudioFeed};
 use crate::source::FrontendEvent;
 use crate::state::Engine;
+use crate::streamer::{Streamer, StreamerEvent};
 
 /// How long an error panel stays on screen before dismissing itself.
 ///
@@ -34,6 +36,12 @@ pub struct Config {
     /// what lets `--once` run a full cycle with nobody holding a key: speak,
     /// pause, and the hangover fires the commit.
     pub auto_endpoint: bool,
+    /// `insertion.mode = "stream"`: write stable partial prefixes into the
+    /// field as they prove out, instead of one insert at commit. Only
+    /// honoured when the focused field can take in-place revisions; every
+    /// other field silently keeps commit-on-release (docs/streaming.md's
+    /// degradation matrix).
+    pub prefer_streaming: bool,
 }
 
 /// What one utterance actually cost, measured where the user feels it.
@@ -76,6 +84,10 @@ impl UtteranceReport {
 struct InFlight {
     mode: Mode,
     released_at: Instant,
+    /// Live streaming session, when the field accepted one. `None` is the
+    /// buffered commit-on-release path, which is also every error path's
+    /// fallback.
+    streamer: Option<Streamer>,
 }
 
 /// Run the supervisor until the frontend channel closes, or (in `once`
@@ -125,13 +137,61 @@ pub async fn run(
     // ready result is polled, and that race must surface the load error,
     // not an empty success.
     let mut asr_closed = false;
+    // Streaming writer completions ride their own channel; the sender is
+    // cloned into each utterance's writer thread.
+    let (stream_tx, mut stream_rx) = tokio::sync::mpsc::unbounded_channel::<StreamerEvent>();
+    // A streaming utterance whose final settle is still in the writer's
+    // hands. The report is produced when `Finished` arrives.
+    let mut pending_final: Option<PendingFinal> = None;
+    // Per-device stream-startup latency watchdog (docs/input-latency.md).
+    let mut startup = StartupWatch::new();
 
     loop {
+        // Computed each iteration: when the streamer's parked write becomes
+        // due, so the select sleeps exactly until then instead of polling.
+        let stream_deadline = in_flight
+            .as_ref()
+            .and_then(|f| f.streamer.as_ref())
+            .and_then(|s| s.deadline());
         tokio::select! {
             // Biased: readiness resolves before any Final that raced past
             // it (the worker sends `ready` before touching audio, but the
             // random-order select could still poll the channels first).
             biased;
+
+            // Flush a parked streamed write once its 80ms interval elapses.
+            _ = tokio::time::sleep_until(tokio::time::Instant::from_std(
+                stream_deadline.unwrap_or_else(Instant::now),
+            )), if stream_deadline.is_some() => {
+                if let Some(s) = in_flight.as_mut().and_then(|f| f.streamer.as_mut()) {
+                    s.on_tick(Instant::now());
+                }
+            }
+
+            // Writer-thread completions: unlock the coalescer, or settle
+            // the utterance whose final pass just landed.
+            Some(ev) = stream_rx.recv() => {
+                match ev {
+                    StreamerEvent::WriteDone(result) => {
+                        if let Some(s) = in_flight.as_mut().and_then(|f| f.streamer.as_mut()) {
+                            s.on_write_done(result, Instant::now());
+                        }
+                    }
+                    StreamerEvent::Finished { result, wrote_any } => {
+                        let Some(pf) = pending_final.take() else { continue };
+                        let report = settle_streamed(
+                            &mut engine, pf, result, wrote_any, &feed, recorder,
+                        ).await;
+                        if let Some(r) = report {
+                            eprintln!("outloud: {}", r.render());
+                            reports.push(r);
+                        }
+                        if cfg.once {
+                            return Ok(reports);
+                        }
+                    }
+                }
+            }
 
             // Tick only while an error is on screen, so the idle daemon is
             // still fully event-driven. An error panel that only clears on
@@ -200,11 +260,19 @@ pub async fn run(
                         // they speak. Warm AX read is ~134us (docs/latency.md),
                         // cheap enough for the event loop.
                         let span = recorder.start(Stage::Read);
-                        let mode = inject::mode_at_keydown();
+                        let (mode, snap) = inject::snapshot_and_mode_at_keydown();
                         recorder.finish(span);
                         if let Mode::Edit { selected } = &mode {
                             eprintln!("outloud: edit mode on selection: \"{selected}\"");
                         }
+                        // Streaming, when asked for and the field can take
+                        // in-place revisions. Everything else (edits, refused
+                        // fields, other platforms) keeps commit-on-release.
+                        let streamer = if crate::streamer::wants_streaming(cfg.prefer_streaming, &mode) {
+                            snap.as_ref().and_then(|s| Streamer::begin(s, stream_tx.clone()))
+                        } else {
+                            None
+                        };
                         segmenter = new_segmenter();
                         // Open the device HERE, not at startup. Holding a
                         // stream open all session lights the system's
@@ -220,8 +288,11 @@ pub async fn run(
                                 );
                                 continue;
                             }
+                            // Stamp the open so the first chunk's arrival
+                            // measures this device's real startup latency.
+                            startup.on_open(Instant::now());
                         }
-                        in_flight = Some(InFlight { mode, released_at: Instant::now() });
+                        in_flight = Some(InFlight { mode, released_at: Instant::now(), streamer });
                         if recognizer_ready {
                             listening = true;
                             engine.transition(OverlayState::Listening, None);
@@ -238,6 +309,53 @@ pub async fn run(
                     }
                     FrontendEvent::KeyUp => {
                         if listening {
+                            // Drain the audio already captured before
+                            // committing. Capture runs on the audio thread
+                            // and arrives here through a channel, so when
+                            // KeyUp is processed there are normally chunks
+                            // queued behind it holding the last stretch of
+                            // speech. Committing first sets listening=false
+                            // and the Chunk arm then skips them, which drops
+                            // the end of the sentence the user actually said.
+                            //
+                            // try_recv only takes what is already queued, so
+                            // this cannot wait on audio the user has not
+                            // spoken: it ends the moment the channel is empty.
+                            //
+                            // Non-chunk events are handled here the same way
+                            // their arms below would: a bare `while let` on
+                            // the Chunk pattern would silently DISCARD a
+                            // queued KeyDown or capture event it popped.
+                            while let Ok(queued) = frontend.try_recv() {
+                                match queued {
+                                    FrontendEvent::Chunk(samples) => {
+                                        engine.live_audio(&samples);
+                                        for ev in segmenter.push(&samples) {
+                                            use audio::segment::SpeechEvent::*;
+                                            match ev {
+                                                SpeechStart { audio } | Partial { audio } => feed.push(audio),
+                                                SpeechEnd { .. } => {}
+                                            }
+                                        }
+                                    }
+                                    // The commit below leaves in_flight set,
+                                    // so the KeyDown arm would refuse this
+                                    // press identically.
+                                    FrontendEvent::KeyDown => eprintln!(
+                                        "outloud: key-down ignored, previous utterance still committing"
+                                    ),
+                                    // Already committing; a duplicate end is
+                                    // a no-op.
+                                    FrontendEvent::KeyUp => {}
+                                    FrontendEvent::CaptureUp(device) => {
+                                        eprintln!("outloud: capturing from {device}");
+                                        startup.on_device(&device);
+                                    }
+                                    FrontendEvent::CaptureIssue(msg) => {
+                                        eprintln!("outloud: capture: {msg}");
+                                    }
+                                }
+                            }
                             commit(&mut engine, &mut segmenter, &feed, &mut in_flight, &mut listening);
                             // Release the device as soon as the user stops
                             // speaking, so the recording indicator tracks
@@ -245,13 +363,34 @@ pub async fn run(
                             if let Some(m) = mic.as_mut() {
                                 m.close();
                             }
+                            startup.on_close();
                         }
                     }
                     FrontendEvent::Chunk(samples) => {
                         if !listening {
                             continue; // mic is only *used* while capturing
                         }
-                        engine.live(level_of(&samples), None);
+                        // First chunk of the utterance: how late did this
+                        // device actually start? A slow device silently
+                        // corrupts the first word (docs/input-latency.md),
+                        // so lateness is surfaced, once per device.
+                        match startup.on_first_audio(Instant::now()) {
+                            Verdict::Fine => {}
+                            Verdict::SlowAgain { latency } => {
+                                eprintln!(
+                                    "outloud: slow capture start again ({}ms)",
+                                    latency.as_millis()
+                                );
+                            }
+                            Verdict::SlowFirstSample { message } => {
+                                eprintln!("outloud: {message}");
+                                // Detail on the listening overlay: the user
+                                // is mid-utterance, and this is exactly the
+                                // moment the advice applies.
+                                engine.live_detail(message);
+                            }
+                        }
+                        engine.live_audio(&samples);
                         let mut endpoint = false;
                         for ev in segmenter.push(&samples) {
                             use audio::segment::SpeechEvent::*;
@@ -276,6 +415,7 @@ pub async fn run(
                     }
                     FrontendEvent::CaptureUp(device) => {
                         eprintln!("outloud: capturing from {device}");
+                        startup.on_device(&device);
                     }
                     FrontendEvent::CaptureIssue(msg) => {
                         // Capture self-heals (rebuild loop); a total absence of
@@ -302,9 +442,15 @@ pub async fn run(
                 };
                 match ev {
                     AsrEvent::Partial(text) => {
-                        // Ghost text in the overlay only; the field is
-                        // touched exactly once, at commit (commit-on-release).
-                        engine.live(0.0, Some(&text));
+                        // Streaming: stable prefixes go into the field via
+                        // the horizon; the unstable tail is the overlay's
+                        // ghost. Buffered: the whole hypothesis is ghost
+                        // text and the field is touched once, at commit.
+                        let shown = match in_flight.as_mut().and_then(|f| f.streamer.as_mut()) {
+                            Some(s) => s.on_partial(&text, Instant::now()),
+                            None => text,
+                        };
+                        engine.live(0.0, Some(&shown));
                     }
                     AsrEvent::Final(result) => {
                         let Some(fl) = in_flight.take() else {
@@ -314,8 +460,34 @@ pub async fn run(
                         let finalize_ms = fl.released_at.elapsed().as_secs_f64() * 1000.0;
                         match result {
                             Ok(t) => {
+                                let text = t.text.trim().to_string();
+                                if let InFlight { streamer: Some(s), released_at, .. } = fl {
+                                    // Streamed: the writer settles with one
+                                    // consolidated correction; the report
+                                    // lands when Finished arrives.
+                                    if text.is_empty() {
+                                        engine.transition(OverlayState::Idle, None);
+                                        // The writer still needs its Finish
+                                        // (it exits on it) but writes nothing.
+                                        s.finish("", Instant::now());
+                                        if cfg.once {
+                                            return Ok(reports);
+                                        }
+                                        continue;
+                                    }
+                                    engine.transition(OverlayState::Injecting, None);
+                                    let inject_started = Instant::now();
+                                    s.finish(&text, inject_started);
+                                    pending_final = Some(PendingFinal {
+                                        transcript: text,
+                                        finalize_ms,
+                                        released_at,
+                                        inject_started,
+                                    });
+                                    continue; // report comes with Finished
+                                }
                                 let report = commit_transcript(
-                                    &mut engine, &fl, t.text.trim(), finalize_ms, &feed, recorder,
+                                    &mut engine, &fl, &text, finalize_ms, &feed, recorder,
                                 ).await;
                                 if let Some(r) = report {
                                     eprintln!("outloud: {}", r.render());
@@ -365,6 +537,67 @@ fn commit(
     if engine.state() == OverlayState::Listening {
         engine.transition(OverlayState::Transcribing, None);
     }
+}
+
+/// A streamed utterance whose final settle is executing on the writer
+/// thread. Everything the report needs, minus the outcome.
+struct PendingFinal {
+    transcript: String,
+    finalize_ms: f64,
+    released_at: Instant,
+    inject_started: Instant,
+}
+
+/// Produce the report (and states) for a streamed utterance once its final
+/// settle lands. The fallback rule: a failed settle on an UNTOUCHED field
+/// may still use the buffered insert path; once any streamed text is in the
+/// field, a second full insert would duplicate words, so failure is
+/// reported instead.
+async fn settle_streamed(
+    engine: &mut Engine,
+    pf: PendingFinal,
+    result: Result<(), String>,
+    wrote_any: bool,
+    feed: &AudioFeed,
+    recorder: &mut Recorder,
+) -> Option<UtteranceReport> {
+    let inject_ms = pf.inject_started.elapsed().as_secs_f64() * 1000.0;
+    recorder.record(
+        Stage::Write,
+        std::time::Duration::from_secs_f64(inject_ms / 1000.0),
+    );
+    let outcome = match result {
+        Ok(()) => {
+            engine.transition(OverlayState::Idle, None);
+            "ax-stream".to_string()
+        }
+        Err(e) if !wrote_any => {
+            // Nothing landed: the buffered path can still deliver whole.
+            eprintln!("outloud: streamed settle failed on an untouched field ({e}); using the buffered path");
+            let fl = InFlight {
+                mode: Mode::Dictate,
+                released_at: pf.released_at,
+                streamer: None,
+            };
+            return commit_transcript(engine, &fl, &pf.transcript, pf.finalize_ms, feed, recorder)
+                .await;
+        }
+        Err(e) => {
+            let msg = format!(
+                "streamed dictation could not finish cleanly ({e}) -> check the text and fix by hand"
+            );
+            engine.transition(OverlayState::Error, Some(msg.clone()));
+            format!("ax-stream-failed: {msg}")
+        }
+    };
+    Some(UtteranceReport {
+        transcript: pf.transcript,
+        outcome,
+        finalize_ms: pf.finalize_ms,
+        inject_ms,
+        release_to_text_ms: pf.finalize_ms + inject_ms,
+        dropped_chunks: feed.dropped_chunks(),
+    })
 }
 
 /// The back half: transcript -> (parse -> apply ->) write -> state updates.
@@ -454,16 +687,6 @@ fn new_segmenter() -> Segmenter {
     )
 }
 
-/// Overlay waveform level: normalized RMS. The 0.1 knee maps normal speech
-/// near full scale without clipping whispers to zero.
-fn level_of(samples: &[f32]) -> f32 {
-    if samples.is_empty() {
-        return 0.0;
-    }
-    let rms = (samples.iter().map(|s| s * s).sum::<f32>() / samples.len() as f32).sqrt();
-    (rms / 0.1).clamp(0.0, 1.0)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -499,6 +722,7 @@ mod tests {
         let cfg = Config {
             once: true,
             auto_endpoint: false,
+            prefer_streaming: false,
         };
         let reports = run(
             cfg,
@@ -549,6 +773,7 @@ mod tests {
         let cfg = Config {
             once: true,
             auto_endpoint: false,
+            prefer_streaming: false,
         };
         let reports = run(
             cfg,
@@ -581,6 +806,7 @@ mod tests {
         let cfg = Config {
             once: true,
             auto_endpoint: false,
+            prefer_streaming: false,
         };
         let err = run(
             cfg,
@@ -600,5 +826,116 @@ mod tests {
         assert_eq!(shared.snapshot().state, OverlayState::Error);
         // The error must carry a named next action.
         assert!(shared.snapshot().detail.unwrap().contains("->"));
+    }
+
+    /// Audio already captured when the key comes up must still be heard.
+    ///
+    /// Reported symptom: "it didn't get my full sentence when I let go".
+    ///
+    /// The mechanism is a race, not a recognizer problem. Capture runs on
+    /// the audio thread and reaches this loop through a channel, so at the
+    /// moment KeyUp is processed there are normally chunks already queued
+    /// behind it holding the last ~100ms of speech. `commit` sets
+    /// `listening = false` immediately, and the `Chunk` arm skips anything
+    /// arriving after that, so the tail is discarded even though the user
+    /// spoke it before releasing.
+    ///
+    /// The other tests all send every chunk *before* KeyUp, which is the
+    /// one ordering the bug cannot occur in. This one interleaves the way
+    /// the real channel does.
+    #[tokio::test]
+    async fn audio_queued_behind_keyup_still_reaches_the_recognizer() {
+        let (ftx, frx) = tokio::sync::mpsc::unbounded_channel();
+        let (atx, arx) = tokio::sync::mpsc::unbounded_channel();
+        let (rtx, rrx) = tokio::sync::oneshot::channel();
+        let feed = recognize::spawn(|| Ok(Box::new(MockRecognizer::new()) as _), atx, rtx);
+        let (engine, _shared) = Engine::new();
+        let mut recorder = Recorder::new();
+
+        let audio = voiced(3.0);
+        let chunks: Vec<Vec<f32>> = audio.chunks(1600).map(|c| c.to_vec()).collect();
+        let split = chunks.len() / 2;
+
+        ftx.send(FrontendEvent::KeyDown).unwrap();
+        for chunk in &chunks[..split] {
+            ftx.send(FrontendEvent::Chunk(chunk.clone())).unwrap();
+        }
+        ftx.send(FrontendEvent::KeyUp).unwrap();
+        // Spoken before the release, delivered after it. This is the tail
+        // the user loses.
+        for chunk in &chunks[split..] {
+            ftx.send(FrontendEvent::Chunk(chunk.clone())).unwrap();
+        }
+
+        let cfg = Config {
+            once: true,
+            auto_endpoint: false,
+            prefer_streaming: false,
+        };
+        let reports = run(
+            cfg,
+            engine,
+            Channels {
+                frontend: frx,
+                asr_events: arx,
+                feed,
+                ready: rrx,
+                mic: None,
+            },
+            &mut recorder,
+        )
+        .await
+        .unwrap();
+
+        // MockRecognizer's transcript length tracks how much voiced audio it
+        // was fed, so a truncated tail shows up as a shorter transcript.
+        // Compare against the same audio delivered entirely before KeyUp.
+        let baseline = transcript_for_all_audio_before_keyup(&chunks).await;
+        let got = &reports[0].transcript;
+        assert_eq!(
+            got.split_whitespace().count(),
+            baseline.split_whitespace().count(),
+            "audio queued behind KeyUp was dropped: got {got:?}, but the same \
+             audio delivered before KeyUp yields {baseline:?}"
+        );
+    }
+
+    /// The control for the test above: identical audio, all of it delivered
+    /// before the key is released.
+    async fn transcript_for_all_audio_before_keyup(chunks: &[Vec<f32>]) -> String {
+        let (ftx, frx) = tokio::sync::mpsc::unbounded_channel();
+        let (atx, arx) = tokio::sync::mpsc::unbounded_channel();
+        let (rtx, rrx) = tokio::sync::oneshot::channel();
+        let feed = recognize::spawn(|| Ok(Box::new(MockRecognizer::new()) as _), atx, rtx);
+        let (engine, _shared) = Engine::new();
+        let mut recorder = Recorder::new();
+
+        ftx.send(FrontendEvent::KeyDown).unwrap();
+        for chunk in chunks {
+            ftx.send(FrontendEvent::Chunk(chunk.clone())).unwrap();
+        }
+        ftx.send(FrontendEvent::KeyUp).unwrap();
+
+        let cfg = Config {
+            once: true,
+            auto_endpoint: false,
+            prefer_streaming: false,
+        };
+        run(
+            cfg,
+            engine,
+            Channels {
+                frontend: frx,
+                asr_events: arx,
+                feed,
+                ready: rrx,
+                mic: None,
+            },
+            &mut recorder,
+        )
+        .await
+        .unwrap()[0]
+            .transcript
+            .clone()
     }
 }

@@ -219,7 +219,7 @@ pub fn schema() -> &'static [KeySpec] {
                 default: s("on-release"),
                 constraint: OneOf(&["on-release", "stream"]),
                 doc: "Insert the whole utterance on key release, or stream words as spoken.",
-                wired: false,
+                wired: true,
             },
             KeySpec {
                 key: "insertion.paste-fallback",
@@ -397,7 +397,10 @@ mod tests {
         // wired a setting without telling the config layer, or added a
         // setting the menu will silently refuse to offer.
         let wired: Vec<&str> = schema().iter().filter(|s| s.wired).map(|s| s.key).collect();
-        assert_eq!(wired, vec!["hotkey", "enabled", "overlay.position"]);
+        assert_eq!(
+            wired,
+            vec!["hotkey", "enabled", "insertion.mode", "overlay.position"]
+        );
     }
 
     #[test]
@@ -406,11 +409,10 @@ mod tests {
         // Not asserted as a fixed list on purpose: this number should only
         // ever go DOWN, and pinning it exactly would make wiring a setting
         // fail an unrelated-looking test. What must hold is the invariant.
-        assert_eq!(inert.len(), schema().len() - 3);
+        assert_eq!(inert.len(), schema().len() - 4);
         assert!(
-            inert.contains(&"insertion.mode"),
-            "insertion.mode is inert: outloud has no dependency on the stream \
-             crate at all, so \"stream\" cannot possibly take effect"
+            !inert.contains(&"insertion.mode"),
+            "insertion.mode is wired: the pipeline streams partials when it is \"stream\""
         );
         assert!(
             !inert.contains(&"hotkey"),

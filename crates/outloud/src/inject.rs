@@ -85,6 +85,22 @@ pub fn mode_at_keydown() -> Mode {
     Mode::Dictate
 }
 
+/// Key-down read that also hands back the snapshot itself, so the streaming
+/// path can probe the same field the mode decision was made from. One AX
+/// read, two consumers: re-snapshotting for the probe would race a focus
+/// change between two reads that must describe the same element.
+pub fn snapshot_and_mode_at_keydown() -> (Mode, Option<TextSnapshot>) {
+    #[cfg(target_os = "macos")]
+    {
+        let snap = ax_edit::snapshot_focused().ok();
+        (mode_from_snapshot(snap.as_ref()), snap)
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        (mode_at_keydown(), None)
+    }
+}
+
 /// How one utterance ended, for the overlay and the log.
 #[derive(Debug)]
 pub enum Outcome {

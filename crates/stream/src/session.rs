@@ -174,6 +174,14 @@ impl DictationSession {
         self.release_write(released, now)
     }
 
+    /// When the earliest next release could happen, so an async driver can
+    /// sleep exactly until a parked write becomes due instead of polling.
+    /// `None` means nothing is parked (or a write is in flight, in which
+    /// case `on_write_done` is the wakeup).
+    pub fn next_deadline(&self) -> Option<Instant> {
+        self.coalescer.next_deadline()
+    }
+
     /// Turn a released desired-state into a command, and if the release
     /// turned out to be a no-op (target already written), immediately mark
     /// the "write" done so the coalescer is not left waiting forever for a

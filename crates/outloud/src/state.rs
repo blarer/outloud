@@ -16,6 +16,7 @@
 
 use std::sync::{Arc, Mutex};
 
+use audio::meter::{AudioMeter, MeterShared};
 use overlay::{OverlayFrame, OverlayState};
 
 /// Shared slot the pipeline writes and the render loop reads. Storing a
@@ -24,12 +25,22 @@ use overlay::{OverlayFrame, OverlayState};
 #[derive(Clone)]
 pub struct StatusShared {
     frame: Arc<Mutex<OverlayFrame>>,
+    /// Lock-free level+bands feed for animation. Separate from the frame
+    /// slot because it updates per audio chunk (~33Hz) while frames change
+    /// per state/partial, and packing it into the mutex would make the
+    /// render loop's fast path contend with state publication.
+    meter: MeterShared,
 }
 
 impl StatusShared {
     /// Read the latest frame. Called from the render thread.
     pub fn snapshot(&self) -> OverlayFrame {
         self.frame.lock().expect("status lock poisoned").clone()
+    }
+
+    /// The live audio meter (level + spectrum bands) for animated surfaces.
+    pub fn meter(&self) -> &MeterShared {
+        &self.meter
     }
 }
 
@@ -45,6 +56,8 @@ pub struct Engine {
     /// Live audio level, refreshed independently of state changes so the
     /// waveform animates between transitions.
     level: f32,
+    /// The level/spectrum processor feeding [`StatusShared::meter`].
+    meter: AudioMeter,
     /// Partial text tail while listening/transcribing.
     partial: String,
     /// True once an illegal transition was attempted; exposed for tests.
@@ -58,6 +71,7 @@ impl Engine {
         let initial = OverlayFrame::state_only(OverlayState::ModelLoading);
         let shared = StatusShared {
             frame: Arc::new(Mutex::new(initial)),
+            meter: MeterShared::new(),
         };
         (
             Engine {
@@ -65,6 +79,7 @@ impl Engine {
                 entered_at: std::time::Instant::now(),
                 shared: shared.clone(),
                 level: 0.0,
+                meter: AudioMeter::new(shared.meter.clone()),
                 partial: String::new(),
                 saw_illegal: false,
             },
@@ -98,8 +113,27 @@ impl Engine {
         }
         if next != OverlayState::Listening {
             self.level = 0.0;
+            // The next utterance's jaw must start from silence, not from
+            // this one's decaying envelope.
+            self.meter.reset();
         }
         self.publish(detail);
+    }
+
+    /// Feed live utterance audio: updates the meter (level + bands) and the
+    /// published frame's level in one call. The meter runs here, in the
+    /// supervisor task, on chunks already flowing to the recognizer, so it
+    /// costs the realtime capture callback nothing.
+    pub fn live_audio(&mut self, samples: &[f32]) {
+        let frame = self.meter.process(samples);
+        self.live(frame.level, None);
+    }
+
+    /// Attach a one-line advisory to the current state without changing it,
+    /// e.g. the slow-device warning while Listening. Cleared by the next
+    /// state transition like any other detail.
+    pub fn live_detail(&mut self, detail: String) {
+        self.publish(Some(detail));
     }
 
     /// Update live listening data without a state change.
