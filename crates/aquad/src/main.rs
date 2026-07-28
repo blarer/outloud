@@ -145,6 +145,37 @@ fn synthesize(text: &str) -> anyhow::Result<std::path::PathBuf> {
     Ok(wav)
 }
 
+/// Show a startup refusal to a user who has no terminal.
+///
+/// Only on the GUI path: a shell launch already printed the message, and a
+/// second copy in a terminal would be noise. `display dialog` via osascript
+/// rather than an AppKit alert because this runs before `NSApplication` is
+/// configured, and because the process is about to exit either way.
+#[cfg(target_os = "macos")]
+fn report_refusal_to_the_user(message: &str) {
+    // A terminal-attached launch has already seen it on stderr.
+    if std::io::IsTerminal::is_terminal(&std::io::stderr()) {
+        return;
+    }
+    // Quoting: the message is ours, not user input, but escaping keeps a
+    // future edit containing a quote from silently breaking the dialog.
+    let escaped = message.replace('\\', "\\\\").replace('"', "\\\"");
+    let script = format!(
+        "display dialog \"{escaped}\" with title \"Aqua\" buttons {{\"OK\"}} \
+         default button \"OK\" with icon caution"
+    );
+    // Best effort: failing to show a dialog must not change the exit path.
+    let _ = std::process::Command::new("osascript")
+        .args(["-e", &script])
+        .status();
+}
+
+#[cfg(not(target_os = "macos"))]
+fn report_refusal_to_the_user(_message: &str) {
+    // Other platforms have no equivalent one-liner, and their daemons are
+    // started from a shell where stderr is already visible.
+}
+
 fn main() -> anyhow::Result<()> {
     let mut args = parse_args()?;
 
@@ -159,7 +190,16 @@ fn main() -> anyhow::Result<()> {
     let _instance = if args.once {
         None
     } else {
-        let lock = aquad::instance::acquire().map_err(|e| anyhow::anyhow!("{e}"))?;
+        let lock = aquad::instance::acquire().map_err(|e| {
+            // A bundled launch has no terminal, so this message would go
+            // nowhere: double-clicking Aqua.app while a daemon is running
+            // would simply do nothing at all, which reads as "the app is
+            // broken" rather than "it is already running". Say it where a
+            // GUI user can see it before the error goes to a stderr nobody
+            // is attached to.
+            report_refusal_to_the_user(&e.to_string());
+            anyhow::anyhow!("{e}")
+        })?;
         // Now that the lock is ours, no other daemon is running, so any
         // speech helper still alive belongs to a daemon that is gone. One
         // was found on a dev machine eight hours after its parent died,
@@ -240,7 +280,13 @@ fn main() -> anyhow::Result<()> {
                     source::spawn_wav(samples, args.realtime, ftx.clone());
                 }
                 None => {
-                    _capture = Some(source::spawn_mic(ftx.clone(), runtime_for_pipeline.clone()));
+                    // `?`, not a log-and-continue: a daemon that came up
+                    // without capture would sit there looking healthy and
+                    // never hear a word. Failing here says why, once.
+                    _capture = Some(source::spawn_mic(
+                        ftx.clone(),
+                        runtime_for_pipeline.clone(),
+                    )?);
                     if args.once {
                         // No key to hold: capture starts immediately.
                         let _ = ftx.send(source::FrontendEvent::KeyDown);
@@ -377,7 +423,28 @@ fn overlay_main(
     // screenshot and it responded to accessibility-driven presses (those
     // call the action directly, bypassing the queue), so only a real click
     // could catch it.
+    // Accessibility trust is polled, not observed: macOS offers no
+    // notification for a grant changing, and it changes in both directions
+    // while the daemon runs. Revocation (TCC reset, re-sign, OS update)
+    // otherwise leaves a daemon that believes it is trusted and silently
+    // degrades; the grant being ADDED is even more common, because the
+    // quickstart tells people to do exactly that with Aqua already running,
+    // and without a re-check they conclude the fix did not work.
+    //
+    // Once a second, not every frame: `AXIsProcessTrusted` is a cross-process
+    // call, and a permission does not change 30 times a second.
+    const TRUST_POLL_FRAMES: u32 = 30;
+    let mut frames_since_trust_poll = TRUST_POLL_FRAMES; // check immediately
+
     loop {
+        if frames_since_trust_poll >= TRUST_POLL_FRAMES {
+            // `false`: never prompt. A prompt on a timer would be a dialog
+            // every second, and the menu already offers the deep link.
+            runtime.set_accessibility_trusted(ax_edit::is_trusted(false));
+            frames_since_trust_poll = 0;
+        }
+        frames_since_trust_poll += 1;
+
         let frame = shared.snapshot();
         // `overlay.position = "hidden"`: the user asked not to see the
         // floating indicator. The menu bar item still reports every state,

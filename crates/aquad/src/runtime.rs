@@ -27,6 +27,17 @@ pub struct Runtime {
     /// Capture could not open any device. Distinct from "no Accessibility":
     /// different pane, different fix.
     pub microphone_blocked: bool,
+    /// The Accessibility grant is missing RIGHT NOW, as opposed to at
+    /// launch.
+    ///
+    /// macOS revokes silently: a TCC reset, a re-sign, or an OS update can
+    /// take the grant away from a running process, and the reverse is even
+    /// more common because the quickstart tells people to grant it while the
+    /// daemon is already running. Without a live check the daemon keeps
+    /// believing whatever was true at startup: it degrades to clipboard
+    /// paste while still showing a healthy glyph, or it stays broken after
+    /// the user has just fixed it and concludes the fix did not work.
+    pub accessibility_blocked: bool,
 }
 
 /// Shared publication slot. Cloneable; every clone sees the same facts.
@@ -94,6 +105,20 @@ impl RuntimeShared {
         r.microphone_blocked = false;
     }
 
+    /// Publish the live Accessibility trust state.
+    ///
+    /// Takes the positive sense (`trusted`) rather than a `set_blocked`
+    /// pair, because unlike the microphone this is a level, not an event:
+    /// it is polled, so every poll must be able to clear the flag as well as
+    /// set it. That is what makes granting the permission while the daemon
+    /// runs take effect without a restart.
+    pub fn set_accessibility_trusted(&self, trusted: bool) {
+        self.inner
+            .lock()
+            .expect("runtime lock poisoned")
+            .accessibility_blocked = !trusted;
+    }
+
     /// Record that capture cannot open a device at all.
     pub fn set_microphone_blocked(&self) {
         let mut r = self.inner.lock().expect("runtime lock poisoned");
@@ -127,6 +152,19 @@ mod tests {
         shared.set_microphone("AirPods".into());
         shared.set_microphone_blocked();
         assert_eq!(shared.snapshot().microphone, None);
+    }
+
+    /// Granting the permission while the daemon runs must take effect
+    /// without a restart. This is the common direction: the quickstart tells
+    /// users to grant Accessibility, and they do it with Aqua already
+    /// running.
+    #[test]
+    fn regaining_trust_clears_the_block() {
+        let shared = RuntimeShared::new();
+        shared.set_accessibility_trusted(false);
+        assert!(shared.snapshot().accessibility_blocked);
+        shared.set_accessibility_trusted(true);
+        assert!(!shared.snapshot().accessibility_blocked);
     }
 
     #[test]

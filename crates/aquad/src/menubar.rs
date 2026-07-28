@@ -74,6 +74,9 @@ pub struct Status {
     /// Capture could not open a device at all, which is a different fix from
     /// a missing Accessibility grant and needs its own row.
     pub microphone_blocked: bool,
+    /// Accessibility trust is missing right now, from a live poll rather
+    /// than from whatever was true at launch.
+    pub accessibility_blocked: bool,
 }
 
 /// The settings the menu can change, resolved from the config layers.
@@ -109,6 +112,7 @@ impl Default for Status {
             config_problems: Vec::new(),
             microphone: None,
             microphone_blocked: false,
+            accessibility_blocked: false,
         }
     }
 }
@@ -187,7 +191,10 @@ pub fn build(status: &Status, settings: &Settings) -> (MenuModel, Vec<Action>) {
     // it is broken nothing else in this menu matters. Two grants, two rows,
     // each shown only when that one is actually failing: a permanent list of
     // things to go fix is nagging, and principle 1 is invisible-by-default.
-    if status.state == OverlayState::NoPermission || status.bound_hotkey.is_none() {
+    if status.state == OverlayState::NoPermission
+        || status.bound_hotkey.is_none()
+        || status.accessibility_blocked
+    {
         items.push(MenuItem::Separator);
         items.push(MenuItem::Label(
             "Aqua needs Accessibility to see the hotkey and write text.".into(),
@@ -296,8 +303,19 @@ pub fn build(status: &Status, settings: &Settings) -> (MenuModel, Vec<Action>) {
     let id = add(&mut actions, Action::Quit);
     items.push(MenuItem::action("Quit Aqua", id));
 
+    // The glyph must answer "is it on?" without a click, which is the whole
+    // reason the tray surface exists. A daemon whose Accessibility grant was
+    // revoked is NOT ready, however healthy the pipeline's own state machine
+    // believes itself to be: the engine has no idea the permission moved, so
+    // the live poll overrides it here rather than faking a state transition
+    // the engine's table would reject.
+    let glyph_state = if status.accessibility_blocked && status.state == OverlayState::Idle {
+        OverlayState::NoPermission
+    } else {
+        status.state
+    };
     let model = MenuModel {
-        state: status.state,
+        state: glyph_state,
         tooltip: status_line(status),
         items,
     };
@@ -401,6 +419,11 @@ fn same_chord(bound: &str, configured: &str) -> bool {
 /// The one-line answer to "what is it doing?", used for both the top menu
 /// row and the status item's tooltip.
 fn status_line(status: &Status) -> String {
+    // Same override as the glyph: "ready" is a lie when the permission that
+    // makes dictation work has been taken away.
+    if status.accessibility_blocked && status.state == OverlayState::Idle {
+        return "Aqua: Accessibility permission needed".into();
+    }
     match status.state {
         OverlayState::Idle => "Aqua: ready".into(),
         OverlayState::Listening => "Aqua: listening".into(),
@@ -567,6 +590,57 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn revoked_accessibility_surfaces_while_running() {
+        // macOS revokes silently, and nothing else in the product would tell
+        // the user: the daemon keeps running, the glyph stays healthy, and
+        // dictation quietly degrades. The live poll writes this flag, and it
+        // must produce both the explanation and the way to fix it.
+        let mut st = status(OverlayState::Idle);
+        st.accessibility_blocked = true;
+        let (model, actions) = build(&st, &settings());
+        assert!(actions.contains(&Action::OpenPrivacyPane {
+            pane: PANE_ACCESSIBILITY
+        }));
+        assert!(format!("{:?}", model.items).contains("Accessibility"));
+    }
+
+    #[test]
+    fn a_revoked_grant_changes_the_glyph_not_just_the_menu() {
+        // The glyph is the surface a user reads without clicking, so a
+        // revoked permission that only shows up inside the menu is a daemon
+        // that still LOOKS fine while dictation is broken.
+        let mut st = status(OverlayState::Idle);
+        st.accessibility_blocked = true;
+        let (model, _) = build(&st, &settings());
+        assert_eq!(model.state, OverlayState::NoPermission);
+        assert!(model.tooltip.contains("Accessibility"), "{}", model.tooltip);
+    }
+
+    #[test]
+    fn a_live_utterance_is_never_interrupted_by_the_permission_glyph() {
+        // The override applies only to Idle. Overriding Listening would
+        // replace the mic-hot glyph mid-utterance, which is the one state
+        // the user must be able to trust absolutely.
+        let mut st = status(OverlayState::Listening);
+        st.accessibility_blocked = true;
+        let (model, _) = build(&st, &settings());
+        assert_eq!(model.state, OverlayState::Listening);
+    }
+
+    #[test]
+    fn regained_accessibility_stops_nagging() {
+        // The opposite direction, and the more common one: the quickstart
+        // tells users to grant the permission with Aqua already running. The
+        // row must disappear on its own, or they learn the menu lies.
+        let st = status(OverlayState::Idle); // trusted, hotkey bound
+        let (model, _) = build(&st, &settings());
+        assert!(
+            !format!("{:?}", model.items).contains("Accessibility"),
+            "a healthy daemon must not show a permission row"
+        );
     }
 
     #[test]

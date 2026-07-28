@@ -165,6 +165,7 @@ impl MenuHost {
             config_problems: self.problems.clone(),
             microphone: runtime.microphone.clone(),
             microphone_blocked: runtime.microphone_blocked,
+            accessibility_blocked: runtime.accessibility_blocked,
         };
         let (model, actions) = menubar::build(&status, &self.settings);
         self.actions = actions;
@@ -386,7 +387,7 @@ mod tests {
                 &Runtime {
                     bound_hotkey: Some("right-option".into()),
                     microphone: Some("Built-in".into()),
-                    microphone_blocked: false,
+                    ..Runtime::default()
                 },
             );
         }
