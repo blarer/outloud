@@ -159,7 +159,17 @@ fn main() -> anyhow::Result<()> {
     let _instance = if args.once {
         None
     } else {
-        Some(aquad::instance::acquire().map_err(|e| anyhow::anyhow!("{e}"))?)
+        let lock = aquad::instance::acquire().map_err(|e| anyhow::anyhow!("{e}"))?;
+        // Now that the lock is ours, no other daemon is running, so any
+        // speech helper still alive belongs to a daemon that is gone. One
+        // was found on a dev machine eight hours after its parent died,
+        // still holding an OS speech session. The trigger was never
+        // reproduced, so this kills the class rather than the cause.
+        match aquad::instance::reap_stale_helpers() {
+            0 => {}
+            n => eprintln!("aquad: cleaned up {n} stale speech helper(s) from a previous run"),
+        }
+        Some(lock)
     };
 
     let (engine, shared) = Engine::new();

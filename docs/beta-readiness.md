@@ -440,7 +440,8 @@ second is ample) that publishes `NoPermission` on transition.
 
 ### M4. Stale ASR helper process, trigger unidentified
 
-**Frequency: unknown. Observed once, not reproducible.**
+**Frequency: unknown. Observed once, not reproducible. Status: symptom fixed;
+cause still unidentified.**
 
 A helper process was found alive on this machine, reparented to launchd, 7h50m
 after its parent died:
@@ -481,9 +482,43 @@ recent fix (the process started at 01:07, before several of that day's commits,
 and the empty-utterance wedge it resembles is fixed at HEAD: feeding EOF with
 no audio now returns `{"type":"done"}` and exits 0).
 
-**The right fix does not require knowing the trigger:** reap stale helpers at
-daemon startup. That makes the whole class of causes irrelevant. It belongs on
-the `aquad` side, since `crates/asr/**` is off-limits to both agents.
+**The right fix does not require knowing the trigger, and is now in.** The
+daemon reaps stale helpers at startup, immediately after taking the
+single-instance lock. That ordering is what makes it safe: once the lock is
+held, no other daemon is running, so any helper still alive necessarily
+belongs to a daemon that is gone. Only a daemon ever spawns one, and each is
+used for a single utterance, so a leftover is always wrong.
+
+This is deliberately a cure for the class rather than the cause. Waiting to
+identify the trigger before making the symptom impossible would leave beta
+users holding a live microphone session owned by a process that no longer
+exists.
+
+When it finds something, it says so rather than tidying up silently:
+
+```
+aquad: cleaned up 1 stale speech helper(s) from a previous run
+```
+
+Verified against a real orphaned helper, in a scratch directory under a
+private name so the test could not touch a legitimately running one:
+
+```
+orphaned helper pids: 35539
+signalled 1 helper(s)
+helper pids after: (none)
+PASS: SIGTERM reaps a stale helper
+
+=== the other agent's real helper must be UNTOUCHED ===
+32936 .../Aqua.app/Contents/MacOS/aqua-speech-helper     <- still alive
+```
+
+The pid-selection logic is split from the killing so it can be unit-tested
+without signalling anything: one test proves our own pid is filtered out (a
+daemon that killed itself at startup would be a spectacular regression, and
+`pgrep -f` matches whole command lines so it is reachable), and one proves
+empty, blank, and non-numeric `pgrep` output are all tolerated on the startup
+path.
 
 ### M5. The README's latency claim was optimistic
 
@@ -719,7 +754,7 @@ Ordered by user pain per unit of effort.
 | 4 | ~~Correct the latency claim~~ | done | A false number in a beta README burns trust |
 | 5 | ~~Single-instance guard (`flock` on a lock file)~~ | done | Two hot microphones was the worst remaining bug |
 | 6 | ~~`--version` on the daemon~~ | done | Blocked every bug report |
-| 7 | Reap stale helpers at daemon startup | ~20 lines | Kills M4's whole class without finding the trigger |
+| 7 | ~~Reap stale helpers at daemon startup~~ | done | Killed M4's whole class without finding the trigger |
 | 8 | Poll accessibility trust once a second | ~25 lines | Turns a silent failure into a visible state |
 | 9 | Call `inert_settings()` at startup (detection landed in 22f579b, no caller yet) | ~4 lines | Twelve silent no-ops become one honest line |
 | 10 | Make `bundle-aquad-macos.sh` fail, not warn, without `swiftc` | 2 lines | Stops shipping a recognizer-less bundle |
@@ -729,9 +764,9 @@ Ordered by user pain per unit of effort.
 | 14 | Wire `migrate()` into the config load path | ~15 lines | Must exist before schema version 2, not after |
 | 15 | Buy the Developer ID certificate | 99 USD, days | Unblocks binary distribution and fixes cdhash pain |
 
-Items 1 through 6 landed during this assessment. Items 7 through 9 are the
-remaining quality work; none is a ship-stopper for a source beta, and none
-requires a design decision.
+Items 1 through 7 landed during this assessment. Items 8 and 9 are the
+remaining quality work; neither is a ship-stopper for a source beta, and
+neither requires a design decision.
 
 ---
 

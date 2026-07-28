@@ -181,6 +181,85 @@ fn try_lock_exclusive(_file: &std::fs::File) -> bool {
     true
 }
 
+/// Kill speech helpers left over from a previous daemon, and report how many.
+///
+/// A helper was found on a development machine still alive, reparented to
+/// launchd, nearly eight hours after its parent died, wedged in a semaphore
+/// wait and holding an OS speech session:
+///
+/// ```text
+///   PID  PPID STARTED                       ELAPSED COMMAND
+/// 45677     1 Tue Jul 28 01:07:42 2026     07:46:20 .../aqua-speech-helper
+/// ```
+///
+/// **The trigger is unknown.** The obvious hypothesis, that `SIGKILL` skips
+/// the recognizer's `Drop` and leaks the child, was tested across sixteen
+/// signal-and-timing combinations by two people and never reproduced: the
+/// helper exits on its own when its stdin writer disappears, and there is
+/// both a `Drop` that kills and reaps and an explicit kill on the
+/// finalize-timeout path.
+///
+/// So this reaper is deliberately a *cure for the class rather than the
+/// cause*. Whatever wedges a helper, a leftover one is always wrong once no
+/// daemon is running, because only a daemon ever spawns one and each is used
+/// for a single utterance. Waiting to find the trigger before making the
+/// symptom impossible would leave beta users holding a live microphone
+/// session belonging to a process that no longer exists.
+///
+/// Safe by construction: this runs only after the single-instance lock is
+/// held, so no other daemon is alive to own the helpers being killed.
+#[cfg(unix)]
+pub fn reap_stale_helpers() -> usize {
+    // Match on the binary's name rather than a full path: the helper lives
+    // beside the executable in a bundle, in the source tree during
+    // development, and wherever AQUA_SPEECH_HELPER points, and a stale one
+    // from any of those is equally wrong.
+    let Ok(out) = std::process::Command::new("pgrep")
+        .args(["-f", "aqua-speech-helper"])
+        .output()
+    else {
+        // No pgrep, or it failed. Not being able to tidy up is not a reason
+        // to refuse to start.
+        return 0;
+    };
+
+    let targets = helper_pids_to_reap(&String::from_utf8_lossy(&out.stdout), std::process::id());
+    let mut killed = 0;
+    for pid in targets {
+        // SAFETY: `kill` with a pid we just read from pgrep. A pid that has
+        // exited in the interim returns ESRCH, which is ignored.
+        if unsafe { libc::kill(pid as libc::pid_t, libc::SIGTERM) } == 0 {
+            killed += 1;
+        }
+    }
+    killed
+}
+
+/// Which pids from `pgrep` output should be signalled.
+///
+/// Split out from the killing so it can be tested: a test that called the
+/// real reaper would kill helpers belonging to a developer's own running
+/// daemon, which is both rude and makes the test's result depend on what
+/// else is happening on the machine.
+#[cfg(unix)]
+fn helper_pids_to_reap(pgrep_stdout: &str, own_pid: u32) -> Vec<u32> {
+    pgrep_stdout
+        .lines()
+        .filter_map(|l| l.trim().parse::<u32>().ok())
+        // `pgrep -f` matches on the whole command line, so a shell or editor
+        // with the string in its arguments can appear in the list. Signalling
+        // ourselves would be spectacular.
+        .filter(|&pid| pid != own_pid)
+        .collect()
+}
+
+/// No `pgrep`/`kill` contract to rely on off unix; the Windows helper story
+/// does not exist yet either, since the recognizer there is unimplemented.
+#[cfg(not(unix))]
+pub fn reap_stale_helpers() -> usize {
+    0
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -293,5 +372,35 @@ mod tests {
             "the stale pid must be replaced, not appended to"
         );
         drop(lock);
+    }
+
+    /// The reaper must never signal the process calling it. `pgrep -f`
+    /// matches on the whole command line, so a daemon launched from a shell
+    /// whose arguments mention the helper can match itself, and a daemon
+    /// that killed itself on startup would be a spectacular regression.
+    ///
+    /// Tested on the parsing rather than by calling the real reaper, which
+    /// would signal helpers belonging to a developer's own running daemon.
+    #[test]
+    #[cfg(unix)]
+    fn the_reaper_never_targets_its_own_process() {
+        let me = std::process::id();
+        let pgrep_output = format!("111\n{me}\n222\n");
+        let targets = helper_pids_to_reap(&pgrep_output, me);
+        assert_eq!(targets, vec![111, 222], "our own pid must be filtered out");
+        assert!(!targets.contains(&me));
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn reaping_tolerates_empty_and_ragged_pgrep_output() {
+        // pgrep prints nothing and exits 1 when there is no match, which is
+        // the common case on a healthy machine and must not be an error.
+        assert!(helper_pids_to_reap("", 1).is_empty());
+        // Blank lines and stray whitespace must not panic a parse on the
+        // startup path.
+        assert_eq!(helper_pids_to_reap("\n  42  \n\n", 1), vec![42]);
+        // Anything non-numeric is ignored rather than guessed at.
+        assert!(helper_pids_to_reap("not-a-pid\n", 1).is_empty());
     }
 }
