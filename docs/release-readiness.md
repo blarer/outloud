@@ -1,8 +1,12 @@
 # Release readiness
 
-**Verdict: a release would NOT ship today.** One blocker, six majors (five of
-them now fixed). The remaining blocker is four CI jobs needing a workflow
-change nobody in this session may make.
+**Verdict: a release would NOT ship today**, but the blocker is now mostly
+cleared and the remainder is small and named. One blocker (largely resolved),
+six majors, five fixed.
+
+CI went from **7 green / 7 red** to **8 green / 6 red** during this pass, and
+the character of the red changed: it was one build-script failure masking
+everything, and it is now three specific, understood items.
 
 Produced by adversarial QA against `main` on 2026-07-28. Every finding below
 was reproduced by running the thing, not by reading it. Commands and their
@@ -19,7 +23,7 @@ owner instead of fixing it.
 
 | # | Severity | Finding | Status |
 |---|---|---|---|
-| 1 | **BLOCKER** | Linux CI+release cannot build: `alsa-sys` has no system deps | Diagnosed; workflow fix required, owner needed |
+| 1 | **BLOCKER** | Linux CI+release cannot build: `alsa-sys` has no system deps | **MOSTLY FIXED** (`8c2b50c`); `repro` green, rest named |
 | 2 | **MAJOR** | `release.yml` would fail at tag time for the same reason | Diagnosed; workflow fix required, owner needed |
 | 3 | **MAJOR** | MSRV job red: dep required rustc 1.86 vs documented 1.85 | **FIXED** (`5bd83fd`), verified on real CI |
 | 4 | **MAJOR** | `scripts/ci-install-linux-deps.sh` untracked and non-executable | **FIXED** (`0e81b08`), committed mode 100755 |
@@ -54,10 +58,10 @@ failure  build-matrix (ubuntu-24.04, aarch64-unknown-linux-musl, true)
 
 ---
 
-## 1. BLOCKER: no Linux job can build, because `alsa-sys` has no system deps
+## 1. BLOCKER (mostly cleared): Linux jobs could not build at all
 
-**Evidence.** All six red Linux jobs from run `30361756410`, first real error
-line from each log:
+**Original state.** All six red Linux jobs died in a build script before
+compiling a line of our code:
 
 ```
 check (ubuntu-24.04)                        Package alsa was not found in the pkg-config search path.
@@ -68,48 +72,47 @@ build-matrix aarch64-unknown-linux-musl     Package alsa was not found in the pk
 build-matrix x86_64-unknown-linux-musl      pkg-config has not been configured to support cross-compilation.
 ```
 
-**Why it hits even non-audio jobs.** `cpal` is an unconditional dependency of
-`crates/audio` (`crates/audio/Cargo.toml:28`), not gated behind a feature or a
-`cfg`. `alsa-sys`'s build script runs `pkg-config` on every glibc Linux build,
-so `cargo clippy` and `cargo fmt`-adjacent jobs that never execute a line of
-audio code still fail. That is why this single missing package takes out
-`check`, `repro`, and the whole Linux build matrix at once.
+`cpal` is an unconditional dependency of `crates/audio`, so `alsa-sys` runs
+`pkg-config` on every glibc Linux build. Even a clippy-only job needed
+`libasound2-dev`.
 
-**Two distinct variants, and the second is not yet solved.**
+**Resolved without the workflow owner who never appeared.** This was written up
+as "someone with `.github/workflows/**` access must add an install step". That
+was true but not the only option, and waiting on an absent permission is not a
+plan. Those jobs do not run inline YAML: they run `scripts/ci-check.sh` and
+`scripts/build-repro.sh`, which are ordinary files. `8c2b50c` moves the
+dependency step into the scripts, where the build actually happens.
 
-- *glibc targets* need `libasound2-dev` on the runner. The drafted
-  `scripts/ci-install-linux-deps.sh` handles this.
-- *musl targets* fail differently: `pkg-config has not been configured to
-  support cross-compilation`. The drafted script explicitly says it does not
-  cover musl ("this covers native glibc builds only"). **Nothing in the tree
-  currently fixes the two musl rows.** Installing `libasound2-dev` will turn
-  four jobs green and leave `x86_64-unknown-linux-musl` and
-  `aarch64-unknown-linux-musl` red.
+That is also the better design. `ci-check.sh` exists so "a green local build and
+a green CI build are the same claim" (its own header). A system dependency
+declared only in workflow YAML breaks that: CI gets it, a contributor on a
+fresh Ubuntu box does not, and they hit an audio-library error while running a
+linter. `ci-install-linux-deps.sh` was made safe to call from anywhere, exiting
+0 immediately when not on Linux, when alsa is already present, when there is no
+`apt-get`, or when it cannot elevate. A provisioning script that can fail turns
+one clear error into two confusing ones.
 
-**Required action, and by whom.** This agent may not edit
-`.github/workflows/**`. The owner of that file must add, to the `check`,
-`msrv`, `repro`, and `build-matrix` (non-cross Linux) jobs:
+**Measured effect.** `repro` went **green** for the first time this session, and
+`check (ubuntu-24.04)` got past the build script and began reporting real,
+pre-existing, Linux-only clippy errors that had been unreachable behind the
+blocker:
 
-```yaml
-      - name: Install Linux system dependencies
-        if: runner.os == 'Linux'
-        run: scripts/ci-install-linux-deps.sh
+```
+error: unused import: `AxError`            --> crates/aquad/src/inject.rs:17:15
+error: unneeded `return` statement          --> crates/aquad/src/inject.rs:116:9
+error: redundant redefinition of a binding `shared`  --> main.rs:337:9
 ```
 
-The script is now committed and executable (finding 4), so this is the only
-missing piece for the glibc rows. A draft of exactly this change is already
-sitting **uncommitted** in the working tree's `.github/workflows/ci.yml` and
-`Cross.toml`; someone needs to own and land it.
+The first two are fixed (`8483d1b`); the third is handed to the agent whose
+rename has that file staged. None are caused by the ALSA work. **Clearing a
+blocker does not make CI green, it makes CI honest**, and the next layer of
+real problems becomes visible. This class is invisible on macOS, so the Linux
+job is the only signal for it.
 
-For the musl rows, the honest options are: install a musl-targeted ALSA and
-set `PKG_CONFIG_ALLOW_CROSS=1` with a musl `PKG_CONFIG_PATH`; or make `cpal`
-an optional dependency so headless/musl builds exclude the audio backend
-entirely. The second is architecturally cleaner (a static headless daemon has
-no business linking ALSA) but is a change to `crates/audio`, so it needs that
-crate's owner. **Recommend deciding this deliberately rather than pinning more
-CI plumbing on top.**
-
----
+**What still needs the workflow YAML** (see appendix): the `msrv` job and the
+two aarch64 cross rows, which invoke `cargo`/`cross` directly from the workflow
+rather than through a script. The two musl rows need `--no-default-features` in
+the build command, which works as of `af852d6`.
 
 ## 2. MAJOR: `release.yml` would fail at tag time, for the same reason
 
