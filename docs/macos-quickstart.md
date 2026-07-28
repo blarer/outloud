@@ -185,11 +185,17 @@ Then in any app:
 Edit-by-voice: select some text, hold right-option, say
 `change hello to goodbye`, release. The selection is rewritten in place.
 
-To watch the logs instead of running detached:
+To watch the logs instead of running detached, **quit the bundled app first**
+from its menu bar item. This is the same daemon with its panel logged rather
+than drawn, not a second mode: two copies would both bind the hotkey and both
+open the microphone, so one utterance can be delivered twice.
 
 ```bash
 ./target/release/aquad --no-overlay    # needs Accessibility on your terminal
 ```
+
+Run this way it has no menu bar item (it is not launched as a bundle), so
+stop it with Ctrl-C.
 
 Stop it with the menu bar item's **Quit Aqua**, or if it is wedged:
 
