@@ -452,6 +452,38 @@ mid-edit and did not compile (see below).
 The reproducible double-build passing locally is worth stating plainly: the
 `repro` CI job's failure is **entirely** finding 1, not a determinism problem.
 
+### Re-verified after the late dependency change
+
+`296c82a` (single-instance guard) added `libc` to `aquad` and changed
+`Cargo.lock` after the checks above were run. Everything lock-sensitive was
+re-run rather than assumed still valid:
+
+| Re-check | Result |
+|---|---|
+| `cargo deny check` | advisories ok, bans ok, licenses ok, sources ok |
+| `cargo +1.85.0 build --workspace --locked` | exit 0, so the MSRV pin survives |
+| `REPRO_VERIFY=1 scripts/build-repro.sh` | reproducible, hash `d3703b7e50ce...` |
+| `scripts/build-headless.sh` | no AppKit, pass |
+| `aquad --once --wav` | still transcribes and injects, RC=0 |
+
+The repro hash is **byte-identical to the earlier run**, which is the useful
+detail: the new dependency did not perturb the shipped binary at all.
+
+The single-instance guard was also checked for over-reach, because a lock that
+is too broad would break every script in this repo that shells out to `--once`
+(bench, latency, CI smoke), and could break them *nondeterministically*:
+
+```
+1. two concurrent --once runs      -> rc=0, rc=0, neither refused
+2. --once while a daemon holds it  -> rc=0, ran fine alongside
+3. second DAEMON while one runs    -> rc=1, refused:
+   "aquad is already running (pid 32884). Quit it from the menu bar, or
+    `kill 32884`, then start this one. Running two copies makes both record
+    you and both type what you said."
+```
+
+Correctly scoped: it refuses the case it exists for and leaves tooling alone.
+
 ## Cross-agent note
 
 While this review ran, the shared working tree did not compile, due to another
