@@ -130,15 +130,32 @@ pub fn deliver(mode: &Mode, transcript: &str) -> Outcome {
             // never said: strip it so "to slow." does not write "slow.".
             let command = text.trim_end_matches(['.', '!', '?', ',']);
             let intent = edit_intent::parse(command);
-            if let EditIntent::Freeform { instruction } = &intent {
-                // No local LLM yet: say so instead of guessing (the README's
-                // "a model rewriting text nobody asked it to touch" risk).
-                return Outcome::FreeformUnsupported {
-                    instruction: instruction.clone(),
-                };
+
+            // A selection means an edit is POSSIBLE, not that one was
+            // intended. Text is selected far more often than people
+            // realise: a terminal keeps the last drag selected, editors
+            // highlight the current word, and browsers hold a selection
+            // long after the click that made it. Treating every one of
+            // those as an edit command turns ordinary dictation into a
+            // refusal, which is what it did here - dictating a plain
+            // sentence with a stale terminal selection reported
+            // "freeform edit needs the local LLM" and wrote nothing.
+            //
+            // So a phrase that does not parse as one of the deterministic
+            // commands is not a failed edit; it is dictation that happened
+            // to occur while something was selected. Insert it, which is
+            // also the non-destructive reading: replacing the selection
+            // would destroy text the user never asked us to touch.
+            if let EditIntent::Freeform { .. } = &intent {
+                return insert_with_fallback(text);
             }
+
             match edit_intent::apply(selected, &intent) {
                 Some(rewritten) => replace_selection(&rewritten),
+                // The command parsed as an edit but matched nothing in the
+                // selection. That IS worth reporting: the user said
+                // "change X to Y" and meant it, so silently inserting the
+                // sentence would be the wrong guess.
                 None => Outcome::EditNoMatch {
                     command: text.to_string(),
                 },
@@ -550,17 +567,33 @@ mod tests {
         ));
     }
 
+    /// A phrase that is not a recognised command is dictation, even when
+    /// something is selected.
+    ///
+    /// This test previously asserted the opposite, and in doing so encoded a
+    /// real bug: it required `deliver` to refuse any unrecognised phrase
+    /// spoken while text happened to be selected. Since selections linger far
+    /// longer than users notice, that refusal fired during ordinary dictation
+    /// and wrote nothing, which presents as "the app stopped transcribing".
+    ///
+    /// Inserting is also the non-destructive reading. Replacing the selection
+    /// with a sentence the user did not aim at it would destroy text they
+    /// never asked us to touch, which is the one failure this product cannot
+    /// afford.
     #[test]
-    fn freeform_edit_reports_instead_of_guessing() {
+    fn unrecognised_phrase_with_a_selection_is_dictated() {
         let mode = Mode::Edit {
             selected: "some prose".into(),
         };
-        match deliver(&mode, "make this sound more professional") {
-            Outcome::FreeformUnsupported { instruction } => {
-                assert!(instruction.contains("professional"));
-            }
-            other => panic!("expected FreeformUnsupported, got {other:?}"),
-        }
+        // Not FreeformUnsupported: that outcome is reserved for a future
+        // where an explicit rewrite request can actually be served.
+        assert!(
+            !matches!(
+                deliver(&mode, "make this sound more professional"),
+                Outcome::FreeformUnsupported { .. }
+            ),
+            "an unrecognised phrase must be dictated, not refused"
+        );
     }
 
     #[test]
@@ -752,5 +785,40 @@ mod tier_tests {
                 "never write the spoken instruction into the user's field"
             );
         }
+    }
+
+    /// Regression: dictating an ordinary sentence while something happens to
+    /// be selected must INSERT it, not refuse it.
+    ///
+    /// This shipped broken. Text is selected far more often than people
+    /// realise - a terminal keeps the last drag highlighted, editors select
+    /// the current word, browsers hold a selection long after the click that
+    /// made it - so `mode_at_keydown` reported Edit for a user who was simply
+    /// dictating. The phrase did not parse as a command, so it came back as
+    /// "freeform edit needs the local LLM" and nothing was written at all.
+    /// From the outside that reads as "the app stopped transcribing".
+    ///
+    /// The distinction the code now draws: a selection means an edit is
+    /// POSSIBLE, not that one was INTENDED. Only a phrase that parses as a
+    /// real command is treated as one.
+    #[test]
+    fn freeform_phrase_with_a_selection_is_dictation_not_a_failed_edit() {
+        let intent = edit_intent::parse("this is just a normal sentence");
+        assert!(
+            matches!(intent, EditIntent::Freeform { .. }),
+            "the fixture must be a phrase that does not parse as a command"
+        );
+
+        // A command, by contrast, must still parse as one so the edit path
+        // is not accidentally disabled by the fix above.
+        let command = edit_intent::parse("change quick to slow");
+        assert!(
+            !matches!(command, EditIntent::Freeform { .. }),
+            "edit commands must still reach the edit path"
+        );
+        assert_eq!(
+            edit_intent::apply("the quick brown fox", &command).as_deref(),
+            Some("the slow brown fox"),
+        );
     }
 }
