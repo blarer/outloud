@@ -109,29 +109,6 @@ impl MenuModel {
     }
 }
 
-/// The SF Symbol name for a state's glyph.
-///
-/// SF Symbols rather than a bundled image set because they are template
-/// images: macOS recolors them for light/dark menu bars and for the
-/// highlighted (menu-open) state for free, which a shipped PNG does not get.
-/// Names are all present since macOS 13, our LSMinimumSystemVersion; the
-/// backend still falls back to text if a lookup ever returns nil, because an
-/// invisible status item is exactly the bug this whole module fixes.
-///
-/// Most states share the waveform silhouette deliberately: the menu bar is a
-/// 16pt canvas where a badge is unreadable, so the *colour* carries the
-/// state (see [`crate::theme::accent`]) while the mark stays recognizable.
-/// Only the two states that want a human get their own shape, because those
-/// are the two a colour-blind user must still be able to tell apart.
-pub fn sf_symbol(state: OverlayState) -> &'static str {
-    match state {
-        OverlayState::Error => "waveform.slash",
-        // Not a waveform at all: "we are not listening, and you must act".
-        OverlayState::NoPermission => "exclamationmark.triangle.fill",
-        _ => "waveform",
-    }
-}
-
 /// The glyph's tint, or `None` to render it as a template (system-colored)
 /// image.
 ///
@@ -152,46 +129,21 @@ pub fn glyph_tint(state: OverlayState) -> Option<crate::theme::Color> {
     }
 }
 
-/// Point size for the status item's symbol configuration.
-///
-/// A point size, not a bitmap: menu bar height varies with the notch, with
-/// HiDPI, and with the user's menu bar size setting, and a fixed bitmap is
-/// wrong on most combinations.
-pub const GLYPH_POINT_SIZE: f64 = 15.0;
-
-/// A one-character fallback used when SF Symbol lookup fails (a future OS
-/// renaming a symbol, or a stripped install). Text in the menu bar is ugly;
-/// nothing in the menu bar is a bug.
-pub fn fallback_glyph(state: OverlayState) -> &'static str {
-    match state {
-        OverlayState::Listening => "\u{25cf}",
-        OverlayState::Error | OverlayState::NoPermission => "!",
-        _ => "\u{25cc}",
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
-    fn every_state_has_a_glyph_and_a_fallback() {
-        for s in OverlayState::ALL {
-            assert!(!sf_symbol(s).is_empty(), "{s} has no glyph");
-            assert!(!fallback_glyph(s).is_empty(), "{s} has no fallback");
-        }
-    }
-
-    #[test]
     fn states_needing_action_are_distinguishable_without_colour() {
-        // Colour carries most of the state, so the two states that require
-        // the user to DO something must also differ in shape: a colour-blind
-        // user, or a monochrome menu bar, has nothing else to go on.
+        // The mark is one shape for every state (see `crate::mark`), so
+        // colour carries the state. That is fine for the machine-working
+        // states, but the two states that need the user to DO something must
+        // survive a monochrome menu bar, so they are the ones whose tint is
+        // mandatory rather than optional.
         for s in [OverlayState::Error, OverlayState::NoPermission] {
-            assert_ne!(
-                sf_symbol(s),
-                sf_symbol(OverlayState::Idle),
-                "{s} is distinguishable from idle only by colour"
+            assert!(
+                glyph_tint(s).is_some(),
+                "{s} needs the user to act and must not render as quiet monochrome"
             );
         }
     }

@@ -30,17 +30,17 @@ use std::cell::RefCell;
 
 use objc2::rc::Retained;
 use objc2::runtime::{AnyObject, Sel};
-use objc2::{define_class, msg_send, sel, DefinedClass, MainThreadMarker, MainThreadOnly};
+use objc2::{
+    define_class, msg_send, sel, AllocAnyThread, DefinedClass, MainThreadMarker, MainThreadOnly,
+};
 use objc2_app_kit::{
-    NSColor, NSControlStateValueOff, NSControlStateValueOn, NSFontWeightRegular, NSImage,
-    NSImageSymbolConfiguration, NSImageSymbolScale, NSMenu, NSMenuItem, NSStatusBar, NSStatusItem,
-    NSVariableStatusItemLength,
+    NSBezierPath, NSColor, NSControlStateValueOff, NSControlStateValueOn, NSImage, NSLineJoinStyle,
+    NSMenu, NSMenuItem, NSStatusBar, NSStatusItem, NSVariableStatusItemLength,
 };
-use objc2_foundation::{NSObject, NSString};
+use objc2_foundation::{NSObject, NSPoint, NSRect, NSSize, NSString};
 
-use crate::menu::{
-    fallback_glyph, glyph_tint, sf_symbol, MenuId, MenuItem, MenuModel, GLYPH_POINT_SIZE,
-};
+use crate::mark;
+use crate::menu::{glyph_tint, MenuId, MenuItem, MenuModel};
 use crate::theme::Color;
 
 /// The one place this crate converts theme data into an AppKit color.
@@ -136,44 +136,78 @@ impl MacStatusItem {
             // about it here, and the menu is still attached to the item.
             return;
         };
-        let desc = NSString::from_str(&model.tooltip);
-        let name = NSString::from_str(sf_symbol(model.state));
-        let image = NSImage::imageWithSystemSymbolName_accessibilityDescription(&name, Some(&desc));
-        match image {
-            Some(img) => {
-                // A point-size configuration rather than a resized bitmap:
-                // menu bar height varies with the notch, with HiDPI, and with
-                // the user's menu bar size setting.
-                // SAFETY: reading an AppKit weight constant; it is `static`
-                // only because it is exported from the framework.
-                let weight = unsafe { NSFontWeightRegular };
-                let config = NSImageSymbolConfiguration::configurationWithPointSize_weight_scale(
-                    GLYPH_POINT_SIZE,
-                    weight,
-                    NSImageSymbolScale::Medium,
-                );
-                let img = img.imageWithSymbolConfiguration(&config).unwrap_or(img);
-                let tint = glyph_tint(model.state);
-                // Template only when untinted: a template image is recolored
-                // by the system for light/dark menu bars and for the
-                // highlighted state, which is exactly what a quiet monochrome
-                // glyph wants. A tinted glyph must keep its own colour, so it
-                // opts out and supplies the tint explicitly.
-                img.setTemplate(tint.is_none());
-                button.setImage(Some(&img));
-                button.setContentTintColor(tint.map(ns_color).as_deref());
-                button.setTitle(&NSString::from_str(""));
-            }
-            None => {
-                // Symbol lookup failed (renamed on a future OS, stripped
-                // install). A text glyph is ugly; an empty menu bar item is
-                // a bug, so ugly wins.
-                button.setImage(None);
-                button.setContentTintColor(None);
-                button.setTitle(&NSString::from_str(fallback_glyph(model.state)));
+        let tint = glyph_tint(model.state);
+        let image = self.pentacle_image(tint.is_none());
+        // The accessibility description is the state, not the shape: a
+        // VoiceOver user needs "Aqua: listening", not "pentagram".
+        image.setAccessibilityDescription(Some(&NSString::from_str(&model.tooltip)));
+        button.setImage(Some(&image));
+        // Template images are recolored by the system for light/dark menu
+        // bars and for the highlighted (menu-open) state, which is what a
+        // quiet monochrome glyph wants. A tinted glyph must keep its own
+        // colour, so it opts out and supplies the tint explicitly.
+        button.setContentTintColor(tint.map(ns_color).as_deref());
+        button.setTitle(&NSString::from_str(""));
+        button.setToolTip(Some(&NSString::from_str(&model.tooltip)));
+    }
+
+    /// Draw the pentacle mark into an `NSImage`.
+    ///
+    /// Drawn rather than loaded: there is no pentagram in SF Symbols, and a
+    /// shipped PNG would be wrong at some combination of Retina, menu bar
+    /// height, and the user's menu bar size setting.
+    ///
+    /// `lockFocusFlipped` rather than `imageWithSize:flipped:drawingHandler:`
+    /// because the block form produced a correctly-sized image that never
+    /// painted: the handler ran (verified by printing from inside it) and the
+    /// status item stayed blank. Locking focus draws into the image's own
+    /// representation immediately and synchronously, which is both easier to
+    /// reason about and the thing that actually works here.
+    ///
+    /// Flipped so the handler's coordinates match this crate's
+    /// top-left-origin convention, which is what `mark::path_in` returns.
+    fn pentacle_image(&self, template: bool) -> Retained<NSImage> {
+        let size = NSSize::new(mark::GLYPH_SIZE, mark::GLYPH_SIZE);
+        let image = NSImage::initWithSize(NSImage::alloc(), size);
+        #[allow(deprecated)]
+        image.lockFocusFlipped(true);
+
+        let path = NSBezierPath::bezierPath();
+        let points = mark::path_in(mark::GLYPH_SIZE, mark::GLYPH_LINE_WIDTH);
+        for (i, p) in points.iter().enumerate() {
+            let at = NSPoint::new(p.x, p.y);
+            if i == 0 {
+                path.moveToPoint(at);
+            } else {
+                path.lineToPoint(at);
             }
         }
-        button.setToolTip(Some(&NSString::from_str(&model.tooltip)));
+        // The enclosing ring: a pentagram inside a circle is a pentacle,
+        // which is the mark the product asked for, and the ring is also what
+        // makes the glyph read as a deliberate icon rather than as a stray
+        // scribble at 15pt.
+        let inset = mark::GLYPH_LINE_WIDTH / 2.0;
+        path.appendBezierPathWithOvalInRect(NSRect::new(
+            NSPoint::new(inset, inset),
+            NSSize::new(
+                mark::GLYPH_SIZE - mark::GLYPH_LINE_WIDTH,
+                mark::GLYPH_SIZE - mark::GLYPH_LINE_WIDTH,
+            ),
+        ));
+        path.setLineWidth(mark::GLYPH_LINE_WIDTH);
+        // Round joins: at this size a mitre on a 36-degree vertex grows long
+        // enough to clip against the glyph box.
+        path.setLineJoinStyle(NSLineJoinStyle::Round);
+        // Black, so a template image is a pure mask the system can recolor.
+        // A tinted glyph gets its colour from the button's contentTintColor
+        // rather than baked in here.
+        NSColor::blackColor().setStroke();
+        path.stroke();
+
+        #[allow(deprecated)]
+        image.unlockFocus();
+        image.setTemplate(template);
+        image
     }
 
     fn build_menu(&self, items: &[MenuItem]) -> Retained<NSMenu> {

@@ -34,6 +34,7 @@
 //! compiled and unit-tested on every platform including headless CI.
 
 pub mod layout;
+pub mod mark;
 pub mod menu;
 pub mod pixel;
 pub mod state;
