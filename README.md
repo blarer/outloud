@@ -158,6 +158,26 @@ helper beside it.
 ./dist/Aqua.app/Contents/MacOS/Aqua --once --say "hello from a local dictation daemon" --no-overlay
 ```
 
+### The menu bar item
+
+Aqua has no Dock icon and no window on purpose: it types into whatever field
+you are focused on, so it must never steal that focus. Its whole visible
+presence is one icon at the right of the menu bar, and the glyph is the
+answer to "is it on?" without a click. A waveform means ready; a filled
+microphone means the microphone is open right now.
+
+Clicking it gives you the current state, the hotkey it actually bound, the
+microphone it actually opened, **Pause Dictation**, a Settings submenu,
+**Run Diagnostics**, and **Quit Aqua**. When a permission is missing, a row
+appears that opens the exact System Settings pane rather than telling you to
+go find it.
+
+Settings are written straight into your `config.toml`, comments preserved,
+and edits you make in an editor show up in the menu within a second. The menu
+deliberately offers only the settings that are implemented today; the config
+file lists every key the schema knows, and if you set one that nothing reads
+yet, the menu says so instead of ignoring you.
+
 ### Editing text you already wrote
 
 This is the part other dictation tools do not do.
