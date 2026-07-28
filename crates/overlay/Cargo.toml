@@ -51,6 +51,11 @@ objc2-app-kit = { version = "0.3", optional = true, features = [
     "NSControl",
     "NSEvent",
     "NSFont",
+    # NSImageSymbolConfiguration (point size + weight + scale) ships inside
+    # the NSImage feature, but its weight argument is an NSFontDescriptor
+    # type, so that feature has to be named too. Without it the status item
+    # glyph would be a fixed bitmap and wrong on most menu bar heights.
+    "NSFontDescriptor",
     "NSGraphics",
     "NSImage",
     "NSMenu",

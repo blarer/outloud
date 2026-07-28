@@ -38,6 +38,7 @@ pub mod menubar;
 pub mod menuhost;
 pub mod pipeline;
 pub mod recognize;
+pub mod runtime;
 pub mod source;
 pub mod state;
 pub mod wav;

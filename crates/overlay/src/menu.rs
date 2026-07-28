@@ -114,36 +114,59 @@ impl MenuModel {
 /// SF Symbols rather than a bundled image set because they are template
 /// images: macOS recolors them for light/dark menu bars and for the
 /// highlighted (menu-open) state for free, which a shipped PNG does not get.
-/// Names are all present since macOS 13, our `LSMinimumSystemVersion`; the
+/// Names are all present since macOS 13, our LSMinimumSystemVersion; the
 /// backend still falls back to text if a lookup ever returns nil, because an
 /// invisible status item is exactly the bug this whole module fixes.
+///
+/// Most states share the waveform silhouette deliberately: the menu bar is a
+/// 16pt canvas where a badge is unreadable, so the *colour* carries the
+/// state (see [`crate::theme::accent`]) while the mark stays recognizable.
+/// Only the two states that want a human get their own shape, because those
+/// are the two a colour-blind user must still be able to tell apart.
 pub fn sf_symbol(state: OverlayState) -> &'static str {
     match state {
-        // Quiet monochrome per the state table: present, not shouting.
-        OverlayState::Idle => "waveform",
-        // The mic is hot. This is the glyph the user must be able to trust
-        // absolutely (principle 3: microphone state is never ambiguous).
-        OverlayState::Listening => "mic.fill",
-        OverlayState::Transcribing => "waveform.badge.magnifyingglass",
-        OverlayState::Injecting => "text.cursor",
-        OverlayState::Error => "exclamationmark.triangle.fill",
-        // "gray + slash" in the state table: the mic is unavailable to us.
-        OverlayState::NoPermission => "mic.slash.fill",
-        OverlayState::ModelLoading => "arrow.triangle.2.circlepath",
-        // "quiet + tiny dot": offline is a supported condition, not an
-        // incident, so it must not look like an error.
-        OverlayState::DegradedOffline => "waveform.badge.exclamationmark",
+        OverlayState::Error => "waveform.slash",
+        // Not a waveform at all: "we are not listening, and you must act".
+        OverlayState::NoPermission => "exclamationmark.triangle.fill",
+        _ => "waveform",
     }
 }
+
+/// The glyph's tint, or `None` to render it as a template (system-colored)
+/// image.
+///
+/// Idle is deliberately untinted: principle 1 is invisible-by-default, and a
+/// permanently coloured glyph is an advertisement. Colour appears only when
+/// the state is worth noticing, which is what makes the listening blue mean
+/// something when it does appear.
+pub fn glyph_tint(state: OverlayState) -> Option<crate::theme::Color> {
+    match state {
+        OverlayState::Listening
+        | OverlayState::Transcribing
+        | OverlayState::ModelLoading
+        | OverlayState::Error
+        | OverlayState::NoPermission => Some(crate::theme::accent(state)),
+        // Idle, Injecting, DegradedOffline: quiet monochrome. Offline in
+        // particular is a supported condition, not an incident.
+        _ => None,
+    }
+}
+
+/// Point size for the status item's symbol configuration.
+///
+/// A point size, not a bitmap: menu bar height varies with the notch, with
+/// HiDPI, and with the user's menu bar size setting, and a fixed bitmap is
+/// wrong on most combinations.
+pub const GLYPH_POINT_SIZE: f64 = 15.0;
 
 /// A one-character fallback used when SF Symbol lookup fails (a future OS
 /// renaming a symbol, or a stripped install). Text in the menu bar is ugly;
 /// nothing in the menu bar is a bug.
 pub fn fallback_glyph(state: OverlayState) -> &'static str {
     match state {
-        OverlayState::Listening => "●",
+        OverlayState::Listening => "\u{25cf}",
         OverlayState::Error | OverlayState::NoPermission => "!",
-        _ => "◌",
+        _ => "\u{25cc}",
     }
 }
 
@@ -152,16 +175,34 @@ mod tests {
     use super::*;
 
     #[test]
-    fn every_state_has_a_distinct_glyph_and_a_fallback() {
-        // A state that shares another's glyph would make the tray lie about
-        // what the daemon is doing, which is the whole point of the surface.
-        let mut seen = std::collections::BTreeSet::new();
+    fn every_state_has_a_glyph_and_a_fallback() {
         for s in OverlayState::ALL {
-            let sym = sf_symbol(s);
-            assert!(!sym.is_empty(), "{s} has no glyph");
-            assert!(seen.insert(sym), "{s} reuses the glyph {sym}");
-            assert!(!fallback_glyph(s).is_empty());
+            assert!(!sf_symbol(s).is_empty(), "{s} has no glyph");
+            assert!(!fallback_glyph(s).is_empty(), "{s} has no fallback");
         }
+    }
+
+    #[test]
+    fn states_needing_action_are_distinguishable_without_colour() {
+        // Colour carries most of the state, so the two states that require
+        // the user to DO something must also differ in shape: a colour-blind
+        // user, or a monochrome menu bar, has nothing else to go on.
+        for s in [OverlayState::Error, OverlayState::NoPermission] {
+            assert_ne!(
+                sf_symbol(s),
+                sf_symbol(OverlayState::Idle),
+                "{s} is distinguishable from idle only by colour"
+            );
+        }
+    }
+
+    #[test]
+    fn idle_is_never_tinted() {
+        // Principle 1, invisible-by-default: a coloured idle glyph is a
+        // permanent advertisement, and it devalues the listening colour.
+        assert!(glyph_tint(OverlayState::Idle).is_none());
+        assert!(glyph_tint(OverlayState::DegradedOffline).is_none());
+        assert!(glyph_tint(OverlayState::Listening).is_some());
     }
 
     #[test]

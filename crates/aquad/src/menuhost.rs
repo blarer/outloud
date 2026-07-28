@@ -12,6 +12,7 @@ use config::schema::Value;
 use overlay::menu::{MenuId, MenuModel};
 
 use crate::menubar::{self, Action, Settings, Status};
+use crate::runtime::{Runtime, RuntimeShared};
 
 /// Owns the configuration the menu reflects, and applies clicks to it.
 pub struct MenuHost {
@@ -22,27 +23,30 @@ pub struct MenuHost {
     /// Cached so a rebuild does not have to re-derive it every frame.
     actions: Vec<Action>,
     model: Option<MenuModel>,
+    /// Watches the config file so an edit made in a text editor shows up in
+    /// the menu without a restart. docs/ux/05 promises "every setting change
+    /// applies live"; a menu that only ever reflected its own writes would
+    /// let the file and the UI disagree, which is exactly what the "GUI is a
+    /// view over the files" design exists to prevent.
+    watcher: Option<config::Watcher>,
+    /// The live switches the running pipeline reads. Settings the process can
+    /// adopt without a restart are pushed here on every reload, which is what
+    /// makes the menu's Pause row take effect now rather than next launch.
+    runtime: RuntimeShared,
 }
 
 impl MenuHost {
     /// Load configuration and build the initial state. Never fails: a
     /// daemon must never refuse to start over config (docs/ux/05), so every
     /// error becomes a problem line in the menu instead.
-    pub fn new() -> MenuHost {
+    pub fn new(runtime: RuntimeShared) -> MenuHost {
         let mut host = MenuHost {
-            settings: Settings {
-                hotkey: "right-option".into(),
-                model: "balanced".into(),
-                insertion_mode: "on-release".into(),
-                casing: "standard".into(),
-                overlay_position: "bottom-center".into(),
-                enabled: true,
-                launch_at_login: false,
-                config_path: None,
-            },
+            settings: Settings::default(),
             problems: Vec::new(),
             actions: Vec::new(),
             model: None,
+            watcher: None,
+            runtime,
         };
         host.reload();
         host
@@ -53,6 +57,31 @@ impl MenuHost {
     /// invocation beats a file, matching the config crate's layer order.
     pub fn configured_hotkey(&self) -> &str {
         &self.settings.hotkey
+    }
+
+    /// Whether the floating overlay should be drawn at all.
+    ///
+    /// `overlay.position = "hidden"` is the one position value the daemon
+    /// can honor today, and it is the one that matters: users who find the
+    /// indicator distracting currently have no way to turn it off, so the
+    /// setting existing in the schema and doing nothing is worse than not
+    /// offering it. The remaining positions need layout work in the overlay
+    /// crate and are deliberately not in the menu until then.
+    pub fn overlay_visible(&self) -> bool {
+        self.settings.overlay_position != "hidden"
+    }
+
+    /// Reload if the file changed underneath us. Called every frame by the
+    /// render loop; the watcher does the work on its own thread, so this is
+    /// a non-blocking channel drain.
+    pub fn poll_file_changes(&mut self) {
+        let changed = self
+            .watcher
+            .as_ref()
+            .is_some_and(|w| w.events().try_recv().is_ok());
+        if changed {
+            self.reload();
+        }
     }
 
     /// Re-read config from disk, collecting rather than propagating errors.
@@ -88,6 +117,17 @@ impl MenuHost {
                 self.settings.config_path = user.map(|(p, _)| p);
             }
         }
+        // Re-arm the watcher on the path actually read. Rebuilt rather than
+        // reused because the path can change (HOME/XDG moved, or the file
+        // was created by this very load).
+        self.watcher = self
+            .settings
+            .config_path
+            .clone()
+            .map(|path| config::Watcher::spawn(vec![path], config::Watcher::DEFAULT_QUIET));
+        // Push the settings the running process can adopt live. Everything
+        // else needs a restart, and the menu says so rather than pretending.
+        self.runtime.set_enabled(self.settings.enabled);
         // Force a rebuild on the next publish.
         self.model = None;
     }
@@ -98,13 +138,15 @@ impl MenuHost {
         &mut self,
         state: overlay::OverlayState,
         detail: Option<String>,
-        bound_hotkey: Option<String>,
+        runtime: &Runtime,
     ) -> &MenuModel {
         let status = Status {
             state,
             detail,
-            bound_hotkey,
+            bound_hotkey: runtime.bound_hotkey.clone(),
             config_problems: self.problems.clone(),
+            microphone: runtime.microphone.clone(),
+            microphone_blocked: runtime.microphone_blocked,
         };
         let (model, actions) = menubar::build(&status, &self.settings);
         self.actions = actions;
@@ -153,6 +195,13 @@ impl MenuHost {
 
     /// Write one key through the config crate so comments and formatting
     /// survive, then leave the file for the watcher and the next reload.
+    ///
+    /// A write that would not change the effective value is skipped
+    /// entirely. Without this, any spurious or duplicated click persists a
+    /// key the user never chose, which turns a harmless no-op into a line in
+    /// their config file (and, for `enabled`, silently disables dictation
+    /// across restarts). Not writing is also the only way an unset key stays
+    /// unset, which is what makes "delete the line to get the default" true.
     fn write_setting(&self, key: &str, value: &Value) -> anyhow::Result<()> {
         let path = self
             .settings
@@ -161,6 +210,12 @@ impl MenuHost {
             .ok_or_else(|| anyhow::anyhow!("no writable config file"))?;
         let text = std::fs::read_to_string(&path).unwrap_or_default();
         let updated = config::update_file(&text, key, value)?;
+        if updated == text {
+            // Already says exactly this. Rewriting would still be correct,
+            // but skipping keeps mtime stable so the watcher does not fire a
+            // reload for a change that did not happen.
+            return Ok(());
+        }
         // Write via a temp file in the same directory, then rename: a crash
         // mid-write must never leave the user with half a config.
         let tmp = path.with_extension("toml.tmp");
@@ -195,12 +250,6 @@ impl MenuHost {
             Ok(()) => open_with(&["-t"], &path),
             Err(e) => eprintln!("aquad: could not write the diagnostics report: {e}"),
         }
-    }
-}
-
-impl Default for MenuHost {
-    fn default() -> Self {
-        Self::new()
     }
 }
 
@@ -262,19 +311,12 @@ mod tests {
     #[test]
     fn out_of_range_clicks_are_ignored() {
         let mut host = MenuHost {
-            settings: Settings {
-                hotkey: "fn".into(),
-                model: "fast".into(),
-                insertion_mode: "stream".into(),
-                casing: "standard".into(),
-                overlay_position: "hidden".into(),
-                enabled: true,
-                launch_at_login: false,
-                config_path: None,
-            },
+            settings: Settings::default(),
             problems: Vec::new(),
             actions: Vec::new(),
             model: None,
+            watcher: None,
+            runtime: RuntimeShared::new(),
         };
         assert!(!host.handle(MenuId(999)));
     }

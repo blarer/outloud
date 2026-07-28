@@ -32,12 +32,23 @@ use objc2::rc::Retained;
 use objc2::runtime::{AnyObject, Sel};
 use objc2::{define_class, msg_send, sel, DefinedClass, MainThreadMarker, MainThreadOnly};
 use objc2_app_kit::{
-    NSControlStateValueOff, NSControlStateValueOn, NSImage, NSMenu, NSMenuItem, NSStatusBar,
-    NSStatusItem, NSVariableStatusItemLength,
+    NSColor, NSControlStateValueOff, NSControlStateValueOn, NSFontWeightRegular, NSImage,
+    NSImageSymbolConfiguration, NSImageSymbolScale, NSMenu, NSMenuItem, NSStatusBar, NSStatusItem,
+    NSVariableStatusItemLength,
 };
 use objc2_foundation::{NSObject, NSString};
 
-use crate::menu::{fallback_glyph, sf_symbol, MenuId, MenuItem, MenuModel};
+use crate::menu::{
+    fallback_glyph, glyph_tint, sf_symbol, MenuId, MenuItem, MenuModel, GLYPH_POINT_SIZE,
+};
+use crate::theme::Color;
+
+/// The one place this crate converts theme data into an AppKit color.
+/// `theme` stays pure so it compiles headless (see its module doc), which
+/// means the conversion has to live on the AppKit side of the gate.
+fn ns_color(c: Color) -> Retained<NSColor> {
+    NSColor::colorWithSRGBRed_green_blue_alpha(c.r, c.g, c.b, c.a)
+}
 
 define_class!(
     /// The Objective-C target every menu item points at. It owns the click
@@ -130,10 +141,27 @@ impl MacStatusItem {
         let image = NSImage::imageWithSystemSymbolName_accessibilityDescription(&name, Some(&desc));
         match image {
             Some(img) => {
-                // Template: the system inverts it for dark menu bars and for
-                // the highlighted state (property 2 in the module doc).
-                img.setTemplate(true);
+                // A point-size configuration rather than a resized bitmap:
+                // menu bar height varies with the notch, with HiDPI, and with
+                // the user's menu bar size setting.
+                // SAFETY: reading an AppKit weight constant; it is `static`
+                // only because it is exported from the framework.
+                let weight = unsafe { NSFontWeightRegular };
+                let config = NSImageSymbolConfiguration::configurationWithPointSize_weight_scale(
+                    GLYPH_POINT_SIZE,
+                    weight,
+                    NSImageSymbolScale::Medium,
+                );
+                let img = img.imageWithSymbolConfiguration(&config).unwrap_or(img);
+                let tint = glyph_tint(model.state);
+                // Template only when untinted: a template image is recolored
+                // by the system for light/dark menu bars and for the
+                // highlighted state, which is exactly what a quiet monochrome
+                // glyph wants. A tinted glyph must keep its own colour, so it
+                // opts out and supplies the tint explicitly.
+                img.setTemplate(tint.is_none());
                 button.setImage(Some(&img));
+                button.setContentTintColor(tint.map(ns_color).as_deref());
                 button.setTitle(&NSString::from_str(""));
             }
             None => {
@@ -141,6 +169,7 @@ impl MacStatusItem {
                 // install). A text glyph is ugly; an empty menu bar item is
                 // a bug, so ugly wins.
                 button.setImage(None);
+                button.setContentTintColor(None);
                 button.setTitle(&NSString::from_str(fallback_glyph(model.state)));
             }
         }

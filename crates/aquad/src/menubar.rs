@@ -67,6 +67,13 @@ pub struct Status {
     /// Config problems worth telling the user about (bad key, unparsable
     /// file). docs/ux/05: a broken config "says so in the tray".
     pub config_problems: Vec<String>,
+    /// The input device capture is actually using. "Granted, but listening
+    /// to the wrong microphone" presents as "it hears nothing", and no other
+    /// surface tells the user which device won.
+    pub microphone: Option<String>,
+    /// Capture could not open a device at all, which is a different fix from
+    /// a missing Accessibility grant and needs its own row.
+    pub microphone_blocked: bool,
 }
 
 /// The settings the menu can change, resolved from the config layers.
@@ -74,6 +81,11 @@ pub struct Status {
 /// A snapshot struct rather than a borrow of `config::Config` so
 /// [`build`] is a pure function of plain data and can be unit-tested
 /// without a filesystem.
+///
+/// `Default` is the schema's defaults, so callers (and tests) can name only
+/// the fields they care about. Adding a setting then cannot break every
+/// construction site, which is how the last three fields got added without
+/// noticing the test fixtures had gone stale.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Settings {
     pub hotkey: String,
@@ -84,6 +96,47 @@ pub struct Settings {
     pub enabled: bool,
     pub launch_at_login: bool,
     pub config_path: Option<PathBuf>,
+}
+
+impl Default for Status {
+    /// Idle, bound, nothing wrong. The shape of a healthy daemon, so a
+    /// caller (or a test) only has to name what is unusual about its case.
+    fn default() -> Status {
+        Status {
+            state: OverlayState::Idle,
+            detail: None,
+            bound_hotkey: Some("right-option".into()),
+            config_problems: Vec::new(),
+            microphone: None,
+            microphone_blocked: false,
+        }
+    }
+}
+
+impl Default for Settings {
+    /// The schema's own defaults, so this cannot drift from a fresh install.
+    fn default() -> Settings {
+        let s = |key: &str| match config::schema::spec_for(key).map(|k| k.default.clone()) {
+            Some(config::schema::Value::Str(v)) => v,
+            _ => String::new(),
+        };
+        let b = |key: &str| {
+            matches!(
+                config::schema::spec_for(key).map(|k| k.default.clone()),
+                Some(config::schema::Value::Bool(true))
+            )
+        };
+        Settings {
+            hotkey: s("hotkey"),
+            model: s("model"),
+            insertion_mode: s("insertion.mode"),
+            casing: s("formatting.casing"),
+            overlay_position: s("overlay.position"),
+            enabled: b("enabled"),
+            launch_at_login: b("launch-at-login"),
+            config_path: None,
+        }
+    }
 }
 
 impl Settings {
@@ -131,7 +184,9 @@ pub fn build(status: &Status, settings: &Settings) -> (MenuModel, Vec<Action>) {
     }
 
     // The permission story goes directly under the status line, because when
-    // it is broken nothing else in this menu matters.
+    // it is broken nothing else in this menu matters. Two grants, two rows,
+    // each shown only when that one is actually failing: a permanent list of
+    // things to go fix is nagging, and principle 1 is invisible-by-default.
     if status.state == OverlayState::NoPermission || status.bound_hotkey.is_none() {
         items.push(MenuItem::Separator);
         items.push(MenuItem::Label(
@@ -143,12 +198,36 @@ pub fn build(status: &Status, settings: &Settings) -> (MenuModel, Vec<Action>) {
                 pane: PANE_ACCESSIBILITY,
             },
         );
-        items.push(MenuItem::action("Open Accessibility settings…", id));
+        items.push(MenuItem::action("Open Accessibility Settings…", id));
+    }
+    if status.microphone_blocked {
+        items.push(MenuItem::Label("Aqua cannot open the microphone.".into()));
+        let id = add(
+            &mut actions,
+            Action::OpenPrivacyPane {
+                pane: PANE_MICROPHONE,
+            },
+        );
+        items.push(MenuItem::action("Open Microphone Settings…", id));
     }
 
     items.push(MenuItem::Separator);
     match &status.bound_hotkey {
-        Some(chord) => items.push(MenuItem::Label(format!("Hold {chord} to dictate"))),
+        Some(chord) => {
+            items.push(MenuItem::Label(format!("Hold {chord} to dictate")));
+            // The event tap binds once, at launch. Changing the hotkey
+            // rewrites the file but not the live binding, so a settings row
+            // that appears to have done nothing until some future restart
+            // is worse than one that admits it. Comparing the live bind to
+            // the configured value catches this however it happened: the
+            // menu, a hand edit, or an AQUA_HOTKEY override.
+            if !same_chord(chord, &settings.hotkey) {
+                items.push(MenuItem::Label(format!(
+                    "   \"{}\" takes effect after Quit and reopen",
+                    settings.hotkey
+                )));
+            }
+        }
         // A dead hotkey is a dead product, so say so here rather than only
         // in stderr nobody is reading.
         None => items.push(MenuItem::Label(format!(
@@ -161,6 +240,33 @@ pub fn build(status: &Status, settings: &Settings) -> (MenuModel, Vec<Action>) {
         items.push(MenuItem::Label(format!("Config: {problem}")));
     }
 
+    // The input device, not just the hotkey: "permission granted but the
+    // wrong microphone is selected" is a real state a user cannot otherwise
+    // diagnose, and it presents as "it hears nothing" (docs/ux/01).
+    if let Some(device) = &status.microphone {
+        items.push(MenuItem::Label(format!("Microphone: {device}")));
+    }
+
+    items.push(MenuItem::Separator);
+    // Pause is the highest-frequency action in the whole menu ("get out of
+    // the way for a minute"), so it is one click at the top level rather
+    // than two inside Settings. It is also the honest alternative to a
+    // second Quit item: there is exactly one Quit, and it stops everything.
+    // The negation: the row is a switch, so clicking it must change the
+    // value. Writing the CURRENT value here made the row a silent no-op,
+    // which is the exact failure this menu exists to avoid -- and it got
+    // past a unit test that asserted the same wrong thing, so the assertion
+    // below now derives from the checkmark rather than restating the code.
+    actions.push(Action::Set {
+        key: "enabled".into(),
+        value: Value::Bool(!settings.enabled),
+    });
+    items.push(MenuItem::choice(
+        "Pause Dictation",
+        MenuId(actions.len() as u64 - 1),
+        !settings.enabled,
+    ));
+
     items.push(MenuItem::Separator);
     items.push(MenuItem::Submenu {
         title: "Settings".into(),
@@ -169,22 +275,22 @@ pub fn build(status: &Status, settings: &Settings) -> (MenuModel, Vec<Action>) {
 
     let id = add(&mut actions, Action::OpenConfigFile);
     items.push(MenuItem::Item {
-        title: match &settings.config_path {
-            Some(p) => format!("Edit {}…", p.display()),
-            None => "Edit config file…".into(),
-        },
+        // Not the full path: a long home directory blows the menu out to
+        // half the screen. The path is stated in the docs and one row below
+        // in the file-problem lines when it matters.
+        title: "Edit Config File…".into(),
         id,
         checked: false,
         enabled: settings.config_path.is_some(),
     });
     let id = add(&mut actions, Action::OpenVocabularyFolder);
-    items.push(MenuItem::action("Open vocabulary folder…", id));
+    items.push(MenuItem::action("Open Vocabulary Folder…", id));
 
     items.push(MenuItem::Separator);
     let id = add(&mut actions, Action::RunDiagnostics);
-    items.push(MenuItem::action("Run diagnostics…", id));
+    items.push(MenuItem::action("Run Diagnostics…", id));
     let id = add(&mut actions, Action::ReloadConfig);
-    items.push(MenuItem::action("Reload configuration", id));
+    items.push(MenuItem::action("Reload Config", id));
 
     items.push(MenuItem::Separator);
     let id = add(&mut actions, Action::Quit);
@@ -241,79 +347,57 @@ fn settings_menu(actions: &mut Vec<Action>, s: &Settings) -> Vec<MenuItem> {
         ],
         &s.hotkey,
     );
-    choice_group(
-        actions,
-        &mut items,
-        "Model",
-        "model",
-        &[
-            ("fast", "Fast"),
-            ("balanced", "Balanced"),
-            ("accurate", "Accurate"),
-        ],
-        &s.model,
-    );
-    choice_group(
-        actions,
-        &mut items,
-        "Insertion",
-        "insertion.mode",
-        &[
-            ("on-release", "Insert when I release"),
-            ("stream", "Stream words as I speak"),
-        ],
-        &s.insertion_mode,
-    );
-    choice_group(
-        actions,
-        &mut items,
-        "Casing",
-        "formatting.casing",
-        &[
-            ("standard", "Standard"),
-            ("casual-lowercase", "casual lowercase"),
-        ],
-        &s.casing,
-    );
-    choice_group(
-        actions,
-        &mut items,
-        "Overlay",
-        "overlay.position",
-        &[
-            ("bottom-center", "Bottom center"),
-            ("bottom-left", "Bottom left"),
-            ("bottom-right", "Bottom right"),
-            ("top-center", "Top center"),
-            ("hidden", "Hidden"),
-        ],
-        &s.overlay_position,
-    );
-
-    // Toggles write the negation of the current value, so the row is a
-    // switch rather than two rows that disagree.
+    // Overlay: a switch, not the five-way position picker the schema
+    // allows, because "hidden" is the only position value the renderer can
+    // honor today. Offering the other four would be four rows that write a
+    // key and change nothing.
+    let hidden = s.overlay_position == "hidden";
     actions.push(Action::Set {
-        key: "enabled".into(),
-        value: Value::Bool(!s.enabled),
+        key: "overlay.position".into(),
+        value: Value::Str(if hidden { "bottom-center" } else { "hidden" }.into()),
     });
     items.push(MenuItem::choice(
-        "Dictation enabled",
+        "Show Floating Overlay",
         MenuId(actions.len() as u64 - 1),
-        s.enabled,
+        !hidden,
     ));
-    actions.push(Action::Set {
-        key: "launch-at-login".into(),
-        value: Value::Bool(!s.launch_at_login),
-    });
-    items.push(MenuItem::choice(
-        "Launch at login",
-        MenuId(actions.len() as u64 - 1),
-        s.launch_at_login,
-    ));
+    items.push(MenuItem::Separator);
 
+    // Deliberately absent: Model, Language, Insertion mode, Casing, Smart
+    // Quotes, Trailing Punctuation, History, Vocabulary Sets, and Launch at
+    // Login. Every one of those keys exists in the schema and NOTHING in the
+    // pipeline reads it yet. A settings row that writes a key no code
+    // consumes is a lie told by the UI, and it is a worse lie than an absent
+    // row because the user believes they changed something. Each comes back
+    // the day it is wired; until then config.toml and docs/configuration.md
+    // are the honest place for them, where their status is at least visible
+    // alongside the rest of the file.
+
+    // `enabled` is deliberately NOT here: it is the top-level Pause row, and
+    // one setting reachable from two rows is how a menu starts disagreeing
+    // with itself. Toggles write the negation of the current value, so the
+    // row behaves as a switch.
     items
 }
 
+/// Whether a bound chord and a configured chord are the same binding.
+///
+/// String comparison is not enough: the hotkey crate normalizes on display
+/// (`Chord: Display` reorders modifiers and canonicalizes spellings), so
+/// `"right-alt"` in the file and `"right-option"` from the tap are the same
+/// key. Parsing both is what makes "takes effect after restart" appear only
+/// when the binding genuinely differs, instead of on every launch.
+fn same_chord(bound: &str, configured: &str) -> bool {
+    match (
+        bound.parse::<hotkey::Chord>(),
+        configured.parse::<hotkey::Chord>(),
+    ) {
+        (Ok(a), Ok(b)) => a == b,
+        // An unparsable configured chord is already reported as a config
+        // error; do not also claim a restart would help.
+        _ => true,
+    }
+}
 /// The one-line answer to "what is it doing?", used for both the top menu
 /// row and the status item's tooltip.
 fn status_line(status: &Status) -> String {
@@ -335,23 +419,15 @@ mod tests {
 
     fn settings() -> Settings {
         Settings {
-            hotkey: "right-option".into(),
-            model: "balanced".into(),
-            insertion_mode: "on-release".into(),
-            casing: "standard".into(),
-            overlay_position: "bottom-center".into(),
-            enabled: true,
-            launch_at_login: false,
             config_path: Some(PathBuf::from("/home/u/.config/aqua/config.toml")),
+            ..Settings::default()
         }
     }
 
     fn status(state: OverlayState) -> Status {
         Status {
             state,
-            detail: None,
-            bound_hotkey: Some("right-option".into()),
-            config_problems: Vec::new(),
+            ..Status::default()
         }
     }
 
@@ -414,26 +490,125 @@ mod tests {
 
     #[test]
     fn current_settings_are_the_checked_ones() {
+        // The overlay switch reads as "shown", so a hidden overlay is an
+        // UNchecked row whose click restores it.
+        for hidden in [true, false] {
+            let s = Settings {
+                overlay_position: if hidden { "hidden" } else { "bottom-center" }.into(),
+                ..settings()
+            };
+            let (model, actions) = build(&status(OverlayState::Idle), &s);
+            let (id, checked) =
+                find_row(&model, "Show Floating Overlay").expect("the overlay switch must exist");
+            assert_eq!(checked, !hidden);
+            assert_eq!(
+                actions[id.0 as usize],
+                Action::Set {
+                    key: "overlay.position".into(),
+                    value: Value::Str(if hidden { "bottom-center" } else { "hidden" }.into())
+                }
+            );
+        }
+    }
+
+    #[test]
+    fn pause_is_one_click_and_writes_the_negation() {
+        // Pause is the most-used row in the menu; two clicks (into a
+        // submenu) is the wrong cost. It must also behave as a switch, so
+        // its action is always the opposite of the current value.
+        for enabled in [true, false] {
+            let s = Settings {
+                enabled,
+                ..settings()
+            };
+            let (model, actions) = build(&status(OverlayState::Idle), &s);
+            let (id, checked) = model
+                .items
+                .iter()
+                .find_map(|i| match i {
+                    MenuItem::Item {
+                        title, id, checked, ..
+                    } if title == "Pause Dictation" => Some((*id, *checked)),
+                    _ => None,
+                })
+                .expect("Pause must be a TOP-LEVEL row, not buried in Settings");
+            assert_eq!(checked, !enabled, "the checkmark means paused");
+            // Derived from the row's own displayed state, not restated from
+            // the implementation: a switch must write the value it is not
+            // currently showing, or clicking it does nothing.
+            let Action::Set { key, value } = &actions[id.0 as usize] else {
+                panic!("the pause row must write a setting");
+            };
+            assert_eq!(key, "enabled");
+            assert_eq!(
+                *value,
+                Value::Bool(checked),
+                "clicking a switch must flip it, not rewrite its current value"
+            );
+        }
+    }
+
+    #[test]
+    fn only_implemented_settings_are_offered() {
+        // A row that writes a key nothing in the pipeline reads is a lie:
+        // the user believes they changed something and nothing happens.
+        // This test is the gate that keeps the menu honest, and it must be
+        // relaxed only in the same commit that wires the key.
+        const WIRED: &[&str] = &["hotkey", "enabled", "overlay.position"];
+        let (_, actions) = build(&status(OverlayState::Idle), &settings());
+        for action in &actions {
+            if let Action::Set { key, .. } = action {
+                assert!(
+                    WIRED.contains(&key.as_str()),
+                    "the menu offers \"{key}\", which no code reads yet; \
+                     wire it or drop the row"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn a_wrong_microphone_is_visible_and_a_blocked_one_is_actionable() {
+        // "Permission granted, wrong input device" presents exactly like a
+        // broken microphone, and nothing else in the product names the
+        // device that actually won.
+        let mut st = status(OverlayState::Idle);
+        st.microphone = Some("Jessie's AirPods".into());
+        let (model, _) = build(&st, &settings());
+        assert!(format!("{:?}", model.items).contains("Jessie's AirPods"));
+
+        // A blocked microphone is a different fix from Accessibility, so it
+        // gets its own row and its own pane.
+        let mut st = status(OverlayState::Idle);
+        st.microphone_blocked = true;
+        let (_, actions) = build(&st, &settings());
+        assert!(actions.contains(&Action::OpenPrivacyPane {
+            pane: PANE_MICROPHONE
+        }));
+    }
+
+    #[test]
+    fn a_hotkey_change_admits_it_needs_a_restart() {
+        // The event tap binds once, at launch. Saving a new chord rewrites
+        // the file and changes nothing until restart; saying so is the
+        // difference between a setting and a lie.
         let mut s = settings();
-        s.model = "accurate".into();
-        s.enabled = false;
-        let (model, actions) = build(&status(OverlayState::Idle), &s);
-        let checked: Vec<&Action> = model
-            .ids()
-            .into_iter()
-            .filter(|id| checked_in(&model, *id))
-            .map(|id| &actions[id.0 as usize])
-            .collect();
-        assert!(checked.contains(&&Action::Set {
-            key: "model".into(),
-            value: Value::Str("accurate".into())
-        }));
-        // A toggle's action is the *negation*: clicking "enabled" while off
-        // must turn it on.
-        assert!(actions.contains(&Action::Set {
-            key: "enabled".into(),
-            value: Value::Bool(true)
-        }));
+        s.hotkey = "f13".into();
+        let st = status(OverlayState::Idle); // still bound to right-option
+        let (model, _) = build(&st, &s);
+        let text = format!("{:?}", model.items);
+        assert!(text.contains("takes effect after Quit"), "{text}");
+    }
+
+    #[test]
+    fn an_unchanged_hotkey_says_nothing_about_restarting() {
+        // Display normalization must not make every launch nag: the tap
+        // reports "right-option" for a file that says "right-alt".
+        let mut s = settings();
+        s.hotkey = "right-alt".into();
+        let (model, _) = build(&status(OverlayState::Idle), &s);
+        let text = format!("{:?}", model.items);
+        assert!(!text.contains("takes effect after Quit"), "{text}");
     }
 
     #[test]
@@ -459,14 +634,27 @@ mod tests {
         assert!(format!("{:?}", model.items).contains("hotkye"));
     }
 
-    fn checked_in(model: &MenuModel, want: MenuId) -> bool {
-        fn walk(items: &[MenuItem], want: MenuId) -> bool {
-            items.iter().any(|item| match item {
-                MenuItem::Item { id, checked, .. } => *id == want && *checked,
-                MenuItem::Submenu { items, .. } => walk(items, want),
-                _ => false,
-            })
+    /// The (id, checked) of a row by title, searching submenus too.
+    fn find_row(model: &MenuModel, title: &str) -> Option<(MenuId, bool)> {
+        fn walk(items: &[MenuItem], title: &str) -> Option<(MenuId, bool)> {
+            for item in items {
+                match item {
+                    MenuItem::Item {
+                        title: t,
+                        id,
+                        checked,
+                        ..
+                    } if t == title => return Some((*id, *checked)),
+                    MenuItem::Submenu { items, .. } => {
+                        if let Some(hit) = walk(items, title) {
+                            return Some(hit);
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            None
         }
-        walk(&model.items, want)
+        walk(&model.items, title)
     }
 }

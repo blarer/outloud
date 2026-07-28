@@ -67,6 +67,13 @@ fn parse_args() -> anyhow::Result<Args> {
             }
             "--no-overlay" => args.no_overlay = true,
             "--realtime" => args.realtime = true,
+            "--version" | "-V" => {
+                // Beta support: "what version are you on?" must be
+                // answerable by a user who has no idea where the bundle's
+                // Info.plist lives, or that it has one.
+                println!("aquad {}", env!("CARGO_PKG_VERSION"));
+                std::process::exit(0);
+            }
             "--help" | "-h" => {
                 println!(
                     "aquad: hold the hotkey, speak, release, text appears\n\
@@ -76,7 +83,8 @@ fn parse_args() -> anyhow::Result<Args> {
                      --asr apple|mock recognizer backend (default apple)\n\
                      --chord CHORD    hotkey (default right-option)\n\
                      --no-overlay     log state changes instead of drawing the panel\n\
-                     --realtime       pace file audio like live speech"
+                     --realtime       pace file audio like live speech\n\
+                     --version        print the version and exit"
                 );
                 std::process::exit(0);
             }
@@ -137,11 +145,16 @@ fn main() -> anyhow::Result<()> {
 
     let (engine, shared) = Engine::new();
 
+    // What the daemon actually bound and opened, plus the live switches the
+    // pipeline reads. Created first because the menu host writes the master
+    // switch into it as soon as it loads the config.
+    let runtime = aquad::runtime::RuntimeShared::new();
+
     // The menu bar owns the configuration the user can see and change, so
     // it is also where the daemon learns which hotkey to bind. Skipped for
     // --once, which is a one-shot measurement that should neither create a
     // config file nor read the user's settings.
-    let mut menu_host = (!args.once).then(aquad::menuhost::MenuHost::new);
+    let mut menu_host = (!args.once).then(|| aquad::menuhost::MenuHost::new(runtime.clone()));
     if let Some(host) = &menu_host {
         // An explicit --chord is a per-run override and beats the file,
         // matching the config crate's layer order.
@@ -149,11 +162,6 @@ fn main() -> anyhow::Result<()> {
             args.chord = host.configured_hotkey().to_string();
         }
     }
-
-    // What the hotkey layer actually bound, published for the menu bar.
-    // `None` after the pipeline starts means the bind failed, which is a
-    // headline fact in an app with no terminal to print it to.
-    let bound_hotkey: BoundHotkey = std::sync::Arc::new(std::sync::Mutex::new(None));
 
     // The pipeline future, boxed so both thread layouts can run it.
     let file_samples = match (&args.wav, &args.say) {
@@ -179,7 +187,7 @@ fn main() -> anyhow::Result<()> {
     };
 
     let chord = args.chord.clone();
-    let bound_for_pipeline = bound_hotkey.clone();
+    let runtime_for_pipeline = runtime.clone();
     let run_pipeline = move || -> anyhow::Result<()> {
         // Two worker threads: the select loop plus spawn_blocking headroom.
         let rt = tokio::runtime::Builder::new_multi_thread()
@@ -203,7 +211,7 @@ fn main() -> anyhow::Result<()> {
                     source::spawn_wav(samples, args.realtime, ftx.clone());
                 }
                 None => {
-                    _capture = Some(source::spawn_mic(ftx.clone()));
+                    _capture = Some(source::spawn_mic(ftx.clone(), runtime_for_pipeline.clone()));
                     if args.once {
                         // No key to hold: capture starts immediately.
                         let _ = ftx.send(source::FrontendEvent::KeyDown);
@@ -211,12 +219,12 @@ fn main() -> anyhow::Result<()> {
                         let parsed: hotkey::Chord = chord
                             .parse()
                             .map_err(|e| anyhow::anyhow!("bad --chord: {e}"))?;
-                        match source::spawn_hotkey(parsed, ftx.clone()) {
-                            Ok(display) => {
-                                eprintln!("aquad: hold {display} to dictate");
-                                *bound_for_pipeline.lock().expect("bound-hotkey lock") =
-                                    Some(display);
-                            }
+                        match source::spawn_hotkey(
+                            parsed,
+                            ftx.clone(),
+                            runtime_for_pipeline.clone(),
+                        ) {
+                            Ok(display) => eprintln!("aquad: hold {display} to dictate"),
                             Err(e) => {
                                 // A dead hotkey is a dead product: fail loudly
                                 // with the permission fix named, do not run a
@@ -270,20 +278,16 @@ fn main() -> anyhow::Result<()> {
             })?;
         run_pipeline()
     } else {
-        overlay_main(shared, menu_host.take(), bound_hotkey, run_pipeline)
+        overlay_main(shared, menu_host.take(), runtime, run_pipeline)
     }
 }
-
-/// The chord the hotkey layer actually bound, shared between the pipeline
-/// thread that binds it and the main thread that displays it.
-type BoundHotkey = std::sync::Arc<std::sync::Mutex<Option<String>>>;
 
 /// macOS + display: overlay on the main thread, pipeline behind it.
 #[cfg(all(target_os = "macos", feature = "display"))]
 fn overlay_main(
     shared: aquad::state::StatusShared,
     menu_host: Option<aquad::menuhost::MenuHost>,
-    bound_hotkey: BoundHotkey,
+    runtime: aquad::runtime::RuntimeShared,
     run_pipeline: impl FnOnce() -> anyhow::Result<()> + Send + 'static,
 ) -> anyhow::Result<()> {
     use objc2::MainThreadMarker;
@@ -335,9 +339,18 @@ fn overlay_main(
     let run_loop = NSRunLoop::currentRunLoop();
     loop {
         let frame = shared.snapshot();
+        // `overlay.position = "hidden"`: the user asked not to see the
+        // floating indicator. The menu bar item still reports every state,
+        // so hiding the overlay costs visibility of nothing.
+        let show_overlay = menu_host.as_ref().is_none_or(|h| h.overlay_visible());
+        let render = if show_overlay {
+            ov.render(&frame)
+        } else {
+            ov.hide()
+        };
         // Render errors are logged, never fatal: the overlay is an
         // indicator, and dictation must outlive its cosmetic failures.
-        if let Err(e) = ov.render(&frame) {
+        if let Err(e) = render {
             eprintln!("aquad: overlay render failed: {e}");
         }
 
@@ -345,8 +358,10 @@ fn overlay_main(
         // user clicked since the last tick. Both are cheap; the status item
         // ignores an unchanged model, and clicks are rare.
         if let (Some(item), Some(host)) = (status_item.as_mut(), menu_host.as_mut()) {
-            let bound = bound_hotkey.lock().expect("bound-hotkey lock").clone();
-            item.apply(host.model(frame.state, frame.detail.clone(), bound));
+            // A hand edit to config.toml must reach the menu too, not just
+            // the menu's own writes.
+            host.poll_file_changes();
+            item.apply(host.model(frame.state, frame.detail.clone(), &runtime.snapshot()));
             for id in item.drain_clicks() {
                 if host.handle(id) {
                     // Quit: drop the status item first so the icon leaves
@@ -387,7 +402,7 @@ fn overlay_main(
     // No tray backend on Windows yet: the notification-area equivalent
     // (Shell_NotifyIcon) is separate work and belongs to the Windows port.
     _menu_host: Option<aquad::menuhost::MenuHost>,
-    _bound_hotkey: BoundHotkey,
+    _runtime: aquad::runtime::RuntimeShared,
     run_pipeline: impl FnOnce() -> anyhow::Result<()> + Send + 'static,
 ) -> anyhow::Result<()> {
     let mut ov = overlay::platform_overlay()?;
@@ -427,7 +442,7 @@ fn overlay_main(
 fn overlay_main(
     _shared: aquad::state::StatusShared,
     _menu_host: Option<aquad::menuhost::MenuHost>,
-    _bound_hotkey: BoundHotkey,
+    _runtime: aquad::runtime::RuntimeShared,
     run_pipeline: impl FnOnce() -> anyhow::Result<()> + Send + 'static,
 ) -> anyhow::Result<()> {
     // Unreachable in practice (main() branches on the same cfg), kept so the

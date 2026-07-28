@@ -19,6 +19,8 @@
 
 use tokio::sync::mpsc::UnboundedSender;
 
+use crate::runtime::RuntimeShared;
+
 /// Ring-drain cadence, matching the 30ms VAD frame size so each tick hands
 /// the segmenter roughly one frame's worth of audio.
 const DRAIN_TICK_MS: u64 = 30;
@@ -46,12 +48,18 @@ pub enum FrontendEvent {
 pub fn spawn_hotkey(
     chord: hotkey::Chord,
     tx: UnboundedSender<FrontendEvent>,
+    runtime: RuntimeShared,
 ) -> Result<String, hotkey::HotkeyError> {
     let manager = hotkey::HotkeyManager::bind(chord.clone(), hotkey::Timing::default())?;
     for c in manager.conflicts() {
         // Advisory per the UX doc: warn loudly, never silently accept.
         eprintln!("aquad: hotkey conflict: {c:?}");
     }
+    // Publish what was ACTUALLY bound, not what was asked for. The menu bar
+    // shows this, and a menu that echoes the config file would hide exactly
+    // the case a user needs to see: the file says one thing, the live tap
+    // another.
+    runtime.set_bound_hotkey(Some(chord.to_string()));
     std::thread::Builder::new()
         .name("aquad-hotkey-bridge".into())
         .spawn(move || {
@@ -71,6 +79,16 @@ pub fn spawn_hotkey(
                         None
                     }
                 };
+                // Paused (`enabled = false`, the menu's Pause row): drop the
+                // edge here, before anything downstream starts listening.
+                // Dropping it at the source is what makes "paused" mean the
+                // microphone is never opened, rather than "recorded and then
+                // thrown away" — a distinction the whole trust story rests
+                // on. KeyUp still passes so a pause mid-utterance commits
+                // what was already captured instead of stranding it.
+                if !runtime.enabled() && matches!(mapped, Some(FrontendEvent::KeyDown)) {
+                    continue;
+                }
                 if let Some(m) = mapped {
                     if tx.send(m).is_err() {
                         return; // supervisor gone
@@ -84,7 +102,10 @@ pub fn spawn_hotkey(
 
 /// Start microphone capture and the ring-drain task. The returned handle
 /// keeps the capture supervisor thread alive; drop it to stop.
-pub fn spawn_mic(tx: UnboundedSender<FrontendEvent>) -> audio::capture::CaptureHandle {
+pub fn spawn_mic(
+    tx: UnboundedSender<FrontendEvent>,
+    runtime: RuntimeShared,
+) -> audio::capture::CaptureHandle {
     // 10 seconds of ring: deep enough that only a genuinely wedged drain
     // loses audio, and losses are counted, not silent.
     let (producer, consumer) = audio::ring::ring(audio::SAMPLE_RATE as usize * 10);
@@ -93,11 +114,25 @@ pub fn spawn_mic(tx: UnboundedSender<FrontendEvent>) -> audio::capture::CaptureH
     let handle = audio::capture::start_capture(producer, move |ev| {
         use audio::capture::CaptureEvent::*;
         let mapped = match ev {
-            Started { device } => FrontendEvent::CaptureUp(device),
+            Started { device } => {
+                // Which microphone actually won. "Granted, but recording
+                // from the wrong device" is otherwise undiagnosable: it
+                // presents identically to a broken microphone.
+                runtime.set_microphone(device.clone());
+                FrontendEvent::CaptureUp(device)
+            }
             DeviceChanged { from } => FrontendEvent::CaptureIssue(format!(
                 "input device changed (was {from}); rebuilding stream"
             )),
-            Error { message } => FrontendEvent::CaptureIssue(message),
+            Error { message } => {
+                // Only a total absence of input is a "go fix the microphone
+                // permission" situation; a transient stream error self-heals
+                // via the rebuild loop and must not raise a menu row.
+                if message.contains("no input device") {
+                    runtime.set_microphone_blocked();
+                }
+                FrontendEvent::CaptureIssue(message)
+            }
         };
         let _ = tx_events.send(mapped);
     });
