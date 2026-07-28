@@ -82,9 +82,15 @@ say ""
 
 # 2. The app bundles. Only the ones this repo builds into dist/, by exact
 #    name: a glob here could match something a user put there themselves.
+#
+#    Both the old and new product names are listed. A user who installed
+#    before the rename has the old bundle on disk, and an uninstaller that
+#    only knows the current name would silently leave it behind, still
+#    holding its own permission grants.
 say "2. Removing built app bundles"
 REMOVED_BUNDLE=0
-for app in Aqua.app AquaSpike.app AquaDoctor.app; do
+for app in Aqua.app AquaSpike.app AquaDoctor.app \
+           Hexavoice.app HexavoiceSpike.app HexavoiceDoctor.app; do
     if [[ -d "$ROOT/dist/$app" ]]; then
         act rm -rf "$ROOT/dist/$app"
         REMOVED_BUNDLE=1
@@ -92,6 +98,10 @@ for app in Aqua.app AquaSpike.app AquaDoctor.app; do
 done
 if [[ -d "/Applications/Aqua.app" ]]; then
     act rm -rf "/Applications/Aqua.app"
+    REMOVED_BUNDLE=1
+fi
+if [[ -d "/Applications/Hexavoice.app" ]]; then
+    act rm -rf "/Applications/Hexavoice.app"
     REMOVED_BUNDLE=1
 fi
 [[ "$REMOVED_BUNDLE" == 0 ]] && say "    no app bundles found"
@@ -103,8 +113,20 @@ say ""
 #    inherits a grant pinned to a cdhash that no longer exists, which presents
 #    as "the toggle is on and nothing works". Resetting is the only way to
 #    leave a clean slate.
+#
+#    Both naming generations are reset. TCC is keyed by bundle identifier, so
+#    the rename means an old install's grants are unreachable from the new
+#    app and would otherwise be orphaned in System Settings permanently:
+#
+#        $ tccutil reset Accessibility dev.aquaoss.nonexistent
+#        tccutil: No such bundle identifier "dev.aquaoss.nonexistent"
+#
+#    Listing both costs nothing (an absent id is a no-op) and is the
+#    difference between a clean machine and a confusing one for anyone who
+#    tested before the rename.
 say "3. Resetting permission grants"
-for bundle_id in dev.aquaoss.aquad dev.aquaoss.spike dev.aquaoss.doctor; do
+for bundle_id in dev.aquaoss.aquad dev.aquaoss.spike dev.aquaoss.doctor \
+                 dev.hexavoice.hexad dev.hexavoice.spike dev.hexavoice.doctor; do
     # tccutil fails when there is no grant to reset, which is fine.
     act tccutil reset Accessibility "$bundle_id" || true
     act tccutil reset Microphone "$bundle_id" || true

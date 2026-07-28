@@ -26,10 +26,14 @@ Do **not** ship a downloadable `.app` yet. That path is blocked by
 notarization, which needs a paid Apple Developer account and cannot be worked
 around. The conditional in "conditional go" is that sentence and nothing else.
 
-Every blocker and every major except one were closed during this assessment,
-most of them in code rather than in prose. The single remaining open item (M6,
-settings that are accepted but not read) has its detection built and tested and
-is waiting only on a call site.
+Every blocker and every major except two were closed during this assessment,
+most of them in code rather than in prose. The two open items are M6 (settings
+accepted but not read, detection built and tested, waiting on a call site) and
+M8, which is a sequencing decision rather than a bug: the pending rename to
+Hexavoice changes the bundle identifier, and TCC keys grants by identifier, so
+every permission an existing tester has granted stops applying. That one costs
+nothing if the rename lands before any stranger installs, and is entirely
+self-inflicted if it lands after.
 
 The reason this is a GO rather than a NO-GO: the product's hard parts are
 genuinely done. Dictation, edit-by-voice, and terminal injection work, latency
@@ -788,6 +792,9 @@ Landed in the README's "Known limitations" section in this commit:
 8. Most config settings are accepted but not yet read by anything.
 9. Freeform edits are not wired to the language model.
 10. Linux does not work; Windows compiles but has never been run.
+11. If you tested before the Hexavoice rename, your permission grants do not
+    carry over: re-grant Accessibility and Microphone, and remove the stale
+    entry for the old name from System Settings by hand.
 
 ---
 
@@ -806,6 +813,7 @@ Ordered by user pain per unit of effort.
 | 7 | ~~Reap stale helpers at daemon startup~~ | done | Killed M4's whole class without finding the trigger |
 | 8 | ~~Poll accessibility trust once a second~~ | done | Turned a silent failure into a visible glyph |
 | 9 | Call `inert_settings()` at startup (detection landed in 22f579b, no caller yet) | ~4 lines | Twelve silent no-ops become one honest line |
+| 10 | Land the rename BEFORE any stranger installs, or write the re-grant step into the release notes | sequencing | Otherwise every existing tester's grants silently die (M8) |
 | 10 | Make `bundle-aquad-macos.sh` fail, not warn, without `swiftc` | 2 lines | Stops shipping a recognizer-less bundle |
 | 11 | Always rebuild the helper, or hash-check it | 2 lines | The staleness that hid blocker B1 |
 | 12 | `shell-bridge uninstall` | ~20 lines | Users should not need the sledgehammer script |
@@ -816,6 +824,67 @@ Ordered by user pain per unit of effort.
 Items 1 through 8 landed during this assessment. Item 9 is the only remaining
 item with a user-visible effect, and its hard half is already done: the
 detection exists and is tested, it just has no call site yet.
+
+---
+
+### M8. The Hexavoice rename voids every existing tester's permission grants
+
+**Frequency: 100% of anyone who tests before the rename and updates after.
+Status: partially handled; the rest is a release-sequencing decision.**
+
+The product is being renamed from Aqua to Hexavoice, which changes the bundle
+identifier from `dev.aquaoss.aquad` to `dev.hexavoice.hexad`. TCC keys its
+grants by bundle identifier, verifiable directly:
+
+```
+$ tccutil reset Accessibility dev.aquaoss.nonexistent
+tccutil: No such bundle identifier "dev.aquaoss.nonexistent": The operation
+couldn't be completed. (OSStatus error -10814.)
+```
+
+Per-identifier, with no aliasing. So a renamed build is, to macOS, an entirely
+different application:
+
+1. Every Accessibility and Microphone grant a tester has already given becomes
+   unreachable from the new binary. Dictation stops working after an update
+   that otherwise looks routine.
+2. The old grants do not disappear. They sit in System Settings under the old
+   name, pointing at an app that may no longer exist, and there is no API to
+   remove a row, only to reset the grant behind it.
+3. It presents in the worst way for this app class: the *old* entry's toggle
+   still reads "on", so a user glancing at Settings concludes permissions are
+   fine while nothing works.
+
+This is the highest-value thing to get right in the release sequencing, because
+it turns a cosmetic change into "the update broke it" for every existing tester
+at once.
+
+**Partially handled here.** `scripts/uninstall-macos.sh` now removes both
+naming generations, so an upgrader cannot strand the old app or orphan its
+grants:
+
+```
+==> rm -rf .../dist/Aqua.app
+==> rm -rf .../dist/Hexavoice.app
+==> tccutil reset Accessibility dev.aquaoss.aquad
+==> tccutil reset Accessibility dev.hexavoice.hexad
+```
+
+Listing both costs nothing, since resetting an absent identifier is a no-op.
+
+**Still needed, owned by whoever lands the rename:**
+
+- Release notes must say plainly that permissions have to be re-granted, and
+  give the `tccutil reset` line for the old identifier.
+- The stale System Settings row has to be removed by hand, since software
+  cannot do it.
+- Best of all: land the rename **before** the beta, not during it. This costs
+  nothing if no stranger has ever installed the old identifier, and is entirely
+  self-inflicted if one has.
+
+Related verification debt, in the release QA lane rather than this one: the
+identifier change invalidates the Designated Requirement check performed on the
+current build, so that pass needs re-running afterwards.
 
 ---
 
