@@ -107,6 +107,11 @@ names the exact next action:
 ./scripts/doctor.sh
 ```
 
+For a copy-pasteable path from clone to dictating, including which permission
+dialogs to approve and the responsible-process trap that makes a granted
+permission look denied, see
+[`docs/macos-quickstart.md`](docs/macos-quickstart.md).
+
 ## Using it
 
 ### Dictating
