@@ -15,7 +15,12 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-APP_DIR="$ROOT/dist/OutLoud.app"
+# This wrapper runs spike-cli, the accessibility development harness, which
+# scripts/bundle-macos.sh packages as AquaSpike.app. An earlier rename moved
+# this path to OutLoud.app while leaving the builder below alone, so the
+# bundle was never found, the build produced a different app, and `open`
+# failed on a bundle that did not exist. The two must name the same thing.
+APP_DIR="$ROOT/dist/AquaSpike.app"
 LOG="${TMPDIR:-/tmp}/outloud-spike-$$.log"
 
 if [[ ! -d "$APP_DIR" ]]; then
