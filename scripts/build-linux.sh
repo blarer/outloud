@@ -54,10 +54,10 @@ case "$TARGET" in
 esac
 
 mkdir -p "$OUT"
-cp "$BIN" "$OUT/aqua-spike"
+cp "$BIN" "$OUT/hexavoice-spike"
 
 echo "==> tarball"
-tar -C "$OUT" -czf "$OUT/aqua-spike-$VERSION-$TARGET.tar.gz" aqua-spike
+tar -C "$OUT" -czf "$OUT/hexavoice-spike-$VERSION-$TARGET.tar.gz" hexavoice-spike
 
 # ---------------------------------------------------------------- AppImage
 if command -v appimagetool >/dev/null 2>&1; then
@@ -65,27 +65,27 @@ if command -v appimagetool >/dev/null 2>&1; then
     APPDIR="$OUT/AppDir"
     rm -rf "$APPDIR"
     mkdir -p "$APPDIR/usr/bin"
-    cp "$OUT/aqua-spike" "$APPDIR/usr/bin/"
-    cat > "$APPDIR/aqua-spike.desktop" <<DESKTOP
+    cp "$OUT/hexavoice-spike" "$APPDIR/usr/bin/"
+    cat > "$APPDIR/hexavoice-spike.desktop" <<DESKTOP
 [Desktop Entry]
-Name=Aqua OSS Spike
-Exec=aqua-spike
-Icon=aqua-spike
+Name=Hexavoice Spike
+Exec=hexavoice-spike
+Icon=hexavoice-spike
 Type=Application
 Categories=Utility;Accessibility;
 Terminal=true
 DESKTOP
     # 1x1 placeholder icon; appimagetool requires one to exist.
-    printf '\x89PNG\r\n\x1a\n' > "$APPDIR/aqua-spike.png" || true
+    printf '\x89PNG\r\n\x1a\n' > "$APPDIR/hexavoice-spike.png" || true
     cat > "$APPDIR/AppRun" <<'APPRUN'
 #!/bin/sh
 # AppRun decides nothing about Wayland/X11: the binary itself does runtime
 # detection (WAYLAND_DISPLAY, then DISPLAY) so one AppImage serves both.
-exec "$(dirname "$0")/usr/bin/aqua-spike" "$@"
+exec "$(dirname "$0")/usr/bin/hexavoice-spike" "$@"
 APPRUN
     chmod +x "$APPDIR/AppRun"
     # ARCH is read by appimagetool for the AppImage metadata.
-    ARCH="$ARCH" appimagetool "$APPDIR" "$OUT/aqua-spike-$VERSION-$ARCH.AppImage"
+    ARCH="$ARCH" appimagetool "$APPDIR" "$OUT/hexavoice-spike-$VERSION-$ARCH.AppImage"
 else
     echo "==> appimagetool not found: skipping AppImage"
 fi
@@ -95,11 +95,11 @@ if command -v dpkg-deb >/dev/null 2>&1; then
     echo "==> .deb"
     DEB="$OUT/deb"
     rm -rf "$DEB"
-    mkdir -p "$DEB/usr/bin" "$DEB/DEBIAN" "$DEB/usr/share/doc/aqua-spike"
-    cp "$OUT/aqua-spike" "$DEB/usr/bin/"
-    cp LICENSE* "$DEB/usr/share/doc/aqua-spike/" 2>/dev/null || true
+    mkdir -p "$DEB/usr/bin" "$DEB/DEBIAN" "$DEB/usr/share/doc/hexavoice-spike"
+    cp "$OUT/hexavoice-spike" "$DEB/usr/bin/"
+    cp LICENSE* "$DEB/usr/share/doc/hexavoice-spike/" 2>/dev/null || true
     cat > "$DEB/DEBIAN/control" <<CONTROL
-Package: aqua-spike
+Package: hexavoice-spike
 Version: $VERSION
 Architecture: $DEB_ARCH
 Maintainer: aquaoss project
@@ -108,7 +108,7 @@ Priority: optional
 Description: Local edit-by-voice spike harness
  Milestone-zero harness for reading and rewriting focused text fields.
 CONTROL
-    dpkg-deb --build --root-owner-group "$DEB" "$OUT/aqua-spike_${VERSION}_${DEB_ARCH}.deb"
+    dpkg-deb --build --root-owner-group "$DEB" "$OUT/hexavoice-spike_${VERSION}_${DEB_ARCH}.deb"
 else
     echo "==> dpkg-deb not found: skipping .deb"
 fi
@@ -119,8 +119,8 @@ if command -v rpmbuild >/dev/null 2>&1; then
     RPMTOP="$OUT/rpmbuild"
     rm -rf "$RPMTOP"
     mkdir -p "$RPMTOP"/{SPECS,BUILD,RPMS,SOURCES}
-    cat > "$RPMTOP/SPECS/aqua-spike.spec" <<SPEC
-Name: aqua-spike
+    cat > "$RPMTOP/SPECS/hexavoice-spike.spec" <<SPEC
+Name: hexavoice-spike
 Version: $VERSION
 Release: 1
 Summary: Local edit-by-voice spike harness
@@ -129,20 +129,20 @@ License: MIT
 Milestone-zero harness for reading and rewriting focused text fields.
 %install
 mkdir -p %{buildroot}/usr/bin
-install -m 0755 $ROOT/$OUT/aqua-spike %{buildroot}/usr/bin/aqua-spike
+install -m 0755 $ROOT/$OUT/hexavoice-spike %{buildroot}/usr/bin/hexavoice-spike
 %files
-/usr/bin/aqua-spike
+/usr/bin/hexavoice-spike
 SPEC
     rpmbuild --define "_topdir $ROOT/$RPMTOP" \
              --define "_rpmdir $ROOT/$OUT" \
-             --target "$ARCH" -bb "$RPMTOP/SPECS/aqua-spike.spec"
+             --target "$ARCH" -bb "$RPMTOP/SPECS/hexavoice-spike.spec"
 else
     echo "==> rpmbuild not found: skipping .rpm"
 fi
 
 # ---------------------------------------------------------------- Flatpak
 echo "==> Flatpak manifest"
-cat > "$OUT/dev.aquaoss.spike.yml" <<'FLATPAK'
+cat > "$OUT/dev.hexavoice.spike.yml" <<'FLATPAK'
 # Flatpak manifest for the spike harness.
 #
 # An input-injection accessibility tool is the hardest possible Flatpak case:
@@ -162,13 +162,13 @@ cat > "$OUT/dev.aquaoss.spike.yml" <<'FLATPAK'
 #
 # Flathub will still scrutinize this app. That is expected and healthy; the
 # alternative (telling flatpak users to run the raw binary) is worse.
-app-id: dev.aquaoss.spike
+app-id: dev.hexavoice.spike
 runtime: org.freedesktop.Platform
 runtime-version: '24.08'
 sdk: org.freedesktop.Sdk
 sdk-extensions:
   - org.freedesktop.Sdk.Extension.rust-stable
-command: aqua-spike
+command: hexavoice-spike
 finish-args:
   - --socket=wayland
   - --socket=fallback-x11
@@ -179,16 +179,16 @@ finish-args:
 build-options:
   append-path: /usr/lib/sdk/rust-stable/bin
   env:
-    CARGO_HOME: /run/build/aqua-spike/cargo
+    CARGO_HOME: /run/build/hexavoice-spike/cargo
 modules:
-  - name: aqua-spike
+  - name: hexavoice-spike
     buildsystem: simple
     build-commands:
       # --offline: flatpak-builder builds have no network; cargo sources are
       # vendored by the generated cargo-sources.json (flatpak-cargo-generator
       # from Cargo.lock, run by the CI flatpak job).
       - cargo --offline build --release --locked --package spike-cli
-      - install -Dm755 target/release/spike-cli /app/bin/aqua-spike
+      - install -Dm755 target/release/spike-cli /app/bin/hexavoice-spike
     sources:
       - type: dir
         path: ../../..

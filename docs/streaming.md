@@ -19,7 +19,7 @@ t=0.9s  "wreck a nice beach"
 If "recognise speech" was already injected into the user's document, the
 revision at t=0.9s forces a visible correction of text the user may already
 be reading, or copying, or has typed after. Users tolerate ~450ms of waiting
-(Aqua's Instant mode). They do not tolerate words rewriting themselves.
+(Hexavoice's Instant mode). They do not tolerate words rewriting themselves.
 Perceived latency is set by when the *first* character appears, so the goal
 is: stream early, and never write anything that has to be taken back.
 

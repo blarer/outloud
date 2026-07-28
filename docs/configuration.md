@@ -3,7 +3,7 @@
 Everything the daemon does is controlled by one human-readable TOML file plus
 a folder of plain-text vocabulary files. No binary blobs, no plists, no
 database: your settings are yours, in files you can read, edit, version, and
-sync. The GUI settings window and `aqua set` are both convenience views over
+sync. The GUI settings window and `hexavoice set` are both convenience views over
 these same files, and external edits hot-reload without a restart.
 
 Implemented in `crates/config`. The layering, profile matching, vocabulary
@@ -12,8 +12,8 @@ unit coverage; only file watching and the actual reads/writes touch the OS.
 
 ## Files
 
-Everything lives in one directory: `$XDG_CONFIG_HOME/aqua/`, or
-`~/.config/aqua/` when that variable is unset (on macOS too, deliberately:
+Everything lives in one directory: `$XDG_CONFIG_HOME/hexavoice/`, or
+`~/.config/hexavoice/` when that variable is unset (on macOS too, deliberately:
 this is a file you are meant to read, edit, diff and sync like any dotfile).
 The daemon writes a fully-commented `config.toml` there on first launch, and
 the menu bar's **Edit config file…** opens exactly that file.
@@ -25,7 +25,7 @@ the menu bar's **Edit config file…** opens exactly that file.
 | `config.toml.v<N>` | Automatic backup made before a schema migration |
 | `vocabulary/*.txt` | Vocabulary sets, one entry per line (see below) |
 
-A machine-wide `/etc/aqua/config.toml` is also read, for managed
+A machine-wide `/etc/hexavoice/config.toml` is also read, for managed
 deployments; the daemon never writes to it.
 
 The macOS menu bar item's **Settings** submenu is a view over this same
@@ -44,23 +44,23 @@ a key nothing consumes is worse than no control at all.
 A value can be set in several places. Higher layers win:
 
 1. **Built-in defaults** (lowest)
-2. **System file** (e.g. `/etc/aqua/config.toml`, for managed machines)
+2. **System file** (e.g. `/etc/hexavoice/config.toml`, for managed machines)
 3. **User file** (your `config.toml`)
 4. **Matched per-app profile** (from either file; see Profiles)
-5. **`AQUA_*` environment variables** (highest)
+5. **`HEXA_*` environment variables** (highest)
 
-Every resolved value knows which layer set it, and `aqua status --json`
+Every resolved value knows which layer set it, and `hexavoice status --json`
 reports it, so "why is my hotkey not what I set" is always answerable:
 
 ```
-hotkey = "f13"        from environment variable AQUA_HOTKEY
-                      (shadowing: user file ~/.config/aqua/config.toml = "right-option";
+hotkey = "f13"        from environment variable HEXA_HOTKEY
+                      (shadowing: user file ~/.config/hexavoice/config.toml = "right-option";
                        built-in default = "right-option")
 ```
 
-Environment variables spell the key with `AQUA_` plus the key upper-cased and
-`.`/`-` replaced by `_`: `insertion.mode` → `AQUA_INSERTION_MODE`,
-`silence-timeout-ms` → `AQUA_SILENCE_TIMEOUT_MS`. Booleans accept
+Environment variables spell the key with `HEXA_` plus the key upper-cased and
+`.`/`-` replaced by `_`: `insertion.mode` → `HEXA_INSERTION_MODE`,
+`silence-timeout-ms` → `HEXA_SILENCE_TIMEOUT_MS`. Booleans accept
 `true/false/1/0/yes/no/on/off`; lists are comma-separated. A mistyped or
 invalid environment override is reported and skipped, never silently ignored.
 
@@ -211,7 +211,7 @@ from and enough context to fix it:
 
 - **Unknown key** → a did-you-mean suggestion when one is close
   (`unknown setting "hotkye"; did you mean "hotkey"?`), or a pointer to
-  `aqua set --list` when nothing is.
+  `hexavoice set --list` when nothing is.
 - **Wrong type** → both sides named (`"hotkey" expects a string, got integer`).
 - **Invalid value** → what would be valid (`"turbo" is not one of the allowed
   values: fast, balanced, accurate`; invalid hotkeys quote the chord grammar

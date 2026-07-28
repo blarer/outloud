@@ -33,7 +33,7 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
 
 APP_NAME="AquaSpike"
-BUNDLE_ID="dev.aquaoss.spike"
+BUNDLE_ID="dev.hexavoice.spike"
 VERSION="$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)"
 APP_DIR="dist/$APP_NAME.app"
 DMG_PATH="dist/$APP_NAME-$VERSION-universal.dmg"
@@ -68,7 +68,7 @@ cat > "$APP_DIR/Contents/Info.plist" <<PLIST
     <key>CFBundleName</key>
     <string>$APP_NAME</string>
     <key>CFBundleDisplayName</key>
-    <string>Aqua OSS Spike</string>
+    <string>Hexavoice Spike</string>
     <key>CFBundleIdentifier</key>
     <string>$BUNDLE_ID</string>
     <key>CFBundleExecutable</key>
@@ -84,7 +84,7 @@ cat > "$APP_DIR/Contents/Info.plist" <<PLIST
     <key>LSUIElement</key>
     <true/>
     <key>NSAppleEventsUsageDescription</key>
-    <string>Aqua OSS Spike identifies the frontmost application to choose formatting rules.</string>
+    <string>Hexavoice Spike identifies the frontmost application to choose formatting rules.</string>
 </dict>
 </plist>
 PLIST

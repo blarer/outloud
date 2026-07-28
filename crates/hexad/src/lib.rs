@@ -1,4 +1,4 @@
-//! `aquad`: the daemon that turns the individually-proven crates into a
+//! `hexad`: the daemon that turns the individually-proven crates into a
 //! product. Hold the hotkey, speak, release, text appears; hold with a
 //! selection, speak an edit command, the selection is rewritten.
 //!

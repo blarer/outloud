@@ -1,4 +1,10 @@
 #!/usr/bin/env bash
+
+# DELIBERATELY NOT RENAMED to Hexavoice. This bundles spike-cli, the internal
+# accessibility development harness, not the shipping product, so the name is
+# never seen by a user. docs/planning/ also references the AquaSpike paths and
+# is owned elsewhere, so renaming here would force edits into a directory this
+# change cannot touch. Leave it; it is not an oversight.
 # Package the spike CLI as a macOS .app bundle.
 #
 # A bare Mach-O binary is a poor citizen of the TCC permission system: an
@@ -12,7 +18,7 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 APP_NAME="AquaSpike"
-BUNDLE_ID="dev.aquaoss.spike"
+BUNDLE_ID="dev.hexavoice.spike"
 APP_DIR="$ROOT/dist/$APP_NAME.app"
 
 echo "==> Building release binary"
@@ -31,7 +37,7 @@ cat > "$APP_DIR/Contents/Info.plist" <<PLIST
     <key>CFBundleName</key>
     <string>$APP_NAME</string>
     <key>CFBundleDisplayName</key>
-    <string>Aqua OSS Spike</string>
+    <string>Hexavoice Spike</string>
     <key>CFBundleIdentifier</key>
     <string>$BUNDLE_ID</string>
     <key>CFBundleExecutable</key>
@@ -49,7 +55,7 @@ cat > "$APP_DIR/Contents/Info.plist" <<PLIST
     <true/>
     <!-- Required so the frontmost-application lookup can drive System Events. -->
     <key>NSAppleEventsUsageDescription</key>
-    <string>Aqua OSS Spike identifies the frontmost application to choose formatting rules.</string>
+    <string>Hexavoice Spike identifies the frontmost application to choose formatting rules.</string>
 </dict>
 </plist>
 PLIST

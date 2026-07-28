@@ -108,7 +108,7 @@ mod tests {
 
     #[test]
     fn reads_16k_mono_pcm16_unchanged() {
-        let dir = std::env::temp_dir().join("aquad-wav-test");
+        let dir = std::env::temp_dir().join("hexad-wav-test");
         std::fs::create_dir_all(&dir).unwrap();
         let p = dir.join("a.wav");
         std::fs::write(&p, wav_i16(16_000, 1, &[0, 16384, -16384])).unwrap();
@@ -120,7 +120,7 @@ mod tests {
 
     #[test]
     fn resamples_48k_stereo_to_16k_mono() {
-        let dir = std::env::temp_dir().join("aquad-wav-test");
+        let dir = std::env::temp_dir().join("hexad-wav-test");
         std::fs::create_dir_all(&dir).unwrap();
         let p = dir.join("b.wav");
         // 48000 stereo frames = 1s -> ~16000 mono samples.
@@ -136,7 +136,7 @@ mod tests {
 
     #[test]
     fn rejects_non_wav_with_named_error() {
-        let dir = std::env::temp_dir().join("aquad-wav-test");
+        let dir = std::env::temp_dir().join("hexad-wav-test");
         std::fs::create_dir_all(&dir).unwrap();
         let p = dir.join("c.wav");
         std::fs::write(&p, b"not a wav at all").unwrap();

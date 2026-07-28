@@ -7,7 +7,7 @@ was chosen, what its licence means for us, and how to add a backend.
 
 M0 measured the OS integration at ~47ms of an 800ms end-to-end budget. The
 remaining ~750ms belongs to the recognizer, and the research
-(`../aqua-voice-research/02-local-asr-tech.md` §2, §5) says the winning shape
+(`../hexavoice-voice-research/02-local-asr-tech.md` §2, §5) says the winning shape
 is two recognizers, not one:
 
 ```mermaid
@@ -60,7 +60,7 @@ can compare measured numbers against them.
 ### Apple SpeechTranscriber: measured results (this machine, macOS 26.5, 2026-07)
 
 The backend runs a small Swift helper (`crates/asr/helper/transcriber.swift`,
-build: `swiftc -O transcriber.swift -o aqua-speech-helper`) speaking raw
+build: `swiftc -O transcriber.swift -o hexavoice-speech-helper`) speaking raw
 f32le PCM on stdin and NDJSON events on stdout. Measured with
 `say`-synthesized audio:
 
@@ -82,7 +82,7 @@ download, model RAM charged to the system.
 ## Model and licence audit
 
 The app is MIT. Code licences below are all MIT-compatible. Model *weights*
-are separate artifacts fetched at runtime into `~/.aqua-oss/models`, never
+are separate artifacts fetched at runtime into `~/.hexavoice/models`, never
 vendored into this repository, so weight licences constrain distribution of
 downloaded bundles, not this codebase.
 

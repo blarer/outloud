@@ -11,6 +11,11 @@
 
 use std::path::PathBuf;
 
+/// The product's directory name under the config root. One constant, so the
+/// daemon, the docs, and the relocation logic cannot disagree about where
+/// settings live.
+pub const APP_DIR: &str = "hexavoice";
+
 /// The user's config file: `$XDG_CONFIG_HOME/aqua/config.toml`, else
 /// `~/.config/aqua/config.toml`.
 ///
@@ -25,7 +30,7 @@ pub fn user_config_path() -> Option<PathBuf> {
         Some(x) if !x.is_empty() => PathBuf::from(x),
         _ => PathBuf::from(std::env::var_os("HOME")?).join(".config"),
     };
-    Some(dir.join("aqua").join("config.toml"))
+    Some(dir.join(APP_DIR).join("config.toml"))
 }
 
 /// The machine-wide file for managed deployments. Read-only as far as the
@@ -53,6 +58,16 @@ pub fn ensure_user_config() -> std::io::Result<(PathBuf, String)> {
             "no HOME or XDG_CONFIG_HOME, so there is no user config directory",
         )
     })?;
+    // Before writing a fresh starter file, see whether this user has settings
+    // under the product's previous name. Copying them is what makes the
+    // rename invisible to an upgrader rather than a silent reset to defaults.
+    // Failures here are reported, never fatal: the worst case is that the
+    // user re-enters their settings, and refusing to start would be worse.
+    match crate::relocate::adopt_legacy_config(&path) {
+        Ok(crate::relocate::Outcome::NothingToDo) => {}
+        Ok(outcome) => eprintln!("hexad: {outcome}"),
+        Err(e) => eprintln!("hexad: could not check for older settings: {e}"),
+    }
     match std::fs::read_to_string(&path) {
         Ok(text) => Ok((path, text)),
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
@@ -72,7 +87,7 @@ pub fn ensure_user_config() -> std::io::Result<(PathBuf, String)> {
 /// rather than "hope the default matches what was written here".
 fn starter_file() -> String {
     let mut out = String::from(
-        "# Aqua configuration. Every setting below is shown at its built-in\n\
+        "# Hexavoice configuration. Every setting below is shown at its built-in\n\
          # default and commented out; uncomment a line to change it.\n\
          #\n\
          # Edits apply live (no restart) except the hotkey, which binds at\n\

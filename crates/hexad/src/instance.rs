@@ -7,8 +7,8 @@
 //!
 //! ```text
 //! === A ===                        === B ===
-//! aquad: state idle                aquad: state idle
-//! aquad: state listening    <---   aquad: state listening    <--- both hot
+//! hexad: state idle                hexad: state idle
+//! hexad: state listening    <---   hexad: state listening    <--- both hot
 //! ```
 //!
 //! It is easy to reach by accident rather than contrived. The quickstart
@@ -89,14 +89,14 @@ impl std::fmt::Display for Error {
             // tool and need to know why it refused.
             Error::AlreadyRunning { pid: Some(pid) } => write!(
                 f,
-                "aquad is already running (pid {pid}). Quit it from the menu bar, \
+                "hexad is already running (pid {pid}). Quit it from the menu bar, \
                  or `kill {pid}`, then start this one. Running two copies makes \
                  both record you and both type what you said."
             ),
             Error::AlreadyRunning { pid: None } => write!(
                 f,
-                "aquad is already running. Quit it from the menu bar, or \
-                 `pkill -f aquad`, then start this one."
+                "hexad is already running. Quit it from the menu bar, or \
+                 `pkill -f hexad`, then start this one."
             ),
             Error::Io(e) => write!(f, "could not take the single-instance lock: {e}"),
         }
@@ -115,7 +115,7 @@ fn lock_path() -> PathBuf {
         Some(d) if !d.is_empty() => PathBuf::from(d),
         _ => std::env::temp_dir(),
     };
-    dir.join("aquad.lock")
+    dir.join("hexad.lock")
 }
 
 /// Take the single-instance lock, or report who already holds it.
@@ -268,7 +268,7 @@ mod tests {
     /// path would make them contend with each other rather than with the
     /// thing under test.
     fn temp_lock(name: &str) -> PathBuf {
-        std::env::temp_dir().join(format!("aquad-test-{}-{}.lock", name, std::process::id()))
+        std::env::temp_dir().join(format!("hexad-test-{}-{}.lock", name, std::process::id()))
     }
 
     #[test]

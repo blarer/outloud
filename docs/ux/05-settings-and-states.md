@@ -7,7 +7,7 @@ what the user sees for each state), and the settings information architecture
 ## The state machine
 
 One machine, shared by every rendering surface: the GUI overlay + tray glyph,
-the OSC cursor color, the tmux widget, the TUI header, and `aqua status
+the OSC cursor color, the tmux widget, the TUI header, and `hexavoice status
 --json` all render the *same* state enum. There is deliberately no
 surface-specific state, which is what keeps the terminal experience honest.
 
@@ -18,7 +18,7 @@ stateDiagram-v2
     ModelLoading --> NoPermission: probe fails during load
     ModelLoading --> Error: model missing/corrupt
 
-    Idle --> Listening: hotkey down / "hey aqua"
+    Idle --> Listening: hotkey down / "hey hexavoice"
     Idle --> NoPermission: periodic probe fails (revoked)
     Idle --> ModelLoading: model swap / memory pressure reload
 
@@ -107,12 +107,12 @@ The live network counter and the plain history folder are settings-as-proof
 
 ### Buried (Advanced, searchable)
 
-Voice activation ("hey aqua") and its arming rules, "run it / send it" for
+Voice activation ("hey hexavoice") and its arming rules, "run it / send it" for
 terminals, silence timeout, overlay position and hide, per-stage latency
 display, streaming commit-horizon tuning, model storage location, telemetry
 (**off by default**, and the toggle shows exactly what a payload would
 contain), launch-at-login, and the entire diagnostic toolbox (`doctor`
-output, log locations). Every advanced setting has a `aqua set` key with the
+output, log locations). Every advanced setting has a `hexavoice set` key with the
 same name, so docs and support answers are copy-pasteable on all platforms.
 
 ### Per-application profiles
@@ -138,7 +138,7 @@ click: `App profiles… → [+ Frontmost app]`.
 
 ### Vocabulary and dictionary management
 
-The dictionary is a competitive front: Aqua caps free users at 5 entries and
+The dictionary is a competitive front: Hexavoice caps free users at 5 entries and
 Pro at 800. Ours is unlimited and plain-text, and that is a feature we say
 out loud.
 
@@ -162,7 +162,7 @@ out loud.
 ## Cross-cutting rules
 
 - Every setting change applies live, no restart, and is reflected in
-  `aqua status --json` immediately, because the TUI/CLI and GUI are equal
+  `hexavoice status --json` immediately, because the TUI/CLI and GUI are equal
   clients (`04-terminal-and-headless.md`).
 - Settings live in one human-readable file (`config.toml`) with the GUI as
   editor. Corrupt config → load defaults, keep the broken file as

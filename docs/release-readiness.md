@@ -28,8 +28,8 @@ owner instead of fixing it.
 | 3 | **MAJOR** | MSRV job red: dep required rustc 1.86 vs documented 1.85 | **FIXED** (`5bd83fd`), verified on real CI |
 | 4 | **MAJOR** | `scripts/ci-install-linux-deps.sh` untracked and non-executable | **FIXED** (`0e81b08`), committed mode 100755 |
 | 5 | **MAJOR** | Build from source per README yields a daemon that cannot transcribe | Found by lobster, confirmed here; owner: lobster |
-| 6 | MINOR | Stale `aqua-speech-helper` orphan; trigger not reproducible | Reported, mechanism refuted |
-| 7 | MINOR | `bundle-aquad-macos.sh` warns (not fails) when `swiftc` is absent | Reported |
+| 6 | MINOR | Stale `hexavoice-speech-helper` orphan; trigger not reproducible | Reported, mechanism refuted |
+| 7 | MINOR | `bundle-hexad-macos.sh` warns (not fails) when `swiftc` is absent | Reported |
 | 8 | INFO | Config defaults and edge cases behave correctly | Verified, regression net added (`0e81b08`) |
 | 9 | INFO | Latency claims in `docs/latency.md` hold up | Verified, 8-run measurement |
 | 10 | **MAJOR** | Every Linux build linked ALSA, including headless and musl | **FIXED** (`a7c7b1b` + `af852d6`), musl rows no longer need CI plumbing |
@@ -98,8 +98,8 @@ pre-existing, Linux-only clippy errors that had been unreachable behind the
 blocker:
 
 ```
-error: unused import: `AxError`            --> crates/aquad/src/inject.rs:17:15
-error: unneeded `return` statement          --> crates/aquad/src/inject.rs:116:9
+error: unused import: `AxError`            --> crates/hexad/src/inject.rs:17:15
+error: unneeded `return` statement          --> crates/hexad/src/inject.rs:116:9
 error: redundant redefinition of a binding `shared`  --> main.rs:337:9
 ```
 
@@ -254,25 +254,25 @@ After the README's `cargo build --release`, the helper is still absent and the
 daemon cannot recognise anything:
 
 ```
-aquad: state model-loading
-Error: recognizer failed to load (aqua-speech-helper not found; build it with
-`swiftc -O crates/asr/helper/transcriber.swift -o aqua-speech-helper` or set
-AQUA_SPEECH_HELPER) -> build the speech helper (see crates/asr/helper) or run
+hexad: state model-loading
+Error: recognizer failed to load (hexavoice-speech-helper not found; build it with
+`swiftc -O crates/asr/helper/transcriber.swift -o hexavoice-speech-helper` or set
+HEXA_SPEECH_HELPER) -> build the speech helper (see crates/asr/helper) or run
 with --asr mock
 RC=1
 ```
 
 **Severity is MAJOR, not blocker, because the packaged path is fine.** On the
-same fresh clone, `scripts/bundle-aquad-macos.sh` compiles the helper itself
+same fresh clone, `scripts/bundle-hexad-macos.sh` compiles the helper itself
 and the resulting `.app` transcribes correctly:
 
 ```
 ==> Building the speech helper            <- swiftc ran, from a clean tree
--rwxr-xr-x 2631152 Aqua
--rwxr-xr-x   98512 aqua-speech-helper     <- shipped inside the .app
+-rwxr-xr-x 2631152 Hexavoice
+-rwxr-xr-x   98512 hexavoice-speech-helper     <- shipped inside the .app
 
-aquad: recognizer ready: apple-speechtranscriber
-aquad: e2e: release->text 200ms (finalize 163ms, inject 37.4ms) | "The rain in Spain."
+hexad: recognizer ready: apple-speechtranscriber
+hexad: e2e: release->text 200ms (finalize 163ms, inject 37.4ms) | "The rain in Spain."
 RC=0
 ```
 
@@ -290,12 +290,12 @@ byte-identical guarantee. A README plus script fix carries none of that risk.
 
 ## 6. MINOR: a stale speech-helper process, trigger unidentified
 
-An `aqua-speech-helper` was found alive with `PPID=1` for 7h50m, holding an OS
+An `hexavoice-speech-helper` was found alive with `PPID=1` for 7h50m, holding an OS
 speech session after its parent died:
 
 ```
   PID  PPID STARTED                       ELAPSED COMMAND
-45677     1 Tue Jul 28 01:07:42 2026     07:50:15 .../aqua-speech-helper
+45677     1 Tue Jul 28 01:07:42 2026     07:50:15 .../hexavoice-speech-helper
 ```
 
 The proposed mechanism (SIGKILL skips `Drop`, helper never notices) was
@@ -311,7 +311,7 @@ doing `child.kill()` + `child.wait()` (lines 259-265) *and* an explicit
 
 **Honest status:** the orphan is real, the trigger is unknown, and normal
 signal-death does not cause it. The robust fix does not require knowing the
-trigger: **reap stale helpers at daemon startup.** That can live on the aquad
+trigger: **reap stale helpers at daemon startup.** That can live on the hexad
 side rather than in the off-limits `crates/asr`.
 
 ### Postscript: a related scare that turned out to be our own clicks
@@ -344,8 +344,8 @@ paths shut.
 
 ## 7. MINOR: the bundle script degrades quietly without `swiftc`
 
-`scripts/bundle-aquad-macos.sh` warns rather than fails when `swiftc` is
-absent: `"aquad will start but cannot transcribe (use --asr mock)"`. On a
+`scripts/bundle-hexad-macos.sh` warns rather than fails when `swiftc` is
+absent: `"hexad will start but cannot transcribe (use --asr mock)"`. On a
 release machine without Xcode CLT this produces a shippable-looking `.app` with
 no recognizer, behind a warning a release process can scroll past.
 
@@ -467,11 +467,11 @@ mid-edit and did not compile (see below).
 | `cargo +1.85.0 build --workspace --locked` | exit 0 |
 | `cargo deny check` | advisories ok, bans ok, licenses ok, sources ok |
 | `scripts/build-macos-release.sh` | universal DMG, `lipo`: x86_64 + arm64 |
-| `scripts/bundle-aquad-macos.sh` | `.app` valid on disk, satisfies Designated Requirement |
+| `scripts/bundle-hexad-macos.sh` | `.app` valid on disk, satisfies Designated Requirement |
 | `scripts/build-headless.sh` | passed its own "no AppKit" linkage check |
 | `REPRO_VERIFY=1 scripts/build-repro.sh` | **reproducible**, both builds hashed `d3703b7e50ce...` |
 | `scripts/verify-shell-bridge.sh` | passed, including zsh undo restoration |
-| `aquad --once --wav` / `--say` | transcribed and injected correctly |
+| `hexad --once --wav` / `--say` | transcribed and injected correctly |
 | `spike-cli probe` / `target` | correct output, correct AX tier |
 
 The reproducible double-build passing locally is worth stating plainly: the
@@ -479,7 +479,7 @@ The reproducible double-build passing locally is worth stating plainly: the
 
 ### Re-verified after the late dependency change
 
-`296c82a` (single-instance guard) added `libc` to `aquad` and changed
+`296c82a` (single-instance guard) added `libc` to `hexad` and changed
 `Cargo.lock` after the checks above were run. Everything lock-sensitive was
 re-run rather than assumed still valid:
 
@@ -489,7 +489,7 @@ re-run rather than assumed still valid:
 | `cargo +1.85.0 build --workspace --locked` | exit 0, so the MSRV pin survives |
 | `REPRO_VERIFY=1 scripts/build-repro.sh` | reproducible, hash `d3703b7e50ce...` |
 | `scripts/build-headless.sh` | no AppKit, pass |
-| `aquad --once --wav` | still transcribes and injects, RC=0 |
+| `hexad --once --wav` | still transcribes and injects, RC=0 |
 
 The repro hash is **byte-identical to the earlier run**, which is the useful
 detail: the new dependency did not perturb the shipped binary at all.
@@ -502,7 +502,7 @@ is too broad would break every script in this repo that shells out to `--once`
 1. two concurrent --once runs      -> rc=0, rc=0, neither refused
 2. --once while a daemon holds it  -> rc=0, ran fine alongside
 3. second DAEMON while one runs    -> rc=1, refused:
-   "aquad is already running (pid 32884). Quit it from the menu bar, or
+   "hexad is already running (pid 32884). Quit it from the menu bar, or
     `kill 32884`, then start this one. Running two copies makes both record
     you and both type what you said."
 ```
@@ -516,7 +516,7 @@ agent's in-flight menu bar work:
 
 ```
 error[E0599]: no method named `handle` found for struct `MenuHost`
-error[E0308]: mismatched types  --> crates/aquad/src/menuhost.rs:43:43
+error[E0308]: mismatched types  --> crates/hexad/src/menuhost.rs:43:43
 ```
 
 That agent was DM'd with the exact errors. It is **not** a defect in `main`;
@@ -558,9 +558,9 @@ cargo tree -p audio --no-default-features -e normal \
 runs in both configurations (3 tests without the feature, 4 with).
 
 **Now fully fixed** (`af852d6`). Making `capture` optional was necessary but
-not sufficient: `aquad` and `asr` took the `audio` dependency with default
+not sufficient: `hexad` and `asr` took the `audio` dependency with default
 features on, so that edge re-enabled capture whatever the build command said.
-Deleting the unused `asr` edge, gating the `aquad` edge behind `display`, and
+Deleting the unused `asr` edge, gating the `hexad` edge behind `display`, and
 cfg-gating `spawn_mic` closes it. Measured 0 cpal/alsa crates headless and 3
 with defaults, and both configurations compile and pass tests from a clean
 clone. Full numbers and the runtime checks are in appendix D.
@@ -583,9 +583,9 @@ no error, observe no change, and reasonably conclude the feature was broken
 rather than unbuilt. The quickstart points users at this file.
 
 Confirmed two ways rather than assumed: it matches the `WIRED` gate dove
-already put in `crates/aquad/src/menubar.rs`, and grepping the daemon for each
+already put in `crates/hexad/src/menubar.rs`, and grepping the daemon for each
 key shows the other thirteen appear only in menu-**display** code, never in the
-pipeline. The starkest case is `insertion.mode`, because `crates/aquad` has
+pipeline. The starkest case is `insertion.mode`, because `crates/hexad` has
 **no dependency on the `stream` crate at all**, so `"stream"` cannot possibly
 take effect regardless of what the file says. lobster's third case is the one
 most likely to generate support load: setting a nonexistent `microphone` logs
@@ -605,7 +605,7 @@ protection. Fixed in `22f579b` by giving it one:
 Config tests went 84 -> 89. The remaining half, the call site that actually
 reaches a user, landed as `ed5425f` (dove), routed to **two** surfaces rather
 than the one I asked for: stderr for a terminal launch, and a menu row for a
-bundled launch, because `Aqua.app` sets `LSUIElement` and has no terminal at
+bundled launch, because `Hexavoice.app` sets `LSUIElement` and has no terminal at
 all, which makes stderr invisible for exactly the users the quickstart sends
 to the config file.
 
@@ -615,8 +615,8 @@ nothing:
 
 ```
 ===== two inert keys set (expect BOTH named) =====
-aquad: config sets "microphone" but nothing reads it yet; it has no effect
-aquad: config sets "model" but nothing reads it yet; it has no effect
+hexad: config sets "microphone" but nothing reads it yet; it has no effect
+hexad: config sets "model" but nothing reads it yet; it has no effect
 
 ===== only a WIRED key set (expect NO warning) =====
 (no inert warnings)
@@ -716,7 +716,7 @@ now done. The reasoning is kept because an earlier revision of this appendix was
 optional (finding 10) was necessary but not sufficient, and I generalised a
 single-crate measurement to the whole workspace without testing it.
 
-`--no-default-features` applies to the workspace *members*, but `aquad` and
+`--no-default-features` applies to the workspace *members*, but `hexad` and
 `asr` each took `audio = { path = "../audio" }` with default features **on**,
 so that dependency edge re-enabled capture regardless of the build command.
 
@@ -726,11 +726,11 @@ Three changes, one per layer of the problem:
    That crate has zero `audio::` references and defines its own `SAMPLE_RATE`,
    so the edge was dead weight. An unused dependency kept only to be switched
    off is worse than none: the next person has to work out whether it matters.
-2. **`crates/aquad`: `default-features = false` on the audio edge**, with
+2. **`crates/hexad`: `default-features = false` on the audio edge**, with
    `audio/capture` hung off the existing `display` feature. Those two answer
    the same question (is there a human at this machine), so tying them
    together means nobody can build a "headless" daemon that still links ALSA.
-3. **`crates/aquad/src/source.rs`: cfg-gated `spawn_mic`**, which used
+3. **`crates/hexad/src/source.rs`: cfg-gated `spawn_mic`**, which used
    `audio::capture` unconditionally, with a headless counterpart returning an
    error that names `--wav` rather than capturing nothing silently.
 
@@ -776,7 +776,7 @@ The **four glibc rows still need step A**, which still has no owner.
 
 ## Shelf life of this report
 
-A product rename is queued (bundle id `dev.aquaoss.aquad` becomes
+A product rename is queued (bundle id `dev.hexavoice.hexad` becomes
 `dev.hexavoice.hexad`, and the app bundle is renamed to match). When it lands
 it **invalidates two green ticks above**, which must be re-run rather than
 inherited:

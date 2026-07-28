@@ -48,13 +48,13 @@ ggml-org's official conversion, run through **llama.cpp** via the
 | Qwen3-1.7B weights | n/a | **Apache-2.0** | yes, attribution + licence text |
 
 The weights are a separate artifact fetched at runtime into
-`~/.aqua-oss/models` (shared with the ASR cache), never vendored, so the
+`~/.hexavoice/models` (shared with the ASR cache), never vendored, so the
 Apache-2.0 weight licence constrains redistributed bundles, not this MIT
 codebase. Same rule as `docs/asr-integration.md`.
 
 Why Qwen3-1.7B over Gemma-3-1B: comparable size class, but Qwen3 is plain
 Apache-2.0 while Gemma carries Google's use-policy terms, and the research
-(`../aqua-voice-research/02-local-asr-tech.md` §3) rates Qwen3 the best small
+(`../hexavoice-voice-research/02-local-asr-tech.md` §3) rates Qwen3 the best small
 model for instruction following in 2025-26, which is exactly the property the
 constrained prompt depends on. It also has a `/no_think` soft switch, which
 matters for latency (below). A smaller fallback (Qwen3-0.6B, ~0.4 GB) is a
@@ -138,7 +138,7 @@ SHA256-verified after download including any resumed prefix, and the final
 filename appears only via atomic rename after verification, so a present file
 is always a verified file. The Qwen3-1.7B artifact's SHA256 is pinned
 (`d2387ca2...`, verified fetch 2026-07-27). Cache dir is the shared
-`~/.aqua-oss/models`.
+`~/.hexavoice/models`.
 
 ## Measured performance (this machine: M4 Pro, macOS 26.5, 2026-07-27)
 

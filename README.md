@@ -1,4 +1,4 @@
-# Aqua OSS
+# Hexavoice
 
 A fully local, open-source alternative to [Aqua Voice](https://withaqua.com):
 hold a key, speak, and text appears in whatever you are typing into. Select
@@ -34,7 +34,7 @@ open source:
    SSH sessions and servers.
 
 It is also faster. Measured end to end on an M4 Pro: **131-215ms** from key
-release to text on screen, against Aqua's advertised ~450ms insert latency.
+release to text on screen, against Hexavoice's advertised ~450ms insert latency.
 The spread is real and depends on the transport: an accessibility write into a
 native field is the fast end, synthesized keys into a terminal the slow end.
 
@@ -85,12 +85,12 @@ while an admin app has focus and recovers when focus moves. Details in
 
 Requires macOS 13 or newer (26+ for the zero-install recognizer), a Rust
 toolchain, and Xcode Command Line Tools for `swiftc`. Windows builds and
-installs (`scripts/build-windows.sh` ships `aquad.exe` and `aqua-spike.exe`)
+installs (`scripts/build-windows.sh` ships `hexad.exe` and `hexavoice-spike.exe`)
 but is untested on hardware; Linux does not work yet.
 
 ```bash
-git clone https://github.com/blarer/aqua-oss
-cd aqua-oss
+git clone https://github.com/blarer/hexavoice
+cd hexavoice
 
 # Builds the daemon, compiles the Swift speech helper, packages the .app, and
 # signs it. Use this rather than a bare `cargo build`: the recognizer is a
@@ -160,7 +160,7 @@ helper beside it.
 
 ### The menu bar item
 
-Aqua has no Dock icon and no window on purpose: it types into whatever field
+Hexavoice has no Dock icon and no window on purpose: it types into whatever field
 you are focused on, so it must never steal that focus. Its whole visible
 presence is one icon at the right of the menu bar, and the glyph is the
 answer to "is it on?" without a click. A waveform means ready; a filled
@@ -168,7 +168,7 @@ microphone means the microphone is open right now.
 
 Clicking it gives you the current state, the hotkey it actually bound, the
 microphone it actually opened, **Pause Dictation**, a Settings submenu,
-**Run Diagnostics**, and **Quit Aqua**. When a permission is missing, a row
+**Run Diagnostics**, and **Quit Hexavoice**. When a permission is missing, a row
 appears that opens the exact System Settings pane rather than telling you to
 go find it.
 
@@ -270,13 +270,13 @@ flowchart LR
     ST --> TT[text-target<br/>transport selection]
     EI --> TT
     TT --> OUT[(focused app<br/>terminal, or shell)]
-    AQ[aquad] -.orchestrates.-> HK & AU & ASR & EI & TT & OV
+    AQ[hexad] -.orchestrates.-> HK & AU & ASR & EI & TT & OV
     OV[overlay<br/>non-activating panel]
 ```
 
 | Crate | Responsibility |
 |---|---|
-| `aquad` | The daemon. Wires everything together and owns the state machine |
+| `hexad` | The daemon. Wires everything together and owns the state machine |
 | `audio` | Capture, ring buffer, resampling, VAD, speech segmentation |
 | `asr` | Streaming recognizer trait, Apple/Parakeet/whisper backends, model manager |
 | `stream` | Commit horizon, minimal diffs, coalescing, undo ring |

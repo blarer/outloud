@@ -173,7 +173,7 @@ Accessibility grant against the binary's `cdhash` when the signature is
 ad-hoc. Every rebuild produces a new cdhash, so the grant silently orphans
 itself while the System Settings toggle still reads "on". During the spike
 this cost real debugging hours and the workaround is
-`tccutil reset Accessibility dev.aquaoss.spike` after every rebuild.
+`tccutil reset Accessibility dev.hexavoice.spike` after every rebuild.
 
 A Developer ID signature changes what TCC pins to. With a certificate-backed
 signature, the app's *designated requirement* is anchored to the signing

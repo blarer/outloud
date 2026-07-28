@@ -77,7 +77,7 @@ pub fn bundle(reports: &[Report]) -> String {
 /// Testable core of [`bundle`]: identity supplied by the caller.
 pub fn bundle_with_identity(reports: &[Report], home: &str, user: &str) -> String {
     let mut out = String::new();
-    out.push_str("## aqua-oss doctor report\n");
+    out.push_str("## hexavoice doctor report\n");
     out.push_str(&format!(
         "os: {} {}\n",
         std::env::consts::OS,

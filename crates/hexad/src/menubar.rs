@@ -197,7 +197,7 @@ pub fn build(status: &Status, settings: &Settings) -> (MenuModel, Vec<Action>) {
     {
         items.push(MenuItem::Separator);
         items.push(MenuItem::Label(
-            "Aqua needs Accessibility to see the hotkey and write text.".into(),
+            "Hexavoice needs Accessibility to see the hotkey and write text.".into(),
         ));
         let id = add(
             &mut actions,
@@ -208,7 +208,9 @@ pub fn build(status: &Status, settings: &Settings) -> (MenuModel, Vec<Action>) {
         items.push(MenuItem::action("Open Accessibility Settings…", id));
     }
     if status.microphone_blocked {
-        items.push(MenuItem::Label("Aqua cannot open the microphone.".into()));
+        items.push(MenuItem::Label(
+            "Hexavoice cannot open the microphone.".into(),
+        ));
         let id = add(
             &mut actions,
             Action::OpenPrivacyPane {
@@ -301,7 +303,7 @@ pub fn build(status: &Status, settings: &Settings) -> (MenuModel, Vec<Action>) {
 
     items.push(MenuItem::Separator);
     let id = add(&mut actions, Action::Quit);
-    items.push(MenuItem::action("Quit Aqua", id));
+    items.push(MenuItem::action("Quit Hexavoice", id));
 
     // The glyph must answer "is it on?" without a click, which is the whole
     // reason the tray surface exists. A daemon whose Accessibility grant was
@@ -422,17 +424,17 @@ fn status_line(status: &Status) -> String {
     // Same override as the glyph: "ready" is a lie when the permission that
     // makes dictation work has been taken away.
     if status.accessibility_blocked && status.state == OverlayState::Idle {
-        return "Aqua: Accessibility permission needed".into();
+        return "Hexavoice: Accessibility permission needed".into();
     }
     match status.state {
-        OverlayState::Idle => "Aqua: ready".into(),
-        OverlayState::Listening => "Aqua: listening".into(),
-        OverlayState::Transcribing => "Aqua: transcribing…".into(),
-        OverlayState::Injecting => "Aqua: inserting text".into(),
-        OverlayState::Error => "Aqua: error".into(),
-        OverlayState::NoPermission => "Aqua: permission needed".into(),
-        OverlayState::ModelLoading => "Aqua: loading model…".into(),
-        OverlayState::DegradedOffline => "Aqua: ready (offline)".into(),
+        OverlayState::Idle => "Hexavoice: ready".into(),
+        OverlayState::Listening => "Hexavoice: listening".into(),
+        OverlayState::Transcribing => "Hexavoice: transcribing…".into(),
+        OverlayState::Injecting => "Hexavoice: inserting text".into(),
+        OverlayState::Error => "Hexavoice: error".into(),
+        OverlayState::NoPermission => "Hexavoice: permission needed".into(),
+        OverlayState::ModelLoading => "Hexavoice: loading model…".into(),
+        OverlayState::DegradedOffline => "Hexavoice: ready (offline)".into(),
     }
 }
 

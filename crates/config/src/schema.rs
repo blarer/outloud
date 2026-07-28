@@ -387,7 +387,7 @@ mod tests {
 
     #[test]
     fn the_wired_set_matches_what_the_daemon_actually_reads() {
-        // Mirrors the WIRED gate in crates/aquad/src/menubar.rs. Two lists
+        // Mirrors the WIRED gate in crates/hexad/src/menubar.rs. Two lists
         // that must agree is a smell, but they protect different surfaces
         // (the menu vs the file) and live in different crates, so the
         // duplication is deliberate and this test is what keeps them honest.
@@ -409,7 +409,7 @@ mod tests {
         assert_eq!(inert.len(), schema().len() - 3);
         assert!(
             inert.contains(&"insertion.mode"),
-            "insertion.mode is inert: aquad has no dependency on the stream \
+            "insertion.mode is inert: hexad has no dependency on the stream \
              crate at all, so \"stream\" cannot possibly take effect"
         );
         assert!(

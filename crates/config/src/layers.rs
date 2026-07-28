@@ -11,6 +11,14 @@ use crate::profile::{select, AppIdentity, Profile, WinReason};
 use crate::schema::{self, KeySpec, Value};
 use crate::validate::{validate_document, ConfigError};
 
+/// The environment-variable prefix for overrides: `HEXA_HOTKEY` sets
+/// `hotkey`.
+pub const ENV_PREFIX: &str = "HEXA_";
+
+/// The previous product's prefix, still honoured. Frozen: this is history,
+/// not configuration.
+pub const LEGACY_ENV_PREFIX: &str = "AQUA_";
+
 /// Where a value came from. Ordering is precedence: later variants override
 /// earlier ones.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
@@ -25,7 +33,8 @@ pub enum Layer {
     /// A matched per-app profile; carries the profile name so the answer to
     /// "why" is "profile 'slack' in your config".
     Profile(String),
-    /// An AQUA_* environment variable; carries the variable name. Highest
+    /// A `HEXA_*` (or legacy `AQUA_*`) environment variable; carries the
+    /// variable name. Highest
     /// precedence because env vars are how one-off debugging and CI say
     /// "just this run, do this".
     Env(String),
@@ -114,14 +123,29 @@ impl Config {
             profiles.extend(parsed.profiles);
         }
 
-        // Environment overrides: AQUA_INSERTION_MODE -> insertion.mode.
-        // Unknown AQUA_ variables are reported, not ignored: a typo'd env
+        // Environment overrides: HEXA_INSERTION_MODE -> insertion.mode.
+        // Unknown HEXA_ variables are reported, not ignored: a typo'd env
         // override that silently does nothing is the same failure class as a
         // typo'd key.
+        //
+        // The product's previous `AQUA_` prefix is still accepted, and will
+        // be indefinitely: an environment variable lives in a shell profile,
+        // a CI config, and someone's muscle memory, so breaking it costs far
+        // more than carrying six characters of compatibility. When the same
+        // key is set under both prefixes the current one wins, because that
+        // is the one the user set most recently on purpose.
         let mut env_values = BTreeMap::new();
         for (var, raw) in env {
-            let Some(rest) = var.strip_prefix("AQUA_") else {
-                continue;
+            let rest = match var.strip_prefix(ENV_PREFIX) {
+                Some(rest) => rest,
+                None => match var.strip_prefix(LEGACY_ENV_PREFIX) {
+                    // Skip a legacy variable whose current-prefix twin is
+                    // also set, so precedence never depends on the iteration
+                    // order of the environment map.
+                    Some(rest) if env.contains_key(&format!("{ENV_PREFIX}{rest}")) => continue,
+                    Some(rest) => rest,
+                    None => continue,
+                },
             };
             let key = rest.to_lowercase().replace('_', ".");
             // The env spelling cannot distinguish '.' from '-' (both map
@@ -150,8 +174,9 @@ impl Config {
                 None => warnings.push(ConfigError::UnknownKey {
                     key: var.clone(),
                     layer: Layer::Env(var.clone()),
-                    suggestion: crate::fuzzy::closest(&key, schema::key_names())
-                        .map(|k| format!("AQUA_{}", k.replace(['.', '-'], "_").to_uppercase())),
+                    suggestion: crate::fuzzy::closest(&key, schema::key_names()).map(|k| {
+                        format!("{ENV_PREFIX}{}", k.replace(['.', '-'], "_").to_uppercase())
+                    }),
                 }),
             }
         }
@@ -346,17 +371,52 @@ mod tests {
 
     #[test]
     fn unknown_env_var_is_reported_with_suggestion() {
-        let (_, warnings) = build("", &[("AQUA_HOTKYE", "fn")]);
+        let (_, warnings) = build("", &[("HEXA_HOTKYE", "fn")]);
         assert_eq!(warnings.len(), 1);
         match &warnings[0] {
             ConfigError::UnknownKey {
                 key, suggestion, ..
             } => {
-                assert_eq!(key, "AQUA_HOTKYE");
-                assert_eq!(suggestion.as_deref(), Some("AQUA_HOTKEY"));
+                assert_eq!(key, "HEXA_HOTKYE");
+                // The suggestion names the CURRENT prefix even when the typo
+                // came in under the legacy one: telling an upgrader to fix
+                // their typo by keeping the deprecated spelling is advice
+                // that ages badly.
+                assert_eq!(suggestion.as_deref(), Some("HEXA_HOTKEY"));
             }
             other => panic!("expected UnknownKey, got {other}"),
         }
+    }
+
+    #[test]
+    fn the_legacy_env_prefix_still_works() {
+        // An environment variable lives in a shell profile and a CI config.
+        // Breaking it on a rename would break other people's automation for
+        // no benefit.
+        let (cfg, warnings) = build("", &[("AQUA_HOTKEY", "f13")]);
+        assert!(warnings.is_empty(), "{warnings:?}");
+        assert_eq!(
+            cfg.get("hotkey").unwrap().value,
+            Value::Str("f13".into()),
+            "the legacy prefix must still be honoured"
+        );
+    }
+
+    #[test]
+    fn the_current_prefix_wins_when_both_are_set() {
+        // Deterministically, and not by whichever the environment map
+        // happened to yield first: a user who sets the new spelling is
+        // saying "this one", and a stale line in a shell profile must not
+        // silently beat it.
+        let (cfg, warnings) = build(
+            "",
+            &[("AQUA_HOTKEY", "f13"), ("HEXA_HOTKEY", "right-option")],
+        );
+        assert!(warnings.is_empty(), "{warnings:?}");
+        assert_eq!(
+            cfg.get("hotkey").unwrap().value,
+            Value::Str("right-option".into())
+        );
     }
 
     #[test]

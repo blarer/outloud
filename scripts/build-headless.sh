@@ -89,5 +89,5 @@ case "$(uname -s)" in
 esac
 
 mkdir -p "$OUT_DIR"
-cp "$BIN" "$OUT_DIR/aqua-spiked${TARGET:+-$TARGET}"
-echo "Built: $OUT_DIR/aqua-spiked${TARGET:+-$TARGET}"
+cp "$BIN" "$OUT_DIR/hexavoice-spiked${TARGET:+-$TARGET}"
+echo "Built: $OUT_DIR/hexavoice-spiked${TARGET:+-$TARGET}"

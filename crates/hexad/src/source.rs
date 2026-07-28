@@ -58,7 +58,7 @@ pub fn spawn_hotkey(
     let manager = hotkey::HotkeyManager::bind(chord.clone(), hotkey::Timing::default())?;
     for c in manager.conflicts() {
         // Advisory per the UX doc: warn loudly, never silently accept.
-        eprintln!("aquad: hotkey conflict: {c:?}");
+        eprintln!("hexad: hotkey conflict: {c:?}");
     }
     // Publish what was ACTUALLY bound, not what was asked for. The menu bar
     // shows this, and a menu that echoes the config file would hide exactly
@@ -66,7 +66,7 @@ pub fn spawn_hotkey(
     // another.
     runtime.set_bound_hotkey(Some(chord.to_string()));
     std::thread::Builder::new()
-        .name("aquad-hotkey-bridge".into())
+        .name("hexad-hotkey-bridge".into())
         .spawn(move || {
             // recv() blocks on the std channel; this thread exists so the
             // tokio reactor never does.
@@ -80,7 +80,7 @@ pub fn spawn_hotkey(
                     // Latched: capture simply continues; nothing to emit.
                     Latched => None,
                     TapRecovered => {
-                        eprintln!("aquad: event tap was disabled and recovered");
+                        eprintln!("hexad: event tap was disabled and recovered");
                         None
                     }
                 };

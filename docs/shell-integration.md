@@ -1,6 +1,6 @@
 # Shell integration (T2): edit-by-voice on the command line
 
-This document specifies the shell-bridge: the mechanism that gives Aqua
+This document specifies the shell-bridge: the mechanism that gives Hexavoice
 read-and-rewrite access to the one real text field a terminal has, the
 shell's line buffer. It implements tier T2 of the ladder in
 `ux/04-terminal-and-headless.md`. No GUI dictation tool (Aqua Voice, Wispr
@@ -36,7 +36,7 @@ Pieces:
 
 - `crates/shell-bridge`: the daemon (`shell-bridge serve`), a one-shot CLI
   client (`intent`, `status`, `peek`), and the installer (`install`).
-- `shell/aqua.zsh`, `shell/aqua.bash`, `shell/aqua.fish`: the plugins.
+- `shell/hexavoice.zsh`, `shell/hexavoice.bash`, `shell/hexavoice.fish`: the plugins.
 - `shell/demo.sh`: end-to-end interactive demo in a throwaway ZDOTDIR.
 - `shell/verify-zsh.exp`: automated pty-level verification.
 
@@ -79,9 +79,9 @@ The daemon normalizes on receipt and `REPLACE` carries the new cursor in
 both units so no plugin ever does unicode arithmetic in shell.
 
 Lines are capped at 1 MiB; longer requests are dropped as confused or
-hostile. Socket path: `$XDG_RUNTIME_DIR/aqua/shell.sock` (Linux), else
-`$TMPDIR/aqua/shell.sock` (macOS), else `/tmp/aqua-$UID/aqua/shell.sock`.
-Plugins and daemon both honor `$AQUA_BRIDGE_SOCKET` as an override.
+hostile. Socket path: `$XDG_RUNTIME_DIR/hexavoice/shell.sock` (Linux), else
+`$TMPDIR/hexavoice/shell.sock` (macOS), else `/tmp/hexavoice-$UID/hexavoice/shell.sock`.
+Plugins and daemon both honor `$HEXA_BRIDGE_SOCKET` as an override.
 
 Cursor placement after an edit is reconstructed by diffing old and new
 buffers (longest common prefix/suffix): a cursor before the change stays, a
@@ -128,7 +128,7 @@ executed without the human pressing Enter on a visible line.
 
 ## Per-shell notes and traps
 
-### zsh (`shell/aqua.zsh`)
+### zsh (`shell/hexavoice.zsh`)
 
 - ZLE widget over `$BUFFER`/`$CURSOR`, both of which cover the *whole*
   multi-line buffer, so heredocs and `for` loops edit correctly.
@@ -141,9 +141,9 @@ executed without the human pressing Enter on a visible line.
 - Trap: `zle -M` output is transient; do not `echo` from a widget or the
   prompt corrupts.
 - Default binding `^X^A`, chosen because it is unbound in stock emacs and
-  vi keymaps. Override with `AQUA_BRIDGE_KEY` before sourcing.
+  vi keymaps. Override with `HEXA_BRIDGE_KEY` before sourcing.
 
-### bash (`shell/aqua.bash`)
+### bash (`shell/hexavoice.bash`)
 
 - `bind -x` runs the function with `READLINE_LINE`/`READLINE_POINT` live;
   assignment writes back through readline, so `C-_` undo works.
@@ -159,7 +159,7 @@ executed without the human pressing Enter on a visible line.
   quoted continuations, which arrive in `READLINE_LINE` with embedded
   newlines and survive via base64.
 
-### fish (`shell/aqua.fish`)
+### fish (`shell/hexavoice.fish`)
 
 - `commandline -b` reads the full buffer, `commandline -r` replaces it,
   `commandline -C` gets/sets the cursor in characters, `commandline -f
@@ -184,15 +184,15 @@ restart your shell or: source /Users/you/.zshrc
 What it does, per shell:
 
 - **zsh/bash**: appends one guarded, marker-tagged line to the rc:
-  `# aqua shell-bridge` + `[ -f .../aqua.zsh ] && source .../aqua.zsh`.
+  `# hexavoice shell-bridge` + `[ -f .../hexavoice.zsh ] && source .../hexavoice.zsh`.
   Idempotent (the marker is checked). It appends rather than prepending or
   managing the file because frameworks (oh-my-zsh, prezto, bash-it,
   zinit) all funnel through the same rc; appending after them means our
   `bindkey` runs last and survives their keymap resets. If a framework
   user prefers plugin-manager form, the file *is* a valid oh-my-zsh
-  plugin: `ln -s .../shell ~/.oh-my-zsh/custom/plugins/aqua` (zsh loads
-  `aqua.zsh` via the plugin's file glob) and add `aqua` to `plugins=(...)`.
-- **fish**: symlinks `aqua.fish` into `conf.d/`, the native drop-in dir.
+  plugin: `ln -s .../shell ~/.oh-my-zsh/custom/plugins/hexavoice` (zsh loads
+  `hexavoice.zsh` via the plugin's file glob) and add `hexavoice` to `plugins=(...)`.
+- **fish**: symlinks `hexavoice.fish` into `conf.d/`, the native drop-in dir.
 - `--shell`, `--rc`, and `--plugin-dir` override detection for scripted or
   remote installs. `ZDOTDIR` is honored, which is also how the test suite
   installs into a throwaway config.

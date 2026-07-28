@@ -1,6 +1,6 @@
 # Terminals and headless: the differentiator
 
-Aqua works in "even a raw terminal" by pasting keystrokes. Nobody, closed or
+Hexavoice works in "even a raw terminal" by pasting keystrokes. Nobody, closed or
 open, treats the terminal as a first-class *editing* destination, and nobody
 works at all when there is no display server: an SSH session into a build box,
 a tmux session on a VPS, a TTY. This document designs that, because "works in
@@ -17,7 +17,7 @@ sequences, the shell's own line editor, and multiplexer APIs.
 
 The product probes the focused terminal and climbs as high as it can, exactly
 mirroring the GUI strategy ladder. Each tier is strictly better than the one
-below, and the active tier is visible in `aqua doctor`:
+below, and the active tier is visible in `hexavoice doctor`:
 
 | Tier | Mechanism | Enables |
 |---|---|---|
@@ -42,7 +42,7 @@ Plain dictation must be *safe* before it is smart:
 - **Nothing we inject ever ends with Enter by itself.** Dictation composes
   the command line; the human presses Enter. The single exception is the
   explicit spoken command "run it" / "send it" (off by default, opt-in
-  setting, mirroring Aqua's "Send It" but gated because terminals execute
+  setting, mirroring Hexavoice's "Send It" but gated because terminals execute
   things). When enabled, "run it" strips the phrase, injects, and sends `\r`.
 - **Terminal-profile formatting.** The destination profile
   (`05-settings-and-states.md`) for terminals defaults to: no auto-
@@ -59,7 +59,7 @@ exactly as it does in a GUI field. The plugin gives us a read/write interface
 to the one text field a terminal really has: the shell's line buffer.
 
 Mechanism: the plugin (zsh ZLE widget / bash readline binding / fish binding)
-maintains a tiny local socket (`$XDG_RUNTIME_DIR/aqua/shell.sock`, or a
+maintains a tiny local socket (`$XDG_RUNTIME_DIR/hexavoice/shell.sock`, or a
 per-session file under `~/.cache` over SSH). On hotkey, the desktop app asks
 the plugin for `(buffer, cursor)`; the edit pipeline runs the same
 `EditIntent` parse/apply as everywhere else; the plugin writes the new buffer
@@ -124,7 +124,7 @@ $ kubectl get pods --namespace staging-web▂          [● 0:03]
 
 ### 3. tmux status-right widget (T4)
 
-A shipped tmux plugin (`aqua.tmux`, TPM-installable) adds a status segment
+A shipped tmux plugin (`hexavoice.tmux`, TPM-installable) adds a status segment
 fed over the tmux control channel:
 
 ```
@@ -146,15 +146,15 @@ remote. Two supported topologies:
 The local app injects into the local terminal emulator (T0/T1); bytes flow
 over SSH like typed keys. Works everywhere immediately. Edit-by-voice needs
 the shell plugin *on the remote shell* to reach T2, installed by one command:
-`aqua shell-install --ssh user@host` (appends the plugin line to the remote
+`hexavoice shell-install --ssh user@host` (appends the plugin line to the remote
 rc, nothing else). The control channel between local app and remote plugin
 multiplexes over the existing connection (SSH `RemoteForward` of the socket,
 set up by our ssh config snippet, or degrades to an in-band OSC 52-style
 handshake when forwarding is blocked).
 
-**B. Fully headless (`aquad`).** On a machine with no GUI at all, dictating
+**B. Fully headless (`hexad`).** On a machine with no GUI at all, dictating
 *at* that machine's console: a user with a USB mic on a TTY, or audio
-forwarded from a thin client. `aquad` is the same engine as the desktop app
+forwarded from a thin client. `hexad` is the same engine as the desktop app
 minus every GUI dependency: hotkey via evdev, indicator via OSC, control via
 the CLI and TUI below. This is also the accessibility story for GUI-less
 users (`06-accessibility.md`): a motor-impaired sysadmin gets the full
@@ -173,14 +173,14 @@ tmux specifics worth pinning down:
 Everything the tray menu and settings window do must be reachable with no
 display server. Two layers:
 
-**CLI (scriptable truth):** `aqua status`, `aqua doctor`, `aqua listen`,
-`aqua undo`, `aqua models`, `aqua set <key> <value>`, all with `--json`.
+**CLI (scriptable truth):** `hexavoice status`, `hexavoice doctor`, `hexavoice listen`,
+`hexavoice undo`, `hexavoice models`, `hexavoice set <key> <value>`, all with `--json`.
 The CLI is the API; the TUI and GUI are both clients of it.
 
-**TUI (`aqua tui`):** a full-screen ratatui-style surface for humans:
+**TUI (`hexavoice tui`):** a full-screen ratatui-style surface for humans:
 
 ```
-+ aqua ────────────────────────────────────────────────────────+
++ hexavoice ────────────────────────────────────────────────────────+
 | state: ● listening (latched)          mic: USB Audio  ▁▂▅▂▁  |
 | tier:  T3 (zsh plugin + OSC)          model: parakeet-tdt-v3 |
 |                                                              |

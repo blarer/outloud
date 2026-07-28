@@ -24,7 +24,7 @@ open -a dist/AquaSpike.app --args probe
 
 `scripts/run.sh` wraps this. Because LaunchServices detaches the process from
 the terminal, the binary mirrors its output to the file named by
-`AQUA_SPIKE_LOG` and the script tails it.
+`HEXA_SPIKE_LOG` and the script tails it.
 
 This is not a workaround. It is how every real user starts a real application,
 so the shipping product is unaffected. It only bites during development, and it
@@ -43,7 +43,7 @@ it, so this sequence silently breaks:
 During development, reset and re-grant rather than trying to reason about it:
 
 ```bash
-tccutil reset Accessibility dev.aquaoss.spike
+tccutil reset Accessibility dev.hexavoice.spike
 ```
 
 For the shipping product this disappears once builds are signed with a stable

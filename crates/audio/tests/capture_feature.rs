@@ -86,7 +86,7 @@ fn segmenter_runs_without_the_capture_feature() {
 }
 
 /// Constants downstream crates depend on must not move with the feature.
-/// `asr` and `aquad` both hardcode assumptions about 16kHz mono; if a
+/// `asr` and `hexad` both hardcode assumptions about 16kHz mono; if a
 /// headless build disagreed with a desktop build about the sample rate, WAV
 /// transcription would silently run at the wrong speed.
 #[test]

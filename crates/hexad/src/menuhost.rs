@@ -119,7 +119,7 @@ impl MenuHost {
                 // terminal to print to at all.
                 for spec in cfg.inert_settings() {
                     eprintln!(
-                        "aquad: config sets \"{}\" but nothing reads it yet; it has no effect",
+                        "hexad: config sets \"{}\" but nothing reads it yet; it has no effect",
                         spec.key
                     );
                     self.problems.push(format!(
@@ -183,7 +183,7 @@ impl MenuHost {
         match action {
             Action::Set { key, value } => {
                 if let Err(e) = self.write_setting(&key, &value) {
-                    eprintln!("aquad: could not save {key}: {e}");
+                    eprintln!("hexad: could not save {key}: {e}");
                     self.problems.push(format!("could not save {key}: {e}"));
                 }
                 self.reload();
@@ -279,7 +279,7 @@ impl MenuHost {
             // the report is long, copy-pasteable into an issue, and an alert
             // from an accessory app would need activation we refuse to take.
             Ok(()) => open_with(&["-t"], &path),
-            Err(e) => eprintln!("aquad: could not write the diagnostics report: {e}"),
+            Err(e) => eprintln!("hexad: could not write the diagnostics report: {e}"),
         }
     }
 }
@@ -292,7 +292,7 @@ impl MenuHost {
 pub fn open_privacy_pane(pane: &str) {
     let url = format!("x-apple.systempreferences:com.apple.preference.security?{pane}");
     if let Err(e) = std::process::Command::new("open").arg(&url).spawn() {
-        eprintln!("aquad: could not open {url}: {e}");
+        eprintln!("hexad: could not open {url}: {e}");
     }
 }
 
@@ -324,7 +324,7 @@ fn open_with(flags: &[&str], path: &std::path::Path) {
 
     cmd.arg(path);
     if let Err(e) = cmd.spawn() {
-        eprintln!("aquad: could not open {}: {e}", path.display());
+        eprintln!("hexad: could not open {}: {e}", path.display());
     }
 }
 

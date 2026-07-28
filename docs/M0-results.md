@@ -109,4 +109,4 @@ Recommended next steps, in order:
    plan calls for this at M0 precisely so accuracy does not plateau unnoticed.
 4. Implement the clipboard-paste fallback for read-only fields.
 5. Add an undo stack. Writing `AXValue` resets the host application's undo, so
-   the client must keep its own to match Aqua's stackable edits.
+   the client must keep its own to match Hexavoice's stackable edits.

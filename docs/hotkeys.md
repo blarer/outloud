@@ -27,7 +27,7 @@ free here.
 
 ### 1. The Fn/Globe key is not a key
 
-Aqua Voice's default binding, and the most trap-dense key on the board:
+Hexavoice Voice's default binding, and the most trap-dense key on the board:
 
 - It never produces `keyDown`/`keyUp`. It arrives as `flagsChanged` with
   keycode 63 and the `NX_SECONDARYFNMASK` bit (0x800000) indicating
@@ -212,7 +212,7 @@ it) is a loop worth building deliberately rather than as a demo side effect.
 
 ```bash
 cargo run -p hotkey --bin hotkey-demo                     # right-option default
-cargo run -p hotkey --bin hotkey-demo -- fn               # the Aqua binding
+cargo run -p hotkey --bin hotkey-demo -- fn               # the Hexavoice binding
 cargo run -p hotkey --bin hotkey-demo -- cmd+shift+space 250
 cargo run -p hotkey --bin hotkey-demo -- --selftest       # synthetic HID events
 HOTKEY_DEBUG=1 ... # print every keyboard event the tap sees
