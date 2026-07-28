@@ -29,6 +29,11 @@
 //!   recovery. Kept at the edge because it is the only part that needs real
 //!   hardware, so everything else stays testable in CI.
 
+// The capture backend lives in a backend-suffixed file so a future
+// platform-native backend (e.g. WASAPI on Windows) can sit beside it and be
+// selected by `cfg` without churning every `audio::capture::*` call site.
+// cpal covers CoreAudio/WASAPI/ALSA today, so it is the only backend.
+#[path = "capture_cpal.rs"]
 pub mod capture;
 pub mod resample;
 pub mod ring;
