@@ -14,7 +14,12 @@
 //! outcome enum carries a user-facing situation -> action string, and the
 //! caller maps it onto the Error overlay state.
 
-use ax_edit::{AxError, TextSnapshot};
+// `AxError` is only named by the macOS splice/fallback paths below; on other
+// platforms delivery goes through the text-target tier ladder and never
+// mentions it, so an unconditional import is an unused-import error there.
+#[cfg(target_os = "macos")]
+use ax_edit::AxError;
+use ax_edit::TextSnapshot;
 use edit_intent::EditIntent;
 
 /// What the snapshot taken at key-down tells us about the coming utterance.
@@ -113,7 +118,7 @@ pub fn deliver(mode: &Mode, transcript: &str) -> Outcome {
     // the only one measured end to end, is byte-for-byte what M0 proved.
     #[cfg(not(target_os = "macos"))]
     {
-        return deliver_via_tiers(mode, text);
+        deliver_via_tiers(mode, text)
     }
 
     #[cfg(target_os = "macos")]
