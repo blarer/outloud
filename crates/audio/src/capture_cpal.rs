@@ -77,6 +77,15 @@ pub struct CaptureHandle {
 }
 
 impl CaptureHandle {
+    /// The flag that goes false when this capture stops.
+    ///
+    /// Exposed so a consumer draining the ring can die with the stream that
+    /// fills it. Without this, per-utterance capture leaks one drain task
+    /// per dictation, each polling a ring nothing writes to.
+    pub fn stop_flag(&self) -> Arc<AtomicBool> {
+        Arc::clone(&self.running)
+    }
+
     pub fn stop(mut self) {
         self.shutdown();
     }

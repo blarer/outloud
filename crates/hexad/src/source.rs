@@ -150,6 +150,14 @@ pub fn spawn_mic(
 
     // Drain the ring on a steady tick. 30ms matches the VAD frame size, so
     // each tick hands the segmenter roughly one frame.
+    //
+    // The task must STOP when this capture stops. The microphone is now
+    // opened per-utterance, so a drain task that outlived its stream would
+    // accumulate one leaked task per dictation, each holding a consumer for
+    // a ring nothing writes to any more. `stopped` is the same flag the
+    // capture handle flips, so the two die together by construction rather
+    // than by remembering to cancel.
+    let stopped = handle.stop_flag();
     tokio::spawn(async move {
         let mut interval = tokio::time::interval(std::time::Duration::from_millis(DRAIN_TICK_MS));
         // A missed tick (system sleep) should catch up by draining more,
@@ -158,6 +166,9 @@ pub fn spawn_mic(
         let mut buf = vec![0f32; audio::SAMPLE_RATE as usize]; // up to 1s per tick
         loop {
             interval.tick().await;
+            if !stopped.load(std::sync::atomic::Ordering::SeqCst) {
+                return; // this capture is over; its ring is dead
+            }
             let n = consumer.pop(&mut buf);
             if n > 0 && tx.send(FrontendEvent::Chunk(buf[..n].to_vec())).is_err() {
                 return; // supervisor gone: stop draining
