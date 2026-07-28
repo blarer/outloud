@@ -13,6 +13,28 @@ belong to release QA.
 Every claim below was reproduced on this machine. Commands and their exact
 output are quoted. Where something could not be reproduced, it says so.
 
+### How to read this, and what it assumes
+
+Three judgements were made that a reader could reasonably have made
+differently. They are stated up front so the verdict can be re-derived rather
+than taken on trust.
+
+1. **"Beta" is read as a source-install beta on macOS.** The brief said "50
+   real strangers", not which platform or install method. Linux does not work
+   and Windows has never been run, so macOS is the only candidate; and
+   notarization is unavailable, so binary distribution is not. That leaves
+   source installs. A reader who meant "50 strangers downloading a DMG" should
+   read this document as a NO-GO, because B2 cannot be cleared without a paid
+   Apple Developer account.
+2. **"Blocker" means a stranger cannot get to working dictation, or gets
+   silently wrong behaviour.** Not "anything unpolished". Missing features are
+   not blockers; a documented install that produces a daemon which cannot
+   transcribe is.
+3. **Frequency estimates are reasoned, not measured.** Nobody has run a 50
+   person beta. "100%" means the failure is deterministic on a fresh machine
+   and was reproduced as such; percentages below that are judgement and are
+   labelled with the reasoning rather than presented as data.
+
 ---
 
 ## Recommendation: **CONDITIONAL GO**
