@@ -137,16 +137,21 @@ impl MacStatusItem {
             return;
         };
         let tint = glyph_tint(model.state);
-        let image = self.pentacle_image(tint.is_none());
+        let image = self.pentacle_image(tint);
         // The accessibility description is the state, not the shape: a
         // VoiceOver user needs "Aqua: listening", not "pentagram".
         image.setAccessibilityDescription(Some(&NSString::from_str(&model.tooltip)));
         button.setImage(Some(&image));
-        // Template images are recolored by the system for light/dark menu
-        // bars and for the highlighted (menu-open) state, which is what a
-        // quiet monochrome glyph wants. A tinted glyph must keep its own
-        // colour, so it opts out and supplies the tint explicitly.
-        button.setContentTintColor(tint.map(ns_color).as_deref());
+        // The colour is baked into the drawing, so no tint is applied here.
+        //
+        // The template route looks right and does not work for a
+        // hand-drawn image: a template renders from the image's ALPHA
+        // channel, and stroking black into a lock-focus context did not
+        // give the system a mask it would draw, so the item was present,
+        // correctly sized, reported by the accessibility API, and
+        // completely invisible. Explicit colour is less clever and is
+        // actually on screen, which is the entire job of this surface.
+        button.setContentTintColor(None);
         button.setTitle(&NSString::from_str(""));
         button.setToolTip(Some(&NSString::from_str(&model.tooltip)));
     }
@@ -166,7 +171,7 @@ impl MacStatusItem {
     ///
     /// Flipped so the handler's coordinates match this crate's
     /// top-left-origin convention, which is what `mark::path_in` returns.
-    fn pentacle_image(&self, template: bool) -> Retained<NSImage> {
+    fn pentacle_image(&self, tint: Option<Color>) -> Retained<NSImage> {
         let size = NSSize::new(mark::GLYPH_SIZE, mark::GLYPH_SIZE);
         let image = NSImage::initWithSize(NSImage::alloc(), size);
         #[allow(deprecated)]
@@ -198,15 +203,20 @@ impl MacStatusItem {
         // Round joins: at this size a mitre on a 36-degree vertex grows long
         // enough to clip against the glyph box.
         path.setLineJoinStyle(NSLineJoinStyle::Round);
-        // Black, so a template image is a pure mask the system can recolor.
-        // A tinted glyph gets its colour from the button's contentTintColor
-        // rather than baked in here.
-        NSColor::blackColor().setStroke();
+        // Drawn in its final colour. Untinted states use the menu bar's
+        // label colour, which is what follows a light or dark menu bar
+        // without relying on template masking.
+        match tint {
+            Some(c) => ns_color(c).setStroke(),
+            None => NSColor::labelColor().setStroke(),
+        }
         path.stroke();
 
         #[allow(deprecated)]
         image.unlockFocus();
-        image.setTemplate(template);
+        // NOT a template: the colour above is the colour drawn. See the
+        // comment in `set_glyph` for why the template route was abandoned.
+        image.setTemplate(false);
         image
     }
 
