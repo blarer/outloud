@@ -6,7 +6,7 @@
 //! `open`, runs the diagnostics, and quits the process. Keeping the two
 //! apart is what lets the interesting half be tested without a filesystem.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use config::schema::Value;
 use overlay::menu::{MenuId, MenuModel};
@@ -242,7 +242,19 @@ impl MenuHost {
                 out.push_str(&format!("       remedy: {remedy}\n"));
             }
         }
-        let path = std::env::temp_dir().join("aqua-diagnostics.txt");
+        // Beside the config file, not in the temp directory. A
+        // LaunchServices launch gets a per-app sandboxed TMPDIR under
+        // /var/folders that a user cannot find, cannot guess, and cannot
+        // attach to a bug report; a diagnostics report nobody can lay hands
+        // on is not a diagnostic.
+        let path = match config::user_config_path().and_then(|p| p.parent().map(Path::to_path_buf))
+        {
+            Some(dir) => {
+                let _ = std::fs::create_dir_all(&dir);
+                dir.join("diagnostics.txt")
+            }
+            None => std::env::temp_dir().join("aqua-diagnostics.txt"),
+        };
         match std::fs::write(&path, &out) {
             // A text file opened in the editor rather than an AppKit alert:
             // the report is long, copy-pasteable into an issue, and an alert

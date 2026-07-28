@@ -290,9 +290,12 @@ fn overlay_main(
     runtime: aquad::runtime::RuntimeShared,
     run_pipeline: impl FnOnce() -> anyhow::Result<()> + Send + 'static,
 ) -> anyhow::Result<()> {
+    use objc2::rc::Retained;
     use objc2::MainThreadMarker;
-    use objc2_app_kit::{NSApplication, NSApplicationActivationPolicy};
-    use objc2_foundation::{NSDate, NSDefaultRunLoopMode, NSRunLoop};
+    use objc2_app_kit::{
+        NSApplication, NSApplicationActivationPolicy, NSEventMask, NSEventTrackingRunLoopMode,
+    };
+    use objc2_foundation::NSDate;
 
     let mtm = MainThreadMarker::new()
         .ok_or_else(|| anyhow::anyhow!("overlay_main must run on the main thread"))?;
@@ -332,11 +335,19 @@ fn overlay_main(
             let _ = done_tx.send(run_pipeline());
         })?;
 
-    // Poll-render at ~30Hz by spinning the run loop in short slices. An
-    // NSTimer + block would also work (overlay-demo does); the explicit loop
-    // keeps the pipeline-exit check and the render on one thread with no
-    // Rust-side shared mutability.
-    let run_loop = NSRunLoop::currentRunLoop();
+    // Poll-render at ~30Hz, pumping AppKit ourselves rather than handing the
+    // main thread to `NSApplication::run()`, so the pipeline-exit check and
+    // the render stay on one thread with no Rust-side shared mutability.
+    //
+    // "Pumping" here means DEQUEUEING AND DISPATCHING EVENTS, not just
+    // spinning the run loop. Spinning services timers, ports and sources,
+    // which is enough to draw; it does not deliver window-server input to
+    // AppKit. An earlier version of this loop only spun, and the result was
+    // a status item that appeared, updated, and could not be clicked: the
+    // mouse-down never reached the status button. It looked fine in a
+    // screenshot and it responded to accessibility-driven presses (those
+    // call the action directly, bypassing the queue), so only a real click
+    // could catch it.
     loop {
         let frame = shared.snapshot();
         // `overlay.position = "hidden"`: the user asked not to see the
@@ -374,9 +385,28 @@ fn overlay_main(
             }
         }
 
+        // Block up to one frame for the first event, then drain whatever
+        // else is queued without waiting. Blocking is what keeps an idle
+        // daemon off the CPU; draining is what keeps a burst of mouse
+        // events from taking one frame each.
+        //
+        // NSEventTrackingRunLoopMode, not NSDefaultRunLoopMode: menu
+        // tracking runs in the tracking mode, and asking only for default
+        // mode means this loop stops dequeuing the moment a menu opens,
+        // freezing the state updates behind it.
         unsafe {
-            let until = NSDate::dateWithTimeIntervalSinceNow(1.0 / 30.0);
-            run_loop.runMode_beforeDate(NSDefaultRunLoopMode, &until);
+            let deadline = NSDate::dateWithTimeIntervalSinceNow(1.0 / 30.0);
+            let mut until: Option<Retained<NSDate>> = Some(deadline);
+            while let Some(event) = app.nextEventMatchingMask_untilDate_inMode_dequeue(
+                NSEventMask::Any,
+                until.as_deref(),
+                NSEventTrackingRunLoopMode,
+                true,
+            ) {
+                app.sendEvent(&event);
+                // Subsequent iterations must not wait: a nil date polls.
+                until = None;
+            }
         }
         match done_rx.try_recv() {
             Ok(result) => {

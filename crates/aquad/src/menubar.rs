@@ -552,14 +552,16 @@ mod tests {
     fn only_implemented_settings_are_offered() {
         // A row that writes a key nothing in the pipeline reads is a lie:
         // the user believes they changed something and nothing happens.
-        // This test is the gate that keeps the menu honest, and it must be
-        // relaxed only in the same commit that wires the key.
-        const WIRED: &[&str] = &["hotkey", "enabled", "overlay.position"];
+        // The source of truth is the schema's own `wired` flag rather than a
+        // list here, so wiring a setting and offering it are the same edit
+        // and this gate cannot go stale.
         let (_, actions) = build(&status(OverlayState::Idle), &settings());
         for action in &actions {
             if let Action::Set { key, .. } = action {
+                let spec = config::schema::spec_for(key)
+                    .unwrap_or_else(|| panic!("the menu offers unknown key \"{key}\""));
                 assert!(
-                    WIRED.contains(&key.as_str()),
+                    spec.wired,
                     "the menu offers \"{key}\", which no code reads yet; \
                      wire it or drop the row"
                 );
