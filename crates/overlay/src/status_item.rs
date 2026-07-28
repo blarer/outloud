@@ -34,10 +34,10 @@ use objc2::{
     define_class, msg_send, sel, AllocAnyThread, DefinedClass, MainThreadMarker, MainThreadOnly,
 };
 use objc2_app_kit::{
-    NSBezierPath, NSColor, NSControlStateValueOff, NSControlStateValueOn, NSImage, NSLineJoinStyle,
-    NSMenu, NSMenuItem, NSStatusBar, NSStatusItem, NSVariableStatusItemLength,
+    NSBezierPath, NSColor, NSControlStateValueOff, NSControlStateValueOn, NSImage, NSLineCapStyle,
+    NSLineJoinStyle, NSMenu, NSMenuItem, NSStatusBar, NSStatusItem, NSVariableStatusItemLength,
 };
-use objc2_foundation::{NSObject, NSPoint, NSRect, NSSize, NSString};
+use objc2_foundation::{NSObject, NSPoint, NSSize, NSString};
 
 use crate::mark;
 use crate::menu::{glyph_tint, MenuId, MenuItem, MenuModel};
@@ -94,6 +94,11 @@ pub struct MacStatusItem {
     /// while the user may have it open — rebuilding an open menu closes it,
     /// which would make the menu impossible to click.
     applied: Option<MenuModel>,
+    /// The appearance the glyph was last drawn for. The mark is drawn in an
+    /// explicit colour (see `mark_image`), so a light/dark switch must force
+    /// a redraw even when the model itself is unchanged — otherwise the
+    /// glyph keeps the old bar's colour and turns invisible on the new one.
+    applied_dark: Option<bool>,
 }
 
 impl MacStatusItem {
@@ -109,19 +114,26 @@ impl MacStatusItem {
             target,
             mtm,
             applied: None,
+            applied_dark: None,
         })
     }
 
     /// Push a model to the menu bar. Cheap and idempotent: identical models
     /// are ignored, so the host can call this every frame.
     pub fn apply(&mut self, model: &MenuModel) {
-        if self.applied.as_ref() == Some(model) {
+        let dark = self.is_dark_menu_bar();
+        if self.applied.as_ref() == Some(model) && self.applied_dark == Some(dark) {
             return;
         }
-        self.set_glyph(model);
-        let menu = self.build_menu(&model.items);
-        self.item.setMenu(Some(&menu));
+        self.set_glyph(model, dark);
+        // The menu is appearance-independent; rebuild it only when the model
+        // actually changed, because rebuilding closes an open menu.
+        if self.applied.as_ref() != Some(model) {
+            let menu = self.build_menu(&model.items);
+            self.item.setMenu(Some(&menu));
+        }
         self.applied = Some(model.clone());
+        self.applied_dark = Some(dark);
     }
 
     /// Take everything the user clicked since the last call. The host maps
@@ -130,16 +142,37 @@ impl MacStatusItem {
         std::mem::take(&mut *self.target.ivars().borrow_mut())
     }
 
-    fn set_glyph(&self, model: &MenuModel) {
+    /// Whether the status item currently sits in a dark menu bar.
+    ///
+    /// Asked of the BUTTON's `effectiveAppearance`, not the app's: the menu
+    /// bar can be dark while the app appearance is light (dynamic desktop,
+    /// "allow wallpaper tinting" edge cases), and the button is the view
+    /// that actually lives in the bar. Raw `msg_send` because this crate's
+    /// objc2-app-kit feature set does not include NSAppearance, and one
+    /// string comparison does not justify widening it.
+    fn is_dark_menu_bar(&self) -> bool {
+        let Some(button) = self.item.button(self.mtm) else {
+            return false;
+        };
+        let appearance: Option<Retained<AnyObject>> =
+            unsafe { msg_send![&*button, effectiveAppearance] };
+        let Some(appearance) = appearance else {
+            return false;
+        };
+        let name: Retained<NSString> = unsafe { msg_send![&*appearance, name] };
+        name.to_string().contains("Dark")
+    }
+
+    fn set_glyph(&self, model: &MenuModel, dark: bool) {
         let Some(button) = self.item.button(self.mtm) else {
             // No button means no visible item; there is nothing we can do
             // about it here, and the menu is still attached to the item.
             return;
         };
         let tint = glyph_tint(model.state);
-        let image = self.pentacle_image(tint);
+        let image = self.mark_image(tint, dark);
         // The accessibility description is the state, not the shape: a
-        // VoiceOver user needs "Aqua: listening", not "pentagram".
+        // VoiceOver user needs "Aqua: listening", not "megaphone".
         image.setAccessibilityDescription(Some(&NSString::from_str(&model.tooltip)));
         button.setImage(Some(&image));
         // The colour is baked into the drawing, so no tint is applied here.
@@ -156,11 +189,13 @@ impl MacStatusItem {
         button.setToolTip(Some(&NSString::from_str(&model.tooltip)));
     }
 
-    /// Draw the pentacle mark into an `NSImage`.
+    /// Draw the megaphone mark into an `NSImage`.
     ///
-    /// Drawn rather than loaded: there is no pentagram in SF Symbols, and a
-    /// shipped PNG would be wrong at some combination of Retina, menu bar
-    /// height, and the user's menu bar size setting.
+    /// Drawn rather than loaded: the geometry in `crate::mark` is the
+    /// single source shared with the Windows tray backend (an SF Symbol
+    /// would break that, see mark.rs's module doc), and a shipped PNG
+    /// would be wrong at some combination of Retina, menu bar height, and
+    /// the user's menu bar size setting.
     ///
     /// `lockFocusFlipped` rather than `imageWithSize:flipped:drawingHandler:`
     /// because the block form produced a correctly-sized image that never
@@ -171,46 +206,66 @@ impl MacStatusItem {
     ///
     /// Flipped so the handler's coordinates match this crate's
     /// top-left-origin convention, which is what `mark::path_in` returns.
-    fn pentacle_image(&self, tint: Option<Color>) -> Retained<NSImage> {
+    fn mark_image(&self, tint: Option<Color>, dark: bool) -> Retained<NSImage> {
         let size = NSSize::new(mark::GLYPH_SIZE, mark::GLYPH_SIZE);
         let image = NSImage::initWithSize(NSImage::alloc(), size);
         #[allow(deprecated)]
         image.lockFocusFlipped(true);
 
-        let path = NSBezierPath::bezierPath();
-        let points = mark::path_in(mark::GLYPH_SIZE, mark::GLYPH_LINE_WIDTH);
-        for (i, p) in points.iter().enumerate() {
+        let m = mark::mark_in(mark::GLYPH_SIZE);
+        // Drawn in its final colour. Untinted states use explicit white on a
+        // dark bar and near-black on a light one, decided from the button's
+        // real appearance in `is_dark_menu_bar`. NOT `labelColor`: a dynamic
+        // colour resolves against the drawing context's current appearance,
+        // which inside `lockFocus` is whatever the app last cached, so after
+        // a light/dark switch it drew the OLD bar's colour — a white glyph
+        // on a white menu bar, verified by screenshot, while every
+        // programmatic check passed. Same trap family as 64af502.
+        let colour = match tint {
+            Some(c) => ns_color(c),
+            None if dark => NSColor::whiteColor(),
+            // 0.15 grey rather than pure black, matching how menu bar
+            // template glyphs render in the light appearance.
+            None => NSColor::colorWithSRGBRed_green_blue_alpha(0.15, 0.15, 0.15, 1.0),
+        };
+        colour.setFill();
+        colour.setStroke();
+
+        // The horn is FILLED: a stroked outline collapses into scribble at
+        // this size, and the solid horn is the anchor that keeps the glyph
+        // legible across the room (mark.rs's module doc).
+        let horn = NSBezierPath::bezierPath();
+        for (i, p) in m.horn.iter().enumerate() {
             let at = NSPoint::new(p.x, p.y);
             if i == 0 {
-                path.moveToPoint(at);
+                horn.moveToPoint(at);
             } else {
-                path.lineToPoint(at);
+                horn.lineToPoint(at);
             }
         }
-        // The enclosing ring: a pentagram inside a circle is a pentacle,
-        // which is the mark the product asked for, and the ring is also what
-        // makes the glyph read as a deliberate icon rather than as a stray
-        // scribble at 15pt.
-        let inset = mark::GLYPH_LINE_WIDTH / 2.0;
-        path.appendBezierPathWithOvalInRect(NSRect::new(
-            NSPoint::new(inset, inset),
-            NSSize::new(
-                mark::GLYPH_SIZE - mark::GLYPH_LINE_WIDTH,
-                mark::GLYPH_SIZE - mark::GLYPH_LINE_WIDTH,
-            ),
-        ));
-        path.setLineWidth(mark::GLYPH_LINE_WIDTH);
-        // Round joins: at this size a mitre on a 36-degree vertex grows long
-        // enough to clip against the glyph box.
-        path.setLineJoinStyle(NSLineJoinStyle::Round);
-        // Drawn in its final colour. Untinted states use the menu bar's
-        // label colour, which is what follows a light or dark menu bar
-        // without relying on template masking.
-        match tint {
-            Some(c) => ns_color(c).setStroke(),
-            None => NSColor::labelColor().setStroke(),
+        horn.closePath();
+        horn.fill();
+
+        // The sound arcs are STROKED with round caps, matching the logo's
+        // arc treatment. Round caps also stop the arc ends reading as
+        // clipped at 15pt.
+        for wave in &m.waves {
+            let path = NSBezierPath::bezierPath();
+            for (i, p) in wave.iter().enumerate() {
+                let at = NSPoint::new(p.x, p.y);
+                if i == 0 {
+                    path.moveToPoint(at);
+                } else {
+                    path.lineToPoint(at);
+                }
+            }
+            path.setLineWidth(mark::GLYPH_LINE_WIDTH);
+            path.setLineCapStyle(NSLineCapStyle::Round);
+            // Round joins: the arc is sampled as short segments, and mitre
+            // spikes at the joints would fuzz the curve.
+            path.setLineJoinStyle(NSLineJoinStyle::Round);
+            path.stroke();
         }
-        path.stroke();
 
         #[allow(deprecated)]
         image.unlockFocus();
