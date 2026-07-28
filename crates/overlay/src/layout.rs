@@ -73,10 +73,34 @@ pub enum Anchor {
 
 /// Gap between the anchor and the overlay, so the overlay never touches the
 /// text it is annotating.
-const ANCHOR_GAP: f64 = 8.0;
+///
+/// 10, up from 8: at 8 the card visually collided with the descenders of
+/// the line being dictated into on Retina displays, which read as the
+/// overlay covering the text even though it did not.
+const ANCHOR_GAP: f64 = 10.0;
 /// Minimum distance from any screen edge. Keeps the overlay clear of rounded
 /// display corners, the Dock, and the notch shadow.
-const SCREEN_MARGIN: f64 = 12.0;
+///
+/// 16, up from 12: matched to the theme's 18pt card radius. A rounded card
+/// inset by less than its own radius reads as jammed against the edge, and
+/// on displays with rounded corners the card's corner disappeared into the
+/// screen's.
+const SCREEN_MARGIN: f64 = 16.0;
+
+/// The overlay card's size in points, shared by every backend.
+///
+/// Lives here rather than in a backend so macOS and Windows cannot drift,
+/// and so the placement tests exercise the size the product actually ships.
+///
+/// 380x64, from 340x72. Wider and shorter is the single change that most
+/// moves our silhouette toward Aqua's "floating bar": theirs is a wide, low
+/// bar, while a squarer card reads as a dialog. The extra 40pt of width also
+/// buys roughly ten more characters of partial tail, which is the content
+/// the card exists to show.
+pub const OVERLAY_SIZE: Size = Size {
+    width: 380.0,
+    height: 64.0,
+};
 
 /// Compute the overlay's frame (top-left-origin) for an anchor, an overlay
 /// size, and the visible bounds of the screen the anchor falls on.
@@ -131,6 +155,34 @@ pub fn place(anchor: Anchor, overlay: Size, screen: Rect) -> Rect {
     }
 }
 
+/// Bottom-center placement: the overlay horizontally centered on `screen`
+/// and inset from its bottom edge by the standard margin.
+///
+/// This is what Aqua Voice does unconditionally — their FAQ calls it "the
+/// black floating bar at the bottom" — and we offer it as an explicit
+/// preference for people migrating from it. It is deliberately *not* an
+/// [`Anchor`] variant: an anchor describes something the host discovered
+/// about the user's attention (a caret, a pointer), while this is a fixed
+/// user preference that ignores all of that. Keeping it a separate function
+/// also means adding it did not change the exhaustive `match` in every
+/// platform backend.
+///
+/// We do not make it the default. Bottom-center puts the feedback far from
+/// the caret, outside the user's locus of attention
+/// (`docs/ux/02-core-interaction.md`).
+pub fn place_bottom_center(overlay: Size, screen: Rect) -> Rect {
+    let x = screen.origin.x + (screen.size.width - overlay.width) / 2.0;
+    let y = screen.max_y() - SCREEN_MARGIN - overlay.height;
+    // Clamp for the pathological case of an overlay wider than the display,
+    // matching `place`'s guarantee that the result is always on screen.
+    let x = x.max(screen.origin.x + SCREEN_MARGIN);
+    let y = y.max(screen.origin.y + SCREEN_MARGIN);
+    Rect {
+        origin: Point { x, y },
+        size: overlay,
+    }
+}
+
 /// Shape a raw audio level for display.
 ///
 /// Raw RMS microphone levels sit almost entirely in the bottom of the 0..1
@@ -152,10 +204,7 @@ mod tests {
             height: 900.0,
         },
     };
-    const OVERLAY: Size = Size {
-        width: 320.0,
-        height: 56.0,
-    };
+    const OVERLAY: Size = OVERLAY_SIZE;
 
     fn assert_on_screen(r: Rect) {
         assert!(r.origin.x >= SCREEN.origin.x + SCREEN_MARGIN, "{r:?}");
@@ -211,6 +260,67 @@ mod tests {
         let r = place(Anchor::Corner, OVERLAY, SCREEN);
         assert_eq!(r.max_x(), SCREEN.max_x() - SCREEN_MARGIN);
         assert_eq!(r.max_y(), SCREEN.max_y() - SCREEN_MARGIN);
+    }
+
+    #[test]
+    fn bottom_center_is_centered_and_bottom_inset() {
+        // The Aqua-compatible placement. Horizontal centering must be exact,
+        // because a slightly-off bar is more distracting than an obviously
+        // corner-pinned one.
+        let r = place_bottom_center(OVERLAY, SCREEN);
+        let left = r.origin.x - SCREEN.origin.x;
+        let right = SCREEN.max_x() - r.max_x();
+        assert!((left - right).abs() < 1e-9, "not centered: {r:?}");
+        assert_eq!(r.max_y(), SCREEN.max_y() - SCREEN_MARGIN);
+        assert_on_screen(r);
+    }
+
+    #[test]
+    fn bottom_center_respects_a_secondary_screen() {
+        // Centering must be relative to the screen the overlay is on, not to
+        // the global coordinate space, or a second monitor drags the bar
+        // toward the primary display.
+        let screen = Rect::new(-1920.0, 0.0, 1920.0, 1080.0);
+        let r = place_bottom_center(OVERLAY, screen);
+        let left = r.origin.x - screen.origin.x;
+        let right = screen.max_x() - r.max_x();
+        assert!(
+            (left - right).abs() < 1e-9,
+            "not centered on its screen: {r:?}"
+        );
+    }
+
+    #[test]
+    fn bottom_center_survives_an_overlay_wider_than_the_screen() {
+        let huge = Size {
+            width: 5000.0,
+            height: 5000.0,
+        };
+        let r = place_bottom_center(huge, SCREEN);
+        assert_eq!(r.origin.x, SCREEN.origin.x + SCREEN_MARGIN);
+        assert_eq!(r.origin.y, SCREEN.origin.y + SCREEN_MARGIN);
+    }
+
+    #[test]
+    fn the_card_is_a_wide_low_bar_not_a_dialog() {
+        // Aqua-parity silhouette: the shipping size must stay markedly
+        // wider than tall. A future "size to fit the text" change that
+        // squares the card off would lose the family resemblance.
+        assert!(
+            OVERLAY_SIZE.width >= OVERLAY_SIZE.height * 4.0,
+            "overlay {OVERLAY_SIZE:?} is too square to read as a floating bar"
+        );
+    }
+
+    #[test]
+    fn screen_margin_clears_the_card_radius() {
+        // A rounded card inset by less than its own corner radius looks
+        // jammed into the screen edge, and vanishes into rounded displays.
+        assert!(
+            SCREEN_MARGIN >= crate::theme::CARD_RADIUS - 4.0,
+            "margin {SCREEN_MARGIN} too small for radius {}",
+            crate::theme::CARD_RADIUS
+        );
     }
 
     #[test]

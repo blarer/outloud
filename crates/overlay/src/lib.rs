@@ -37,6 +37,10 @@ pub mod layout;
 pub mod menu;
 pub mod pixel;
 pub mod state;
+/// The visual language (palette, radii, type scale, motion) as pure data.
+/// Platform-neutral on purpose: it must compile in the headless build, and
+/// it is what keeps the macOS and Windows backends from drifting apart.
+pub mod theme;
 
 #[cfg(all(target_os = "macos", feature = "display"))]
 pub mod macos;
