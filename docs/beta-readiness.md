@@ -929,6 +929,53 @@ that this assessment would otherwise have had to file.
 
 ---
 
+## A process hazard worth more than any single finding
+
+This is not a product defect, but it nearly shipped one and it will recur.
+
+Several agents share one working tree. During this assessment, `HEAD` stopped
+compiling while **every local checkout still built and tested clean**. A
+`spawn_mic -> Result` change sat uncommitted in `source.rs` while the matching
+`?` at the call site in `main.rs` was committed, swept into an unrelated commit
+by a `git add` on a shared dirty file. Each person had both halves locally, so
+each person's `cargo test` passed. Only a fresh clone saw the truth:
+
+```
+$ git clone <repo> /tmp/check && cd /tmp/check && cargo test --workspace
+error[E0277]: the `?` operator can only be applied to values that implement `Try`
+   --> crates/aquad/src/main.rs:286:37
+```
+
+This is the nastiest shape of failure available in a shared tree: the tree lies
+to everyone who has it, and only a stranger cloning fresh is told the truth. A
+beta tester is exactly that stranger.
+
+**`scripts/verify-head.sh` now makes it a one-command check.** It clones
+committed `HEAD` to a scratch directory and runs fmt, clippy, the test suite,
+and a `--no-default-features` check, the last because the headless
+configuration resolves features differently and is the one least likely to be
+exercised by anyone working on macOS.
+
+Verified in both directions, which is the only way to know a guard works:
+
+```
+$ ./scripts/verify-head.sh                 # current HEAD
+HEAD is buildable from a fresh clone.
+RC=0
+
+$ ./scripts/verify-head.sh 66a3eba         # the commit that was actually broken
+    note: the source repo has 10 uncommitted path(s), none of which are tested here
+==> cargo clippy --workspace --all-targets -- -D warnings
+error[E0277]: the `?` operator can only be applied to values that implement `Try`
+RC=101
+```
+
+It should be run before declaring anything done, and especially after a large
+mechanical change such as the pending rename, where the blast radius of a
+half-committed edit is largest.
+
+---
+
 ## What was not covered
 
 Stated plainly so nobody assumes coverage that does not exist.

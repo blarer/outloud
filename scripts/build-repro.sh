@@ -27,6 +27,11 @@ cd "$ROOT"
 TARGET="${1:-}"
 export SOURCE_DATE_EPOCH="$(git log -1 --pretty=%ct)"
 export CARGO_INCREMENTAL=0
+# System dependencies before the first build. Same reason as ci-check.sh:
+# alsa-sys runs pkg-config in a build script, so a Linux box without
+# libasound2-dev cannot compile the workspace at all, reproducibly or
+# otherwise. No-op where not needed.
+scripts/ci-install-linux-deps.sh
 # TZ/LC pinning: paranoia against proc-macros that format dates.
 export TZ=UTC LC_ALL=C
 

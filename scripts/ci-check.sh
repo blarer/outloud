@@ -13,6 +13,15 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
 
+# System dependencies before anything that compiles. cpal's alsa-sys runs
+# pkg-config in a build script, so even `cargo clippy` fails on a Linux box
+# without libasound2-dev, with an error about a package no lint touches.
+# Self-provisioning here rather than in workflow YAML means a green local run
+# and a green CI run stay the same claim, which is this script's whole reason
+# for existing. It is a no-op on macOS/Windows, when the packages are already
+# present, or when it cannot elevate.
+scripts/ci-install-linux-deps.sh
+
 echo "==> cargo fmt --check"
 cargo fmt --all -- --check
 

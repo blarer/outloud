@@ -51,6 +51,13 @@ which launches via LaunchServices and tails the log file named by
 - Latency-sensitive paths must preserve the timing instrumentation. The
   numeric gates that CI enforces are listed in
   `docs/planning/03-definition-of-done.md`.
+- `./scripts/verify-head.sh` before declaring a change done, and always after
+  a large mechanical change such as a rename. It clones committed `HEAD` to a
+  scratch directory and builds there, which is the only check that sees what a
+  new contributor sees. A passing `cargo test` in your own tree does not prove
+  `HEAD` compiles: if half of a two-file change is still uncommitted, your
+  tree has both halves and `HEAD` has one. That has happened here, and every
+  local checkout was green while `HEAD` was broken.
 
 ## Environmental gotchas (read before debugging permissions)
 
