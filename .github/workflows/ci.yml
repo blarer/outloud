@@ -56,7 +56,8 @@ jobs:
         shell: bash
       - name: Attribute failure
         if: failure()
-        run: echo "::error title=check failed on ${{ matrix.os }}::scripts/ci-check.sh (fmt/clippy/test) failed on ${{ matrix.os }}. Search the step log above for the first 'error' line."
+        run: >-
+          echo "::error title=check failed on ${{ matrix.os }}::scripts/ci-check.sh (fmt/clippy/test) failed on ${{ matrix.os }}. Search the step log above for the first 'error' line."
 
   # MSRV is validated with its own toolchain and WITHOUT --locked semantics
   # being violated: same lockfile, older compiler. If this fails, either fix
@@ -83,7 +84,8 @@ jobs:
         run: cargo +"$MSRV" build --workspace --locked
       - name: Attribute failure
         if: failure()
-        run: echo "::error title=MSRV build failed::Workspace does not build with Rust $MSRV. Either fix the code or bump the documented MSRV (docs/build-and-release.md#msrv-policy) in a deliberate PR."
+        run: >-
+          echo "::error title=MSRV build failed::Workspace does not build with Rust $MSRV. Either fix the code or bump the documented MSRV (docs/build-and-release.md#msrv-policy) in a deliberate PR."
 
   # Licence + CVE gate. Runs on PRs (catches a bad dep at review time) and
   # is additionally scheduled nightly by audit-nightly below, because new
@@ -175,7 +177,8 @@ jobs:
       - name: Attribute failure
         if: failure()
         shell: bash
-        run: echo "::error title=build failed for ${{ matrix.target }}::Workspace does not compile for ${{ matrix.target }} on ${{ matrix.os }} (cross: ${{ matrix.use-cross || 'false' }}). The first 'error' line in the Build step above names the crate at fault."
+        run: >-
+          echo "::error title=build failed for ${{ matrix.target }}::Workspace does not compile for ${{ matrix.target }} on ${{ matrix.os }} (cross: ${{ matrix.use-cross || 'false' }}). The first 'error' line in the Build step above names the crate at fault."
 
   # Headless build: proves the daemon path stays display-free. Runs on a
   # plain ubuntu container with no X/Wayland present, which IS the deployment
@@ -217,4 +220,5 @@ jobs:
         run: REPRO_VERIFY=1 scripts/build-repro.sh
       - name: Attribute failure
         if: failure()
-        run: echo "::error title=repro job failed::Either the workspace failed to compile on x86_64 Linux (see the first 'error' line above) or the double build produced different hashes; the script prints both hashes and suggests diffoscope."
+        run: >-
+          echo "::error title=repro job failed::Either the workspace failed to compile on x86_64 Linux (see the first 'error' line above) or the double build produced different hashes; the script prints both hashes and suggests diffoscope."

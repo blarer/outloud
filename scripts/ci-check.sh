@@ -22,6 +22,12 @@ cd "$ROOT"
 # present, or when it cannot elevate.
 scripts/ci-install-linux-deps.sh
 
+echo "==> workflow YAML"
+# Cheapest check, so it runs first: a workflow that does not parse produces a
+# 0-second run with no jobs and no line number, which is far more expensive to
+# diagnose from the GitHub UI than from here.
+scripts/ci-validate-workflows.sh
+
 echo "==> cargo fmt --check"
 cargo fmt --all -- --check
 
