@@ -974,6 +974,19 @@ It should be run before declaring anything done, and especially after a large
 mechanical change such as the pending rename, where the blast radius of a
 half-committed edit is largest.
 
+**It happened again while this was being written**, which is the strongest
+argument for the script existing. The commit that was meant to introduce
+`verify-head.sh` raced with another agent's `git add`, and the script, this
+section, and the `CONTRIBUTING.md` note all landed inside `8c2b50c`, a commit
+about Linux CI dependencies. Content survived byte-identical and the file kept
+its executable mode, so nothing was lost, but the attribution and the commit
+message are wrong and were left that way: rewriting history that several agents
+have already pulled is far worse than a misleading message.
+
+Twice in one session, from two different directions. The window in both cases
+was between `git add` and `git commit`, which is the thing to close. Staging
+and committing as one operation, or stashing first, would have prevented both.
+
 ---
 
 ## What was not covered
