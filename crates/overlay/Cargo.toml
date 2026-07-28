@@ -74,6 +74,12 @@ block2 = { version = "0.6", optional = true }
 name = "overlay-demo"
 path = "src/bin/overlay-demo.rs"
 
+# The menu-bar item, demonstrable on its own so "does the icon appear and can
+# I click it" is answerable without building the whole daemon.
+[[bin]]
+name = "status-demo"
+path = "src/bin/status-demo.rs"
+
 # Windows overlay: layered/click-through/non-activating window plus GDI
 # text drawing. Same double gating as the AppKit dependencies above: only
 # Windows targets download it, only display builds link it.

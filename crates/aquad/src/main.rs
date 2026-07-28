@@ -296,6 +296,12 @@ fn overlay_main(
     // so the user's focused app keeps keyboard focus the entire time.
     let app = NSApplication::sharedApplication(mtm);
     app.setActivationPolicy(NSApplicationActivationPolicy::Accessory);
+    // Without this the status bar never wires itself up and the menu bar
+    // item silently does not appear: AppKit defers that setup until the app
+    // considers itself launched, which normally happens inside `run()`. We
+    // never call `run()` — the loop below pumps the run loop itself so the
+    // pipeline-exit check stays on this thread — so we have to say it.
+    app.finishLaunching();
 
     let mut ov = overlay::platform_overlay()?;
 
