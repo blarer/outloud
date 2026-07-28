@@ -45,14 +45,20 @@ jobs:
   macos:
     needs: compliance
     runs-on: macos-15
+    env:
+      # Evaluated here because `secrets` is unavailable in step-level `if:`.
+      HAVE_MACOS_CERT: ${{ secrets.MACOS_CERT_P12 != '' }}
+      HAVE_APPLE_NOTARY: ${{ secrets.APPLE_APP_PASSWORD != '' }}
     steps:
       - uses: actions/checkout@v4
       - uses: Swatinem/rust-cache@v2
         with:
           key: release-macos
       - name: Import Developer ID certificate
-        # Secrets are unavailable in forks; skip cleanly instead of failing.
-        if: ${{ secrets.MACOS_CERT_P12 != '' }}
+        # Secrets are unavailable in forks, so this must skip rather than fail.
+        # The check reads a job-level env var because the `secrets` context is
+        # not available to step-level `if:` conditions.
+        if: env.HAVE_MACOS_CERT == 'true'
         env:
           MACOS_CERT_P12: ${{ secrets.MACOS_CERT_P12 }}
           MACOS_CERT_PASSWORD: ${{ secrets.MACOS_CERT_PASSWORD }}
@@ -72,7 +78,7 @@ jobs:
           security list-keychains -d user -s "$KEYCHAIN" login.keychain-db
           rm -f "$RUNNER_TEMP/cert.p12"
       - name: Store notarytool credentials
-        if: ${{ secrets.APPLE_APP_PASSWORD != '' }}
+        if: env.HAVE_APPLE_NOTARY == 'true'
         env:
           APPLE_ID: ${{ secrets.APPLE_ID }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
@@ -98,13 +104,15 @@ jobs:
       matrix:
         target: [x86_64-pc-windows-msvc, aarch64-pc-windows-msvc]
     runs-on: windows-2025
+    env:
+      HAVE_WINDOWS_CERT: ${{ secrets.WINDOWS_CERT_PFX != '' }}
     steps:
       - uses: actions/checkout@v4
       - uses: Swatinem/rust-cache@v2
         with:
           key: release-${{ matrix.target }}
       - name: Import Authenticode certificate
-        if: ${{ secrets.WINDOWS_CERT_PFX != '' }}
+        if: env.HAVE_WINDOWS_CERT == 'true'
         shell: pwsh
         env:
           WINDOWS_CERT_PFX: ${{ secrets.WINDOWS_CERT_PFX }}
