@@ -628,6 +628,21 @@ mod tests {
     }
 
     #[test]
+    fn inert_settings_reach_the_user_through_the_menu() {
+        // A bundled app has no terminal, so stderr is invisible: the menu is
+        // the only place a user can learn that a setting they wrote does
+        // nothing. The host puts these in `config_problems`; this pins that
+        // they are actually rendered.
+        let mut st = status(OverlayState::Idle);
+        st.config_problems
+            .push("\"microphone\" is set but not implemented yet; it has no effect".into());
+        let (model, _) = build(&st, &settings());
+        let text = format!("{:?}", model.items);
+        assert!(text.contains("no effect"), "{text}");
+        assert!(text.contains("microphone"), "{text}");
+    }
+
+    #[test]
     fn config_problems_reach_the_user() {
         let mut st = status(OverlayState::Idle);
         st.config_problems

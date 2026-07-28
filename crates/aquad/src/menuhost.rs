@@ -109,6 +109,24 @@ impl MenuHost {
         match built {
             Ok((cfg, warnings)) => {
                 self.problems.extend(warnings.iter().map(|w| w.to_string()));
+                // Settings the user explicitly set that no code reads yet.
+                // Silently ignoring them is the file-level version of the
+                // lie the menu refuses to tell by only offering wired keys:
+                // someone who writes `microphone = "no-such-device"` gets a
+                // daemon that records from a different device and never says
+                // so. Reported to BOTH surfaces on purpose -- stderr for a
+                // terminal launch, the menu for a bundled one, which has no
+                // terminal to print to at all.
+                for spec in cfg.inert_settings() {
+                    eprintln!(
+                        "aquad: config sets \"{}\" but nothing reads it yet; it has no effect",
+                        spec.key
+                    );
+                    self.problems.push(format!(
+                        "\"{}\" is set but not implemented yet; it has no effect",
+                        spec.key
+                    ));
+                }
                 self.settings = Settings::from_config(&cfg, user.map(|(p, _)| p));
             }
             Err(e) => {
