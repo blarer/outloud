@@ -139,10 +139,13 @@ pub fn platform_overlay() -> anyhow::Result<Box<dyn Overlay>> {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-
+    // Imported inside the cfg arms below: on a Windows display build every
+    // arm is compiled out, so a top-level `use super::*` would be unused.
     #[test]
     fn platform_overlay_off_display_is_unsupported_not_a_panic() {
+        #[allow(unused_imports)]
+        use super::*;
+
         // On headless builds and unsupported platforms this must be a clean
         // error. On macOS+display it must still not panic off the main
         // thread. On Windows+display construction may genuinely succeed, so

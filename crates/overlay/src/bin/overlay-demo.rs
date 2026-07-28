@@ -11,14 +11,21 @@ fn main() -> anyhow::Result<()> {
     #[cfg(all(target_os = "macos", feature = "display"))]
     return demo::run();
 
-    #[cfg(not(all(target_os = "macos", feature = "display")))]
+    #[cfg(all(target_os = "windows", feature = "display"))]
+    return windemo::run();
+
+    #[cfg(not(any(
+        all(target_os = "macos", feature = "display"),
+        all(target_os = "windows", feature = "display")
+    )))]
     {
         // Same contract as `overlay::platform_overlay()`: unsupported is a
         // clean, explained exit, not a crash — this binary must compile and
         // run everywhere the workspace builds.
         eprintln!(
-            "overlay-demo: unsupported here (needs macOS and the `display` feature). \
-             The state machine itself is platform-neutral; see `overlay::OverlayState`."
+            "overlay-demo: unsupported here (needs macOS or Windows and the `display` \
+             feature). The state machine itself is platform-neutral; see \
+             `overlay::OverlayState`."
         );
         Ok(())
     }
@@ -142,5 +149,92 @@ mod demo {
         // overlay alive until then.
         let _keep: Retained<NSApplication> = app;
         Ok(())
+    }
+}
+
+/// The same demo for Windows. Kept separate rather than abstracted over the
+/// two platforms because the driving loops differ in kind: AppKit needs its
+/// run loop pumped from an NSTimer block, while the layered window needs
+/// nothing but a sleep. Sharing the script is what matters, and it does.
+#[cfg(all(target_os = "windows", feature = "display"))]
+mod windemo {
+    use std::time::Instant;
+
+    use overlay::{Anchor, OverlayFrame, OverlayState, Point};
+
+    const PARTIAL: &str =
+        "change the deploy target from staging to production and rerun the smoke tests";
+    const STEP_SECS: f64 = 2.5;
+    const CYCLES: usize = 2;
+
+    /// Same script as the macOS demo, with the paste hint spelled for
+    /// Windows keyboards. The invisible states are included deliberately:
+    /// half the contract is that the overlay HIDES itself.
+    fn script() -> Vec<(OverlayState, Option<&'static str>)> {
+        vec![
+            (
+                OverlayState::ModelLoading,
+                Some("Loading model... will transcribe in ~3s"),
+            ),
+            (OverlayState::Idle, None),
+            (OverlayState::Listening, None),
+            (OverlayState::Transcribing, Some("... 612ms")),
+            (OverlayState::Injecting, None),
+            (
+                OverlayState::Error,
+                Some("Field refused write -> text on clipboard, press Ctrl+V"),
+            ),
+            (
+                OverlayState::NoPermission,
+                Some("Focused window is elevated (UIPI) -> switch windows"),
+            ),
+            (OverlayState::DegradedOffline, None),
+        ]
+    }
+
+    pub fn run() -> anyhow::Result<()> {
+        let mut ov = overlay::platform_overlay()?;
+        let states = script();
+        let total = states.len() * CYCLES;
+        let start = Instant::now();
+
+        println!(
+            "overlay-demo: cycling {} states x{} ({}s each). Focus another app and type; \
+             your keystrokes must keep landing there, and clicks must pass through the \
+             overlay to whatever is underneath.",
+            states.len(),
+            CYCLES,
+            STEP_SECS
+        );
+
+        let mut prev_step = usize::MAX;
+        loop {
+            let elapsed = start.elapsed().as_secs_f64();
+            let step = (elapsed / STEP_SECS) as usize;
+            if step >= total {
+                ov.hide()?;
+                return Ok(());
+            }
+            let (state, detail) = states[step % states.len()];
+            if prev_step != step {
+                println!("  [{:>2}/{}] {}", step + 1, total, state);
+                prev_step = step;
+            }
+            let within = (elapsed % STEP_SECS) / STEP_SECS;
+            // A synthetic meter and a growing tail, so both live elements
+            // are visibly exercised rather than drawn once and frozen.
+            let frame = OverlayFrame {
+                state,
+                audio_level: ((elapsed * 3.0).sin() * 0.5 + 0.5) as f32,
+                partial_text: PARTIAL
+                    .chars()
+                    .take((PARTIAL.chars().count() as f64 * within) as usize)
+                    .collect(),
+                detail: detail.map(str::to_string),
+                anchor: Anchor::Cursor(Point { x: 600.0, y: 400.0 }),
+            };
+            ov.render(&frame)?;
+            std::thread::sleep(std::time::Duration::from_millis(33));
+        }
     }
 }

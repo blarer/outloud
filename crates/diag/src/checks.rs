@@ -32,6 +32,21 @@ impl Check for AccessibilityPermission {
     }
 
     fn run(&self, env: &Env) -> CheckOutcome {
+        // Windows needs no accessibility grant at all: any process may be a
+        // UI Automation client. The elevation boundary is the real limit, so
+        // that is what the check reports instead of a permission that does
+        // not exist. Reporting "unimplemented" here (as this did while the
+        // backends were stubs) would send a Windows user hunting for a
+        // setting they cannot find.
+        if cfg!(target_os = "windows") {
+            return CheckOutcome::warn(
+                "Windows: UI Automation needs no permission grant, but a non-elevated \
+                 process cannot read or write ELEVATED windows (UIPI)",
+                ErrorClass::Environment,
+                "if dictation goes silent, check whether the focused window is running as \
+                 administrator; move focus to a normal window (docs/compat-matrix.md)",
+            );
+        }
         if !cfg!(target_os = "macos") {
             return CheckOutcome::warn(
                 "not macOS: accessibility backend unimplemented here",
@@ -422,6 +437,8 @@ fn running_chromium_apps() -> Vec<String> {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DisplayKind {
     MacOsAqua,
+    /// A Windows interactive desktop (window station WinSta0).
+    WindowsDesktop,
     Wayland,
     X11,
     HeadlessOrSsh,
@@ -431,11 +448,26 @@ pub enum DisplayKind {
 /// an SSH session can still have DISPLAY forwarded, but injection then acts
 /// on a remote X server, which is almost never what the user means.
 pub fn detect_display(env: &Env, is_macos: bool) -> DisplayKind {
+    detect_display_on(env, is_macos, cfg!(target_os = "windows"))
+}
+
+/// The detection above with the platform passed in, so both platform
+/// branches are unit-testable from any host. `detect_display` is the
+/// production entry point that supplies the real `cfg!`.
+pub fn detect_display_on(env: &Env, is_macos: bool, is_windows: bool) -> DisplayKind {
     if env.get("SSH_TTY").is_some() || env.get("SSH_CONNECTION").is_some() {
         return DisplayKind::HeadlessOrSsh;
     }
     if is_macos {
         return DisplayKind::MacOsAqua;
+    }
+    // Windows has no display-server environment variable to probe: an
+    // interactive logon always has a desktop, and the non-interactive cases
+    // (a service, SSH into Windows) are caught by the SSH check above or by
+    // the caller running headless anyway. Passed in rather than sniffed
+    // because there is nothing honest to sniff.
+    if is_windows {
+        return DisplayKind::WindowsDesktop;
     }
     if env.get("WAYLAND_DISPLAY").is_some() {
         return DisplayKind::Wayland;
@@ -456,6 +488,9 @@ impl Check for DisplayServer {
     fn run(&self, env: &Env) -> CheckOutcome {
         match detect_display(env, cfg!(target_os = "macos")) {
             DisplayKind::MacOsAqua => CheckOutcome::pass("macOS Aqua session"),
+            DisplayKind::WindowsDesktop => CheckOutcome::pass(
+                "Windows interactive desktop (UI Automation and SendInput available)",
+            ),
             DisplayKind::X11 => CheckOutcome::pass("X11 session (XTEST injection available)"),
             DisplayKind::Wayland => CheckOutcome::warn(
                 "Wayland session: synthetic input is blocked by design",
@@ -933,6 +968,31 @@ mod tests {
         assert_eq!(
             detect_display(&Env::from_pairs(&[]), false),
             DisplayKind::HeadlessOrSsh
+        );
+    }
+
+    #[test]
+    fn windows_is_a_desktop_unless_ssh() {
+        // No env var says "there is a desktop" on Windows, so the platform
+        // itself is the signal; SSH into Windows must still read headless,
+        // because a remote session has no local window station to inject to.
+        assert_eq!(
+            detect_display_on(&Env::from_pairs(&[]), false, true),
+            DisplayKind::WindowsDesktop
+        );
+        assert_eq!(
+            detect_display_on(
+                &Env::from_pairs(&[("SSH_CONNECTION", "1 2 3 4")]),
+                false,
+                true
+            ),
+            DisplayKind::HeadlessOrSsh
+        );
+        // macOS wins if both flags are somehow set: the cfg!s are mutually
+        // exclusive in production, and this pins the precedence anyway.
+        assert_eq!(
+            detect_display_on(&Env::from_pairs(&[]), true, true),
+            DisplayKind::MacOsAqua
         );
     }
 

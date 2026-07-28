@@ -28,6 +28,20 @@ fn main() {
         std::process::exit(selftest::run());
     }
 
+    // Everywhere else the selftest would need that platform's synthetic
+    // input API (SendInput on Windows), and injecting keys to test the hook
+    // that observes them is a loop worth building deliberately rather than
+    // as a demo side effect. Say so instead of silently binding the literal
+    // chord "--selftest" and looking broken.
+    #[cfg(not(target_os = "macos"))]
+    if first.as_deref() == Some("--selftest") {
+        eprintln!(
+            "hotkey-demo: --selftest is macOS-only (it posts synthetic HID events through \
+             the real tap). On Windows, hold the chord by hand and watch the events below."
+        );
+        std::process::exit(2);
+    }
+
     let chord: Chord = match first {
         Some(s) => match s.parse() {
             Ok(c) => c,

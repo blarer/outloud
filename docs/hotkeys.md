@@ -181,7 +181,34 @@ The hook's own traps:
 | Silent-death mode | tap disabled on timeout: **handled, re-enabled** | hook silently removed on timeout: **handled, 2s watchdog reinstalls + resets** | X server grab persists | portal session can be revoked |
 | Permission required | Accessibility (already required) | none for hook (but AV heuristics flag it) | none | user consent dialog |
 
-## Verifying on a real machine
+## Verifying on a real machine (Windows)
+
+```powershell
+cargo run -p hotkey --bin hotkey-demo                     # right Alt (default)
+cargo run -p hotkey --bin hotkey-demo -- ctrl+shift+space 250
+cargo run -p overlay --bin overlay-demo                   # focus/click-through check
+```
+
+What to check with your own eyes, since CI can compile this but never run it:
+
+1. **Both edges fire.** Hold the chord: `Pressed` on the way down,
+   `Released` on the way up. A tap should give `Latched`, and the next tap
+   `Unlatched`.
+2. **Focus is never stolen.** With `overlay-demo` running, type into
+   Notepad. Every keystroke must land in Notepad, and clicks where the
+   overlay sits must reach the window underneath.
+3. **The UIPI wall.** Open an *administrator* PowerShell, focus it, and hold
+   the chord: nothing fires, by design. Move focus to a normal window and it
+   works again. If that surprises you, re-read the UIPI trap above.
+4. **The watchdog.** Suspending the machine or a long debugger stall can get
+   the hook removed; within ~2s the log should say it was reinstalled rather
+   than going quiet forever.
+
+`--selftest` is macOS-only: it posts synthetic HID events through the real
+tap, and the Windows equivalent (SendInput feeding the hook that observes
+it) is a loop worth building deliberately rather than as a demo side effect.
+
+## Verifying on a real machine (macOS)
 
 ```bash
 cargo run -p hotkey --bin hotkey-demo                     # right-option default
