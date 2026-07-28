@@ -39,6 +39,9 @@ pub mod state;
 #[cfg(all(target_os = "macos", feature = "display"))]
 pub mod macos;
 
+#[cfg(all(target_os = "windows", feature = "display"))]
+pub mod windows;
+
 pub use layout::{place, Anchor, Point, Rect, Size};
 pub use state::OverlayState;
 
@@ -118,10 +121,17 @@ pub fn platform_overlay() -> anyhow::Result<Box<dyn Overlay>> {
         })?;
         Ok(Box::new(macos::MacOverlay::new(mtm)?))
     }
-    #[cfg(not(all(target_os = "macos", feature = "display")))]
+    #[cfg(all(target_os = "windows", feature = "display"))]
+    {
+        Ok(Box::new(windows::WinOverlay::new()?))
+    }
+    #[cfg(not(any(
+        all(target_os = "macos", feature = "display"),
+        all(target_os = "windows", feature = "display")
+    )))]
     {
         anyhow::bail!(
-            "overlay: unsupported here (needs macOS and the `display` feature); \
+            "overlay: unsupported here (needs macOS or Windows and the `display` feature); \
              terminal surfaces render the same state machine via OSC instead"
         )
     }
@@ -133,9 +143,14 @@ mod tests {
 
     #[test]
     fn platform_overlay_off_display_is_unsupported_not_a_panic() {
-        // On headless builds and non-macOS this must be a clean error.
-        // On macOS+display it must still not panic off the main thread.
-        #[cfg(not(all(target_os = "macos", feature = "display")))]
+        // On headless builds and unsupported platforms this must be a clean
+        // error. On macOS+display it must still not panic off the main
+        // thread. On Windows+display construction may genuinely succeed, so
+        // no assertion is made there beyond not panicking.
+        #[cfg(not(any(
+            all(target_os = "macos", feature = "display"),
+            all(target_os = "windows", feature = "display")
+        )))]
         assert!(platform_overlay().is_err());
         #[cfg(all(target_os = "macos", feature = "display"))]
         {

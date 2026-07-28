@@ -23,6 +23,7 @@ display = [
     "dep:objc2-foundation",
     "dep:objc2-app-kit",
     "dep:block2",
+    "dep:windows",
 ]
 
 [dependencies]
@@ -61,3 +62,14 @@ block2 = { version = "0.6", optional = true }
 [[bin]]
 name = "overlay-demo"
 path = "src/bin/overlay-demo.rs"
+
+# Windows overlay: layered/click-through/non-activating window plus GDI
+# text drawing. Same double gating as the AppKit dependencies above: only
+# Windows targets download it, only display builds link it.
+[target.'cfg(target_os = "windows")'.dependencies]
+windows = { version = "0.62", optional = true, features = [
+    "Win32_Foundation",
+    "Win32_Graphics_Gdi",
+    "Win32_UI_HiDpi",
+    "Win32_UI_WindowsAndMessaging",
+] }
