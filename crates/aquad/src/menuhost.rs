@@ -332,4 +332,64 @@ mod tests {
         };
         assert!(!host.handle(MenuId(999)));
     }
+
+    /// Nothing but a click may write the config file.
+    ///
+    /// Reported twice during beta prep as "the daemon appended
+    /// `enabled = false` on its own". Both sightings turned out to be real
+    /// clicks (menu-driven verification runs), but the failure it describes
+    /// is severe enough to pin down: `enabled` is the master switch, so a
+    /// spurious write would leave a daemon that starts, shows its icon,
+    /// reports idle, and never responds to the hotkey, across restarts, with
+    /// no visible cause. This proves the passive paths -- construction,
+    /// reload, watcher polling, model rebuilds -- leave the file untouched.
+    #[test]
+    fn nothing_but_a_click_writes_the_config() {
+        let dir = std::env::temp_dir().join(format!("aqua-nowrite-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        // XDG_CONFIG_HOME is process-global, so this test owns it while it
+        // runs and restores it afterwards.
+        let _guard = crate::menuhost::tests::env_lock();
+        let old = std::env::var_os("XDG_CONFIG_HOME");
+        std::env::set_var("XDG_CONFIG_HOME", &dir);
+
+        let mut host = MenuHost::new(RuntimeShared::new());
+        let path = dir.join("aqua").join("config.toml");
+        let before = std::fs::read(&path).expect("first run writes the starter file");
+
+        // Every passive path a running daemon takes between clicks.
+        for _ in 0..5 {
+            host.reload();
+            host.poll_file_changes();
+            let _ = host.model(
+                overlay::OverlayState::Idle,
+                Some("input device changed; rebuilding stream".into()),
+                &Runtime {
+                    bound_hotkey: Some("right-option".into()),
+                    microphone: Some("Built-in".into()),
+                    microphone_blocked: false,
+                },
+            );
+        }
+
+        assert_eq!(
+            before,
+            std::fs::read(&path).unwrap(),
+            "the daemon rewrote config.toml without a click"
+        );
+
+        match old {
+            Some(v) => std::env::set_var("XDG_CONFIG_HOME", v),
+            None => std::env::remove_var("XDG_CONFIG_HOME"),
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Environment variables are process-global; tests that set them must
+    /// not run concurrently.
+    pub(crate) fn env_lock() -> std::sync::MutexGuard<'static, ()> {
+        static LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+        LOCK.lock().unwrap_or_else(|e| e.into_inner())
+    }
 }
