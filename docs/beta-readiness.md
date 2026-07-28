@@ -406,7 +406,74 @@ comparison to Aqua's ~450ms still holds comfortably, but a beta README must not
 overstate. Corrected to **131-215ms** with an explanation that the spread
 depends on the transport.
 
-### M6. A stray `enabled = false` write, not reproduced
+### M6. Most settings in the config file are silently ignored
+
+**Frequency: high. Anyone who opens the config file and changes something.**
+
+The starter config is generated with all 16 settings listed and documented.
+Thirteen of them do nothing. They are accepted without warning and changing
+them has no observable effect.
+
+The menu bar is honest about this, and deliberately so. `crates/aquad/src/
+menubar.rs` carries a test gate:
+
+```rust
+const WIRED: &[&str] = &["hotkey", "enabled", "overlay.position"];
+...
+assert!(WIRED.contains(&key.as_str()),
+    "the menu offers \"{key}\", which no code reads yet; ...
+```
+
+with a comment that says the gate exists so "the user believes they changed
+something and nothing happens" cannot occur. That is exactly the right
+instinct. The problem is that the gate protects the *menu* while the *config
+file* offers all 16 keys with no such protection, and the config file is what
+the quickstart tells users to edit.
+
+Three confirmed cases, all against the bundled binary with `XDG_CONFIG_HOME`
+pointed at a scratch config:
+
+`insertion.mode = "stream"` versus `"on-release"`, identical behaviour, no
+warning:
+
+```
+insertion.mode = "stream"
+e2e: release->text 198ms ... via synthetic-keys | "Streaming mode test."
+insertion.mode = "on-release"
+e2e: release->text 147ms ... via synthetic-keys | "Streaming mode test."
+```
+
+The `stream` crate is fully built (`session.rs`, `undo.rs`, coalescing, a
+commit horizon) but `crates/aquad/Cargo.toml` does not depend on it at all, so
+the setting cannot possibly work. Independently noted in
+[`competitive-analysis.md`](competitive-analysis.md).
+
+`formatting.casing = "upper"` changes nothing:
+
+```
+e2e: release->text 142ms ... | "Casing test sentence."     <- not upper-cased
+```
+
+`microphone = "no-such-device-at-all"` is the worst of the three, because the
+daemon reports capturing from a device the user did not select and does not
+mention that its choice was ignored:
+
+```
+$ printf 'microphone = "no-such-device-at-all"\n' > config.toml
+aquad: capturing from MacBook Pro Microphone
+```
+
+A user who sets that and hears nothing has no way to learn the setting was
+never honoured.
+
+**Recommended fix, cheap and honest:** mark each `KeySpec` in
+`crates/config/src/schema.rs` as wired or not, warn once at startup for any
+unwired key the user actually set, and mark the unwired ones in the generated
+starter file. That converts thirteen silent no-ops into one honest line of
+output. The alternative, wiring all thirteen, is real work and not beta-
+blocking; being honest about them is.
+
+### M7. A stray `enabled = false` write, not reproduced
 
 **Frequency: unknown. Reported for completeness, not confirmed.**
 
@@ -473,8 +540,9 @@ Landed in the README's "Known limitations" section in this commit:
 5. The Accessibility grant dies on every rebuild (cdhash pinning).
 6. Revoking a permission while running is not noticed until relaunch.
 7. macOS 13-25 has no bundled recognizer; only 26+ has `SpeechTranscriber`.
-8. Freeform edits are not wired to the language model.
-9. Linux does not work; Windows compiles but has never been run.
+8. Most config settings are accepted but not yet read by anything.
+9. Freeform edits are not wired to the language model.
+10. Linux does not work; Windows compiles but has never been run.
 
 ---
 
@@ -492,14 +560,15 @@ Ordered by user pain per unit of effort.
 | 6 | `--version` on `aquad`, `shell-bridge`, `spike-cli` | ~10 lines | Blocks every bug report |
 | 7 | Reap stale helpers at daemon startup | ~20 lines | Kills M4's whole class without finding the trigger |
 | 8 | Poll accessibility trust once a second | ~25 lines | Turns a silent failure into a visible state |
-| 9 | Make `bundle-aquad-macos.sh` fail, not warn, without `swiftc` | 2 lines | Stops shipping a recognizer-less bundle |
-| 10 | Always rebuild the helper, or hash-check it | 2 lines | The staleness that hid blocker B1 |
-| 11 | `shell-bridge uninstall` | ~20 lines | Users should not need the sledgehammer script |
-| 12 | Issue template asking for doctor output and version | 20 min | Turns "it doesn't work" into a diagnosis |
-| 13 | Wire `migrate()` into the config load path | ~15 lines | Must exist before schema version 2, not after |
-| 14 | Buy the Developer ID certificate | 99 USD, days | Unblocks binary distribution and fixes cdhash pain |
+| 9 | Warn once for settings the user set that nothing reads | ~20 lines | Thirteen silent no-ops become one honest line |
+| 10 | Make `bundle-aquad-macos.sh` fail, not warn, without `swiftc` | 2 lines | Stops shipping a recognizer-less bundle |
+| 11 | Always rebuild the helper, or hash-check it | 2 lines | The staleness that hid blocker B1 |
+| 12 | `shell-bridge uninstall` | ~20 lines | Users should not need the sledgehammer script |
+| 13 | Issue template asking for doctor output and version | 20 min | Turns "it doesn't work" into a diagnosis |
+| 14 | Wire `migrate()` into the config load path | ~15 lines | Must exist before schema version 2, not after |
+| 15 | Buy the Developer ID certificate | 99 USD, days | Unblocks binary distribution and fixes cdhash pain |
 
-Items 5 through 8 are the beta-blocking remainder. All four are small and none
+Items 5 through 9 are the beta-blocking remainder. All five are small and none
 requires a design decision. Items 1 through 4 landed with this document.
 
 ---

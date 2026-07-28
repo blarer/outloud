@@ -310,6 +310,7 @@ evidence in [`docs/beta-readiness.md`](docs/beta-readiness.md).
 | Accessibility grant dies on every rebuild | Toggle reads "on", every call fails | `tccutil reset Accessibility dev.aquaoss.aquad`, then re-grant |
 | Revoking a permission while running is not noticed | Dictation stops working until relaunch | Quit and relaunch after changing permissions |
 | macOS 13-25 has no bundled recognizer | `recognizer never becomes ready` | Only macOS 26+ has `SpeechTranscriber`; other backends are stubbed |
+| Most config settings are not read yet | Changing them has no effect and no warning | Only `hotkey`, `enabled`, and `overlay.position` are wired today |
 | Freeform edits are not wired up | "tighten this up" reports that it needs the language model | Use the literal commands listed above |
 | Linux does not work; Windows is unexercised | — | macOS only for now |
 
