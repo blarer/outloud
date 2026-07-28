@@ -18,8 +18,8 @@ output are quoted. Where something could not be reproduced, it says so.
 ## Recommendation: **CONDITIONAL GO**
 
 Go, for a **source-install beta on macOS 26+, capped at people who can run a
-shell command**, and only once the three blockers below are cleared. Two of the
-three are already fixed in this commit.
+shell command**, once the remaining items below are cleared. Two of the three
+blockers are already fixed; the third (single-instance) is about thirty lines.
 
 Do **not** ship a downloadable `.app` yet. That path is blocked by
 notarization, which needs a paid Apple Developer account and cannot be worked
@@ -31,6 +31,30 @@ beats the commercial competition, error messages are unusually good, and the
 doctor is better than most shipping products have. What is missing is the
 boring layer around the outside, which is cheap to add and is what this
 document is about.
+
+**End-to-end validation.** After the fixes below landed, a stranger's path was
+walked start to finish on a clean clone, following the corrected README
+verbatim with no other steps:
+
+```
+$ git clone <repo> && cd aqua-oss
+$ ./scripts/bundle-aquad-macos.sh
+==> Building aquad (release)
+==> Building the speech helper
+    dist/Aqua.app: valid on disk
+Built: dist/Aqua.app
+
+$ ./dist/Aqua.app/Contents/MacOS/Aqua --once --say "hello from a local dictation daemon" --no-overlay
+e2e: release->text 383ms (finalize 326ms, inject 56.6ms) via synthetic-keys | "Hello from a local dictation demon."
+RC=0
+```
+
+That is the documented path working from nothing, which it did not do when this
+assessment started. Two things are visible in that output and are recorded
+honestly rather than smoothed over: the recognizer produced "demon" for
+"daemon", and 383ms is well above even the corrected 131-215ms range because it
+includes a cold first-utterance model load. Neither is a defect; both are what a
+first run actually looks like.
 
 ---
 
@@ -240,7 +264,9 @@ Will not stop a beta, but will generate support load.
 
 ### M1. No `--version` anywhere in the daemon
 
-**Frequency: every single bug report.**
+**Frequency: every single bug report. Status: FIXED in `6990886`.**
+
+Before the fix:
 
 ```
 $ ./target/release/aquad --version
@@ -251,13 +277,22 @@ Error: unknown argument -V (try --help)
 RC=1
 ```
 
-When a beta user says "it doesn't work", the first question is "what version?"
-and today they cannot answer it. The version exists (`CFBundleShortVersionString
-0.1.0` in the bundle) but is not reachable from the binary. `shell-bridge` and
-`spike-cli` have the same gap.
+After, verified against a rebuilt binary:
 
-Four lines in `parse_args`. Requested from the agent who owns `main.rs`; the
-README documents the `defaults read` workaround in the meantime.
+```
+$ ./target/release/aquad --version
+aquad 0.1.0
+RC=0
+$ ./target/release/aquad --help | grep -i version
+--version        print the version and exit
+```
+
+When a beta user says "it doesn't work", the first question is "what version?"
+and until this landed they could not answer it. Fixed by the menu bar agent on
+request, since `main.rs` was its file and was dirty at the time.
+
+`shell-bridge` and `spike-cli` still have the gap, which matters much less: the
+daemon is what users run.
 
 ### M2. No uninstall path on macOS
 
@@ -494,60 +529,67 @@ aquad: capturing from MacBook Pro Microphone
 Still no warning. The remaining work is a single call site, whose natural home
 is `crates/aquad/src/main.rs` or `menuhost.rs`. This item stays open.
 
-### M7. The daemon writes `enabled = false` into the user's config on its own
+### M7. `enabled = false` self-write: RETRACTED, it was this assessment's own clicks
 
-**Frequency: twice in one session, unprompted. Mechanism unknown.**
+**Status: not a defect. Cause found. Regression test added.**
 
-Twice during this assessment the daemon appended a key the user never set. The
-first time, during config testing:
+This document previously reported, across two revisions, that the daemon wrote
+`enabled = false` into a config file on its own, escalating it to "the one open
+item that can silently disable the product". **That was wrong, and the cause was
+this assessment's own activity.**
+
+Both sightings were verification clicks on the menu's "Pause Dictation" row,
+made while the menu bar agent was proving its AppKit event-dispatch fix. The
+second sighting's file mtime is 09:15, the same minute a synthetic mouse click
+landed on that row; the first, around 09:02, was the same action driven through
+the accessibility API. An accessibility-driven press invokes the menu action
+directly, so it *is* a real click as far as the code is concerned. Two agents
+poking a live machine that also held a real user config produced what looked
+like spontaneous writes.
+
+Two independent audits closed it. The release QA agent found exactly one
+non-test filesystem write in the whole config crate, and it is unreachable for
+an existing file:
+
+```rust
+match std::fs::read_to_string(&path) {
+    Ok(text) => Ok((path, text)),                  // existing file: returns, never writes
+    Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+        std::fs::write(&path, &text)?;             // only when absent
+```
+
+and what it writes is `starter_file()`, which emits every key commented out, so
+it cannot produce an uncommented `enabled = false` even then. `layers.rs`,
+`migrate.rs`, and `profile.rs` are pure string-in, string-out with no I/O.
+
+The menu bar agent independently demonstrated that a daemon left running
+unattended for 45 seconds, including a real audio device change, left
+`config.toml` byte-identical at md5 `7765b6776ec919e26a0a517df228197e`, matching
+the pristine backup taken at the start of this assessment.
+
+**One real bug was found underneath the false alarm.** An earlier revision of
+the Pause row wrote the *current* value rather than the negation, so clicking it
+persisted a key without changing anything. Fixed in `e5fd7f2`, and
+`write_setting` now skips writes that would not change the file, so a duplicated
+or spurious click cannot persist a key the user never chose.
+
+The scenario is kept in the known-issues list in weakened form, and the passive
+paths are now pinned shut by a regression test rather than by assertion.
+`nothing_but_a_click_writes_the_config` (`084b14e`) exercises construction,
+reload, watcher polling, and model rebuilds carrying a device-change detail, and
+fails if the file changes. Verified passing:
 
 ```
---- before ---            --- after ---
-schema-version = 99       schema-version = 99
-hotkey = "fn"             hotkey = "fn"
-                          enabled = false     <- appeared on its own
+$ cargo test -p aquad nothing_but_a_click
+test menuhost::tests::nothing_but_a_click_writes_the_config ... ok
 ```
 
-Four immediate attempts to reproduce failed, so it was originally recorded as a
-one-off. It then happened **again**, independently, to the real user config,
-which had been restored from backup and not touched for fourteen minutes:
-
-```
-$ md5 ~/.config/aqua/config.toml /tmp/lobster-backup/config-aqua/config.toml
-MD5 (~/.config/aqua/config.toml)                  = 3448fd2134f76d9facaee3da442c8724
-MD5 (.../lobster-backup/config-aqua/config.toml)  = 7765b6776ec919e26a0a517df228197e
-
-$ head -8 ~/.config/aqua/config.toml
-# Aqua configuration. Every setting below is shown at its built-in
-...
-schema-version = 1
-enabled = false          <- again
-```
-
-Two independent sightings makes it a real defect rather than a test artifact.
-It is a write from the running daemon, not from file generation: the starter
-file deliberately writes nothing uncommented except `schema-version`, and
-`the_starter_file_is_valid_and_changes_nothing` in `crates/config/src/paths.rs`
-asserts exactly that.
-
-**This is more serious than it first appears.** `enabled` is the master switch
-and one of only three keys that are actually wired, so unlike the twelve inert
-settings in M6, this one takes effect. A user whose config silently acquires
-`enabled = false` gets a daemon that starts normally, shows its menu bar icon,
-reports `state idle`, and never responds to the hotkey, persisting across
-restarts, with nothing explaining why. That presents as "the product is
-broken", not as "a setting is off", which is the most expensive possible shape
-for a beta bug.
-
-No mechanism is claimed, because none was proven. Both sightings occurred on a
-machine that was switching audio devices repeatedly, and the first coincided
-with a logged device change ("capture: input device changed (was Jessie's
-AirPods #2); rebuilding stream"), so a persistence path reachable from
-device-change handling is one hypothesis among several. Reported to the agent
-who owns the menu bar and settings write path.
-
-**This should be understood before beta**, not merely documented. It is the one
-open item in this assessment that can silently disable the product.
+**The lesson is methodological and worth more than the finding was.** An
+observation on a machine with several agents active is not evidence about the
+product until the observer's own footprint is excluded. This document escalated
+it twice on two sightings without doing that. The correct move, in hindsight,
+was to reproduce it on an idle machine with no other agent running before
+promoting it at all.
 
 ---
 
@@ -591,15 +633,13 @@ Landed in the README's "Known limitations" section in this commit:
 1. Unsigned and un-notarized; a copied or downloaded app will not open.
 2. `cargo build` alone does not produce a working recognizer.
 3. No single-instance guard; two copies both go hot on one keypress.
-4. No `--version` on the daemon.
+4. ~~No `--version` on the daemon.~~ Fixed; `aquad --version` prints `aquad 0.1.0`.
 5. The Accessibility grant dies on every rebuild (cdhash pinning).
 6. Revoking a permission while running is not noticed until relaunch.
 7. macOS 13-25 has no bundled recognizer; only 26+ has `SpeechTranscriber`.
 8. Most config settings are accepted but not yet read by anything.
-9. The daemon has twice written `enabled = false` into a config on its own,
-   which silently disables dictation until you remove that line.
-10. Freeform edits are not wired to the language model.
-11. Linux does not work; Windows compiles but has never been run.
+9. Freeform edits are not wired to the language model.
+10. Linux does not work; Windows compiles but has never been run.
 
 ---
 
@@ -613,22 +653,21 @@ Ordered by user pain per unit of effort.
 | 2 | ~~State the Gatekeeper reality in the README~~ | done | Silent failure with `open` returning 0 |
 | 3 | ~~Ship `scripts/uninstall-macos.sh`~~ | done | Testers must be able to leave |
 | 4 | ~~Correct the latency claim~~ | done | A false number in a beta README burns trust |
-| 5 | Find the `enabled = false` self-write (M7) | investigation | The only open item that can silently disable the product |
-| 6 | Single-instance guard (pidfile + advisory lock) | ~30 lines | Two hot microphones is the worst remaining bug |
-| 7 | `--version` on `aquad`, `shell-bridge`, `spike-cli` | ~10 lines | Blocks every bug report |
-| 8 | Reap stale helpers at daemon startup | ~20 lines | Kills M4's whole class without finding the trigger |
-| 9 | Poll accessibility trust once a second | ~25 lines | Turns a silent failure into a visible state |
-| 10 | Call `inert_settings()` at startup (detection landed in 22f579b, no caller yet) | ~4 lines | Twelve silent no-ops become one honest line |
-| 11 | Make `bundle-aquad-macos.sh` fail, not warn, without `swiftc` | 2 lines | Stops shipping a recognizer-less bundle |
-| 12 | Always rebuild the helper, or hash-check it | 2 lines | The staleness that hid blocker B1 |
-| 13 | `shell-bridge uninstall` | ~20 lines | Users should not need the sledgehammer script |
-| 14 | Issue template asking for doctor output and version | 20 min | Turns "it doesn't work" into a diagnosis |
-| 15 | Wire `migrate()` into the config load path | ~15 lines | Must exist before schema version 2, not after |
-| 16 | Buy the Developer ID certificate | 99 USD, days | Unblocks binary distribution and fixes cdhash pain |
+| 5 | Single-instance guard (pidfile + advisory lock) | ~30 lines | Two hot microphones is the worst remaining bug |
+| 6 | Reap stale helpers at daemon startup | ~20 lines | Kills M4's whole class without finding the trigger |
+| 7 | Poll accessibility trust once a second | ~25 lines | Turns a silent failure into a visible state |
+| 8 | Call `inert_settings()` at startup (detection landed in 22f579b, no caller yet) | ~4 lines | Twelve silent no-ops become one honest line |
+| 9 | Make `bundle-aquad-macos.sh` fail, not warn, without `swiftc` | 2 lines | Stops shipping a recognizer-less bundle |
+| 10 | Always rebuild the helper, or hash-check it | 2 lines | The staleness that hid blocker B1 |
+| 11 | `shell-bridge uninstall` | ~20 lines | Users should not need the sledgehammer script |
+| 12 | Issue template asking for doctor output and version | 20 min | Turns "it doesn't work" into a diagnosis |
+| 13 | Wire `migrate()` into the config load path | ~15 lines | Must exist before schema version 2, not after |
+| 14 | Buy the Developer ID certificate | 99 USD, days | Unblocks binary distribution and fixes cdhash pain |
 
-Items 5 through 10 are the beta-blocking remainder. Item 5 is the only one
-needing investigation rather than implementation, which is why it is first.
-Items 1 through 4 landed with this document.
+Items 5 through 8 are the beta-blocking remainder. All four are small and none
+requires a design decision. Items 1 through 4 landed with this document; items
+5' (`--version`) and the menu bar click fix landed alongside it from other
+agents.
 
 ---
 
