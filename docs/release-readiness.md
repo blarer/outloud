@@ -262,6 +262,13 @@ with --asr mock
 RC=1
 ```
 
+> **Name note, added after the fact.** Captured mid-rename, so the tool
+> really did print `hexavoice-speech-helper`. The shipped name is
+> `aqua-speech-helper`, because `crates/asr/src/backends/apple.rs` looks for
+> that exact filename and the helper deliberately did not follow the product
+> rename. Transcripts left verbatim: an edited record of a real run is no
+> longer evidence. Use `aqua-speech-helper` in anything you type.
+
 **Severity is MAJOR, not blocker, because the packaged path is fine.** On the
 same fresh clone, `scripts/bundle-hexad-macos.sh` compiles the helper itself
 and the resulting `.app` transcribes correctly:

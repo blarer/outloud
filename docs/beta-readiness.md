@@ -143,6 +143,15 @@ hexad: state error (recognizer failed to load (hexavoice-speech-helper not found
 RC=1
 ```
 
+> **Name note, added after the fact.** These transcripts were captured while
+> the Aqua-to-Hexavoice rename was mid-flight, so the tool genuinely printed
+> `hexavoice-speech-helper` at the time. The shipped name is
+> `aqua-speech-helper`: `crates/asr/src/backends/apple.rs` looks for that
+> exact filename, so the helper deliberately did not follow the product
+> rename. The transcripts are left verbatim because a record of a real run
+> that has been edited afterwards is no longer evidence; only this note is
+> new. Anything you TYPE should use `aqua-speech-helper`.
+
 Cause: `crates/asr/helper/hexavoice-speech-helper` is a compiled artifact and is
 gitignored, there is no `build.rs` anywhere in the workspace (`find crates -name
 build.rs` returns nothing), and the only thing that ever invokes `swiftc` is
