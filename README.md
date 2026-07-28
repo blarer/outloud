@@ -52,30 +52,134 @@ documented model URLs for platforms without it.
 Not yet built: Windows and Linux transports, streaming partial injection wired
 into the daemon, and a settings UI. See [`docs/planning/00-roadmap.md`](docs/planning/00-roadmap.md).
 
-## Try it
+## Install
 
-Requires macOS 13+ (26+ for the zero-install recognizer) and a Rust toolchain.
+Requires macOS 13 or newer (26+ for the zero-install recognizer) and a Rust
+toolchain. Windows and Linux do not work yet.
 
 ```bash
-# Build and grant Accessibility permission. The permission step is unavoidable:
-# reading and rewriting text in other applications is exactly what it governs.
+git clone https://github.com/blarer/aqua-oss
+cd aqua-oss
+cargo build --release
+
+# Package as a .app and grant Accessibility permission. Both steps matter:
+# reading and rewriting text in other applications is exactly what that
+# permission governs, and macOS attaches the grant to a signed bundle rather
+# than to a bare binary.
 ./scripts/bundle-macos.sh
 ./scripts/grant-accessibility.sh
-
-# Dictate one utterance without needing a microphone, using synthesized speech.
-cargo run --release -p aquad -- --once --say "hello from a local dictation daemon"
-
-# Run for real: hold right-option, speak, release.
-cargo run --release -p aquad
 ```
 
-If anything misbehaves, run the doctor first. Nearly every failure in this
-category is environmental rather than a bug, and each check names the exact
-next action:
+If anything misbehaves, run the doctor before anything else. Almost every
+failure in this category is environmental rather than a bug, and each check
+names the exact next action:
 
 ```bash
 ./scripts/doctor.sh
 ```
+
+## Using it
+
+### Dictating
+
+Start the daemon and leave it running:
+
+```bash
+cargo run --release -p aquad
+```
+
+Then, in any application:
+
+1. Put your cursor where you want text.
+2. **Hold right-option.** The overlay appears.
+3. Speak.
+4. **Release.** Your words appear at the cursor.
+
+To try it without a microphone, feed it synthesized speech:
+
+```bash
+cargo run --release -p aquad -- --once --say "hello from a local dictation daemon"
+```
+
+### Editing text you already wrote
+
+This is the part other dictation tools do not do.
+
+1. **Select some text** in any application.
+2. **Hold right-option** and speak a command.
+3. **Release.** The selection is rewritten in place.
+
+Commands are matched literally, so they are predictable rather than clever:
+
+| Say | Effect |
+|---|---|
+| "change *X* to *Y*" | replaces every *X* with *Y* |
+| "replace *X* with *Y*" | same |
+| "make *X* into *Y*" | same |
+| "swap *X* for *Y*" | same |
+| "delete *X*" | removes *X* |
+| "remove *X*" / "get rid of *X*" / "scratch *X*" | same |
+| "add *X*" / "append *X*" | appends *X* |
+| "all caps" / "uppercase" | THE WHOLE SELECTION |
+| "lowercase" | the whole selection |
+| "title case" | The Whole Selection |
+| "sentence case" | The whole selection |
+
+Matching ignores case, because speech recognition will not reproduce the casing
+on your screen. If nothing matches, you are told so rather than having the text
+silently changed.
+
+Anything that is not one of the above ("tighten this up", "make it more
+formal") is a *freeform* edit and needs the local language model, which is
+built but not yet wired into the daemon. Today the daemon says so instead of
+doing nothing.
+
+### Editing a shell command line
+
+A terminal exposes no writable text field to the accessibility API, so this
+works by cooperating with your shell's line editor directly.
+
+```bash
+# Install the plugin for your shell. It appends one guarded line to your rc
+# file and composes with oh-my-zsh and friends.
+cargo run --release -p shell-bridge -- install
+
+# Run the bridge alongside the daemon.
+cargo run --release -p shell-bridge -- serve
+```
+
+Then, at a prompt:
+
+1. Type a command but **do not run it**.
+2. Speak an edit (same commands as above).
+3. Press **Ctrl-X Ctrl-A**. The command line rewrites in place.
+4. **Ctrl-X u** undoes it, through your shell's own undo.
+
+```
+$ kubectl get pods --namespace prod-web --output wide
+                       say: "change prod-web to staging-web", then ^X^A
+$ kubectl get pods --namespace staging-web --output wide
+```
+
+Bash and fish are supported too. The bridge never executes anything: the
+protocol has no execution verb at all, and a rewritten line always waits for
+you to press enter.
+
+### Useful flags
+
+```
+--once           run one dictation cycle and exit
+--say TEXT       synthesize TEXT with `say` instead of using the microphone
+--wav FILE       feed a WAV file instead of the microphone
+--chord CHORD    change the hotkey (default: right-option)
+--asr apple|mock choose the recognizer
+--no-overlay     log state changes instead of drawing the panel
+--realtime       pace file audio like live speech
+```
+
+Hotkeys are written the way you would say them: `right-option`, `fn`,
+`cmd+shift+space`. Conflicts with existing system shortcuts are detected and
+reported rather than silently failing.
 
 ## How it fits together
 
