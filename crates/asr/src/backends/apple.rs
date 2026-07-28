@@ -183,6 +183,13 @@ impl Recognizer for AppleRecognizer {
         }
     }
 
+    fn reusable(&self) -> bool {
+        // Finalizing closes the helper's stdin, which is how end-of-utterance
+        // is signalled, and the helper exits when it sees EOF. There is no
+        // process left to feed.
+        false
+    }
+
     fn finalize(&mut self) -> anyhow::Result<Transcript> {
         // Closing stdin signals end-of-utterance; the helper finalizes and
         // prints the remaining events then `done`.

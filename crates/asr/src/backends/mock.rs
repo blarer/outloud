@@ -176,4 +176,14 @@ mod tests {
         let second = r.finalize().unwrap();
         assert_eq!(second.text, "the", "state must not leak across utterances");
     }
+
+    /// The mock is an in-process model, so it must claim reusability. This
+    /// pins the default: if someone changes the trait default to false, the
+    /// ordinary case should have to be made explicit rather than silently
+    /// flipping for every backend at once.
+    #[test]
+    fn mock_reports_itself_reusable() {
+        let r = MockRecognizer::new();
+        assert!(r.reusable());
+    }
 }

@@ -66,8 +66,32 @@ pub trait Recognizer: Send {
     /// Feed incremental utterance audio; possibly get an updated hypothesis.
     fn feed(&mut self, samples: &[f32]) -> Option<Partial>;
 
-    /// End the utterance and return the final transcript, resetting state.
+    /// End the utterance and return the final transcript.
+    ///
+    /// Whether the recognizer can be used again afterwards is backend
+    /// specific; ask [`Recognizer::reusable`] rather than assuming.
     fn finalize(&mut self) -> anyhow::Result<Transcript>;
+
+    /// Whether this recognizer can start another utterance after
+    /// [`Recognizer::finalize`].
+    ///
+    /// This exists because the honest answer differs by backend, and an
+    /// earlier version of this trait simply asserted that finalizing "reset
+    /// state". That was false for the Apple backend, which drives a helper
+    /// process whose stdin must be closed to signal end-of-utterance, ending
+    /// the process with it. The daemon discovered this the hard way and
+    /// worked around it silently.
+    ///
+    /// A contract only some implementations honour is worse than no contract,
+    /// so the capability is now something callers can query: a caller running
+    /// more than one utterance should construct a fresh recognizer when this
+    /// is false, ideally eagerly so model load time is hidden behind the
+    /// user still speaking.
+    ///
+    /// Defaults to true, which is the ordinary case for an in-process model.
+    fn reusable(&self) -> bool {
+        true
+    }
 
     /// Human-readable backend name, for logs and the settings UI.
     fn name(&self) -> &'static str;
