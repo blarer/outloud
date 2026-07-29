@@ -32,6 +32,14 @@ editor's normal state transitions and its native undo (`^Xu` in zsh, `C-_`
 in readline, `ctrl-z` in fish) reverts it. This is the terminal equivalent
 of preferring `AXSelectedText` over `AXValue` in the GUI tiers.
 
+The voice half of the staging is `outloud`'s injection layer
+(`inject::stage_terminal_edit`): when the focused destination is a terminal,
+the transcript parses as a deterministic edit command, and a bridge is
+serving on the socket, the daemon sends `INTENT` instead of typing. Freeform
+phrases stay dictation (typed text), so voice-typing a commit message at a
+prompt keeps working, and `shell-bridge intent "..."` remains available for
+staging by hand.
+
 Pieces:
 
 - `crates/shell-bridge`: the daemon (`shell-bridge serve`), a one-shot CLI
