@@ -378,6 +378,9 @@ fi
 if [[ $SKIP -gt 0 ]]; then
     echo "VERDICT: no failures, but $SKIP check(s) skipped - a human must judge whether each skip is acceptable"
 else
-    echo "VERDICT: all checks passed"
+    # The exact phrase the release checklist (docs/release-checklist.md §4)
+    # gates on; keep them in step or the release steps ask for a line this
+    # script never prints.
+    echo "VERDICT: SAFE TO SHIP"
 fi
 exit 0
