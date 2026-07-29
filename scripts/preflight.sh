@@ -75,6 +75,13 @@ echo
 #     not renamed in its own header.
 #   - audit/readiness docs and docs/planning: dated snapshots that quote old
 #     output as evidence; rewriting evidence would falsify it.
+#   - release-checklist.md: same class, the dated v0.1.0 audit that quotes
+#     the pre-rename breakage verbatim as its evidence.
+#   - the legacy compatibility surface: "# aqua shell-bridge" (the rc marker
+#     the installer detects and rewrites), aqua.fish (the conf.d symlink it
+#     removes), and "aqua-replay v1" (the schema line old replay records
+#     carry). Each names the OLD artifact on purpose, to migrate or accept
+#     it; renaming them would break exactly the installs they exist for.
 # ---------------------------------------------------------------------------
 check_stale_names() {
     local hits doc_hits rs_hits
@@ -88,7 +95,7 @@ check_stale_names() {
                 README.md docs scripts 2>/dev/null \
         | grep -viE 'aquaspike|aqua[-_ ]?voice|withaqua\.com|\.aqua-oss|aqua[-_]speech[-_]helper|dev\.hexavoice' \
         | grep -vE '^scripts/(bundle-macos|uninstall-macos|preflight)\.sh' \
-        | grep -vE '^docs/(planning/|pre-release-audit|beta-readiness|release-readiness|M0-results|competitive-analysis|macos-quickstart|overlay-redesign)' \
+        | grep -vE '^docs/(planning/|pre-release-audit|beta-readiness|release-readiness|release-checklist|M0-results|competitive-analysis|macos-quickstart|overlay-redesign)' \
         )" || true
     # Rust: comments are not user-visible, so only quoted string literals
     # count. Test fixtures and temp-dir names never reach a user either.
@@ -98,6 +105,7 @@ check_stale_names() {
                 crates 2>/dev/null \
         | grep -v 'crates/config/src/relocate.rs' \
         | grep -viE '\.aqua-oss|aqua[-_]speech[-_]helper|dev\.hexavoice|aqua[-_ ]?voice|withaqua|macOS Aqua' \
+        | grep -vE '# aqua shell-bridge|aqua\.fish|aqua-replay v1' \
         | grep -vE 'temp_dir|-test|assert|/x/' \
         | grep -vE '^[^:]+:[0-9]+:\s*//' \
         )" || true
