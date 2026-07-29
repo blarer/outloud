@@ -104,6 +104,8 @@ pub struct Settings {
     /// `microphone.sensitivity`, 1-100. How quiet a voice still registers as
     /// speech.
     pub sensitivity: u8,
+    /// `silence-timeout-ms`: the hot-mic safety net.
+    pub silence_timeout_ms: i64,
     pub enabled: bool,
     pub launch_at_login: bool,
     pub config_path: Option<PathBuf>,
@@ -152,6 +154,7 @@ impl Default for Settings {
             casing: s("formatting.casing"),
             overlay_position: s("overlay.position"),
             sensitivity: i("microphone.sensitivity", 50).clamp(1, 100) as u8,
+            silence_timeout_ms: i("silence-timeout-ms", 60_000),
             enabled: b("enabled"),
             launch_at_login: b("launch-at-login"),
             config_path: None,
@@ -187,6 +190,8 @@ impl Settings {
             // out-of-range value must degrade to the default rather than
             // reach the VAD as a nonsense threshold.
             sensitivity: i("microphone.sensitivity", 50).clamp(1, 100) as u8,
+            // Clamped for the same reason as sensitivity: hand-edited file.
+            silence_timeout_ms: i("silence-timeout-ms", 60_000).clamp(1_000, 600_000),
             enabled: b("enabled", true),
             launch_at_login: b("launch-at-login", false),
             config_path,

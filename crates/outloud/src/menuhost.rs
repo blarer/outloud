@@ -83,6 +83,38 @@ impl MenuHost {
         self.settings.sensitivity
     }
 
+    /// Read `silence-timeout-ms` from config without constructing a host.
+    ///
+    /// `--once` has no menu, and a safety net that cannot be exercised in a
+    /// test is a safety net nobody has seen work. Goes through the same
+    /// layering as the daemon so a test cannot pass against different
+    /// precedence rules than production uses.
+    pub fn silence_timeout_from_config() -> u64 {
+        let user = config::ensure_user_config().ok();
+        let system = std::fs::read_to_string(config::system_config_path())
+            .ok()
+            .map(|t| (config::system_config_path(), t));
+        let env: std::collections::BTreeMap<String, String> = std::env::vars()
+            .filter(|(k, _)| {
+                k.starts_with(config::ENV_PREFIX) || k.starts_with(config::LEGACY_ENV_PREFIX)
+            })
+            .collect();
+        config::Config::build(
+            system.as_ref().map(|(p, t)| (p, t.as_str())),
+            user.as_ref().map(|(p, t)| (p, t.as_str())),
+            &env,
+        )
+        .ok()
+        .map(|(cfg, _)| crate::menubar::Settings::from_config(&cfg, None))
+        .map_or(60_000, |s| s.silence_timeout_ms.max(1_000) as u64)
+    }
+
+    /// `silence-timeout-ms`: how long capture may run before the daemon
+    /// force-commits and closes the microphone.
+    pub fn silence_timeout_ms(&self) -> u64 {
+        self.settings.silence_timeout_ms.max(1_000) as u64
+    }
+
     /// Reload if the file changed underneath us. Called every frame by the
     /// render loop; the watcher does the work on its own thread, so this is
     /// a non-blocking channel drain.

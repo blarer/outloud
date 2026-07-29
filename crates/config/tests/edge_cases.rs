@@ -119,11 +119,11 @@ fn out_of_range_value_falls_back_to_the_default() {
 
     assert!(
         !errors.is_empty(),
-        "silence-timeout-ms = 0 was accepted; the schema declares a 200..=30000 range"
+        "silence-timeout-ms = 0 was accepted; the schema declares a 1000..=600000 range"
     );
     assert_eq!(
         cfg.get("silence-timeout-ms").unwrap().value,
-        Value::Int(1500),
+        Value::Int(60_000),
         "an out-of-range value must not become the effective value"
     );
 }
@@ -145,7 +145,7 @@ fn wrong_type_is_rejected_with_an_actionable_message() {
     );
     assert_eq!(
         cfg.get("silence-timeout-ms").unwrap().value,
-        Value::Int(1500),
+        Value::Int(60_000),
         "a wrong-typed value must not become the effective value"
     );
 }
@@ -181,7 +181,7 @@ fn a_partial_file_leaves_everything_else_at_defaults() {
     assert_eq!(cfg.get("hotkey").unwrap().layer, Layer::Default);
     assert_eq!(
         cfg.get("silence-timeout-ms").unwrap().value,
-        Value::Int(1500)
+        Value::Int(60_000)
     );
 }
 

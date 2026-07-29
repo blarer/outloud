@@ -361,11 +361,11 @@ mod tests {
 
     #[test]
     fn env_kebab_keys_also_map() {
-        let (cfg, warnings) = build("", &[("AQUA_SILENCE_TIMEOUT_MS", "800")]);
+        let (cfg, warnings) = build("", &[("AQUA_SILENCE_TIMEOUT_MS", "8000")]);
         assert!(warnings.is_empty(), "{warnings:?}");
         assert_eq!(
             cfg.get("silence-timeout-ms").unwrap().value,
-            Value::Int(800)
+            Value::Int(8000)
         );
     }
 
@@ -427,7 +427,7 @@ mod tests {
         // The default survives; a bad override must not poison the value.
         assert_eq!(
             cfg.get("silence-timeout-ms").unwrap().value,
-            Value::Int(1500)
+            Value::Int(60_000)
         );
     }
 

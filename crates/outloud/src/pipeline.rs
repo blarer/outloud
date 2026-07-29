@@ -46,6 +46,14 @@ pub struct Config {
     /// speech. Carried here rather than read at the VAD so a config reload
     /// takes effect on the next utterance without restarting capture.
     pub sensitivity: u8,
+    /// How long capture may run before it is force-committed and the
+    /// microphone closed.
+    ///
+    /// A safety net, not a feature: push-to-talk bounds itself on key
+    /// release, but tap-to-latch waits for a second tap that may never
+    /// come. docs/ux/02-core-interaction.md promised this and nothing
+    /// implemented it.
+    pub hot_mic_timeout_ms: u64,
 }
 
 impl Default for Config {
@@ -59,6 +67,7 @@ impl Default for Config {
             prefer_streaming: false,
             // The schema default, kept in one place.
             sensitivity: 50,
+            hot_mic_timeout_ms: 60_000,
         }
     }
 }
@@ -164,6 +173,8 @@ pub async fn run(
     let mut pending_final: Option<PendingFinal> = None;
     // Per-device stream-startup latency watchdog (docs/input-latency.md).
     let mut startup = StartupWatch::new();
+    // When the current capture opened, for the hot-mic safety net below.
+    let mut capture_opened_at: Option<Instant> = None;
 
     loop {
         // Computed each iteration: when the streamer's parked write becomes
@@ -177,6 +188,29 @@ pub async fn run(
             // it (the worker sends `ready` before touching audio, but the
             // random-order select could still poll the channels first).
             biased;
+
+            // Hot-mic safety net. docs/ux/02-core-interaction.md promised
+            // this and nothing implemented it, so a latched capture could
+            // hold the microphone open indefinitely: `silence-timeout-ms`
+            // was declared in the schema, marked unwired, and read by
+            // nobody. An open microphone the user did not ask for is the
+            // worst failure this product has, so the timeout is enforced
+            // here regardless of how capture was started.
+            _ = tokio::time::sleep_until(tokio::time::Instant::from_std(
+                capture_opened_at
+                    .map(|t| t + std::time::Duration::from_millis(cfg.hot_mic_timeout_ms))
+                    .unwrap_or_else(Instant::now),
+            )), if capture_opened_at.is_some() => {
+                eprintln!(
+                    "outloud: capture ran for {}s without ending; closing the microphone",
+                    cfg.hot_mic_timeout_ms / 1000
+                );
+                // Commit rather than discard: the user spoke, and throwing
+                // their words away to fix a stuck mic trades one silent
+                // data loss for another.
+                commit(&mut engine, &mut segmenter, &feed, &mut in_flight, &mut listening);
+                stop_capture(mic.as_mut(), &mut listening, &mut startup, &mut capture_opened_at);
+            }
 
             // Flush a parked streamed write once its 80ms interval elapses.
             _ = tokio::time::sleep_until(tokio::time::Instant::from_std(
@@ -310,6 +344,7 @@ pub async fn run(
                             // Stamp the open so the first chunk's arrival
                             // measures this device's real startup latency.
                             startup.on_open(Instant::now());
+                            capture_opened_at = Some(Instant::now());
                         }
                         in_flight = Some(InFlight { mode, released_at: Instant::now(), streamer });
                         if recognizer_ready {
@@ -379,10 +414,7 @@ pub async fn run(
                             // Release the device as soon as the user stops
                             // speaking, so the recording indicator tracks
                             // dictation rather than uptime.
-                            if let Some(m) = mic.as_mut() {
-                                m.close();
-                            }
-                            startup.on_close();
+                            stop_capture(mic.as_mut(), &mut listening, &mut startup, &mut capture_opened_at);
                         }
                     }
                     FrontendEvent::Chunk(samples) => {
@@ -534,6 +566,32 @@ pub async fn run(
 /// End the capture half of an utterance: flush the segmenter, tell the
 /// recognizer to finalize, stamp the release time the e2e number is
 /// measured from.
+/// Stop capturing, by whatever route.
+///
+/// The microphone and the `listening` flag are two representations of one
+/// fact, and every place that changed one of them by hand was a chance to
+/// forget the other. One did: a sub-threshold tap latched capture on and
+/// emitted no bounding event, so the mic stayed open and the recording
+/// indicator stayed lit until the user pressed the chord again. Because a
+/// bare modifier gets tapped constantly during ordinary typing, that fired
+/// while *not* dictating, which is why it looked unreproducible.
+///
+/// Routing every stop through here makes the class impossible rather than
+/// fixing the one path that was found.
+fn stop_capture(
+    mic: Option<&mut crate::mic::Mic>,
+    listening: &mut bool,
+    startup: &mut StartupWatch,
+    opened_at: &mut Option<Instant>,
+) {
+    *listening = false;
+    *opened_at = None;
+    if let Some(m) = mic {
+        m.close();
+    }
+    startup.on_close();
+}
+
 fn commit(
     engine: &mut Engine,
     segmenter: &mut Segmenter,

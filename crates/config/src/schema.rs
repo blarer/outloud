@@ -267,10 +267,13 @@ pub fn schema() -> &'static [KeySpec] {
             },
             KeySpec {
                 key: "silence-timeout-ms",
-                default: Value::Int(1500),
-                constraint: IntRange(200, 30_000),
-                doc: "Stop listening after this much silence in latch mode.",
-                wired: false,
+                default: Value::Int(60_000),
+                constraint: IntRange(1_000, 600_000),
+                doc: "Safety net: force-commit and close the microphone after \
+                      capture has run this long. Push-to-talk ends on key \
+                      release; tap-to-latch waits for a second tap that may \
+                      never come.",
+                wired: true,
             },
             KeySpec {
                 key: "overlay.position",
@@ -413,6 +416,7 @@ mod tests {
                 "enabled",
                 "insertion.mode",
                 "microphone.sensitivity",
+                "silence-timeout-ms",
                 "overlay.position"
             ]
         );
@@ -424,7 +428,11 @@ mod tests {
         // Not asserted as a fixed list on purpose: this number should only
         // ever go DOWN, and pinning it exactly would make wiring a setting
         // fail an unrelated-looking test. What must hold is the invariant.
-        assert_eq!(inert.len(), schema().len() - 5);
+        assert_eq!(inert.len(), schema().len() - 6);
+        assert!(
+            !inert.contains(&"silence-timeout-ms"),
+            "silence-timeout-ms is wired: the pipeline force-closes a hot mic on it"
+        );
         assert!(
             !inert.contains(&"microphone.sensitivity"),
             "microphone.sensitivity is wired: the pipeline builds its VAD from it"

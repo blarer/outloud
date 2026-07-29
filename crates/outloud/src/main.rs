@@ -287,6 +287,13 @@ fn main() -> anyhow::Result<()> {
             .sensitivity
             .or_else(|| menu_host.as_ref().map(|h| h.sensitivity()))
             .unwrap_or(50),
+        // Read from config even without a menu host: `--once` has no menu,
+        // and a safety net that cannot be exercised in a test is a safety
+        // net nobody has seen work.
+        hot_mic_timeout_ms: menu_host
+            .as_ref()
+            .map(|h| h.silence_timeout_ms())
+            .unwrap_or_else(outloud::menuhost::MenuHost::silence_timeout_from_config),
     };
 
     // After cfg, so the mock's voiced-window gate can follow the same

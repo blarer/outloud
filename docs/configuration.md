@@ -33,7 +33,7 @@ file: choosing a value writes it here, preserving your comments, and editing
 the file by hand is picked up by the menu within a second.
 
 The menu deliberately surfaces only the settings that are implemented today
-(`hotkey`, `enabled`, `microphone.sensitivity`, and hiding the overlay). The rest of the table below is
+(`hotkey`, `enabled`, `microphone.sensitivity`, `silence-timeout-ms`, and hiding the overlay). The rest of the table below is
 schema and documentation ahead of the code: the keys validate, migrate, and
 report provenance, but the pipeline does not read them yet. They are listed
 here rather than offered as menu rows because a settings control that writes
@@ -93,7 +93,7 @@ Both spellings work: dotted keys (`insertion.mode = "stream"`) or tables
 | `formatting.trailing-punctuation` | `true` | End utterances with inferred punctuation. |
 | `history.enabled` | `true` | Keep a local plain-text transcription history. |
 | `microphone.sensitivity` | `50` | How quiet a voice still counts as speech (1–100). Raise it if you sit back from the mic; lower it if room noise is transcribed. |
-| `silence-timeout-ms` | `1500` | Stop listening after this much silence in latch mode (200–30000). |
+| `silence-timeout-ms` | `60000` | Safety net: force-commit and close the microphone after capture has run this long (1000–600000). |
 | `overlay.position` | `"bottom-center"` | `bottom-center`, `bottom-left`, `bottom-right`, `top-center`, or `hidden`. |
 | `vocabulary.sets` | `[]` | Named vocabulary sets active by default; profiles override per app. |
 | `telemetry.enabled` | `false` | Anonymous usage reporting. Off by default, forever. |

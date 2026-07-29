@@ -380,7 +380,7 @@ evidence in [`docs/beta-readiness.md`](docs/beta-readiness.md).
 | Only one copy may run | A second launch is refused, naming the pid to quit | Quit the first from the menu bar, or `kill N` |
 | Accessibility grant dies on every rebuild | Toggle reads "on", every call fails. The menu bar glyph turns into a warning triangle within a second | `tccutil reset Accessibility dev.outloud.outloud`, then re-grant |
 | macOS 13-25 has no bundled recognizer | `recognizer never becomes ready` | Only macOS 26+ has `SpeechTranscriber`; other backends are stubbed |
-| Most config settings are not read yet | Changing them has no effect and no warning | Only `hotkey`, `enabled`, `microphone.sensitivity`, and `overlay.position` are wired today |
+| Most config settings are not read yet | Changing them has no effect and no warning | Only `hotkey`, `enabled`, `microphone.sensitivity`, `silence-timeout-ms`, and `overlay.position` are wired today |
 | Quiet or distant speech is dropped | Words go missing unless you lean in and enunciate | Raise **Microphone Sensitivity** in the menu bar (or `microphone.sensitivity` in config) |
 | Freeform edits are not wired up | "tighten this up" reports that it needs the language model | Use the literal commands listed above |
 | Linux does not work; Windows is unexercised | — | macOS only for now |

@@ -552,7 +552,7 @@ mod tests {
     fn out_of_range_int_reports_the_range() {
         let doc = validate("silence-timeout-ms = 50\n");
         let msg = doc.errors[0].to_string();
-        assert!(msg.contains("200..=30000"), "{msg}");
+        assert!(msg.contains("1000..=600000"), "{msg}");
     }
 
     #[test]
