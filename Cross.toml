@@ -41,19 +41,17 @@ pre-build = [
     # failure was libasound2:arm64 -> libc6:arm64 >= 2.29 "not going to be
     # installed", because the resolvable libc6 lived in focal-security).
     "echo 'deb [arch=arm64] http://ports.ubuntu.com/ubuntu-ports focal-security main universe' >> /etc/apt/sources.list",
-    # libasound2 (the runtime lib) must be installed alongside its -dev
-    # package and at the SAME version. apt refuses otherwise:
-    #   libasound2-dev:arm64 : Depends: libasound2:arm64 (= 1.2.2-2.1ubuntu2.5)
-    #   E: Unable to correct problems, you have held broken packages.
-    # The upgrade first is what makes the arm64 install resolvable at all.
-    # Core libraries (libc6, libcrypt1, ...) are Multi-Arch: same, so their
-    # arm64 copy must match the amd64 copy byte-for-byte, and the pinned
-    # 2020 image ships amd64 versions older than anything the archive still
-    # publishes for arm64. dist-upgrade rather than upgrade: current libc6
-    # pulls in libcrypt1 (split out of glibc mid-focal), and plain upgrade
-    # never installs new packages, so it holds libc6 back ("11 not
-    # upgraded") and the arm64 install fails exactly as before.
-    "apt-get update && apt-get dist-upgrade -y && apt-get install -y libasound2:arm64 libasound2-dev:arm64 pkg-config",
+    # Extract, don't install: apt refuses to install any arm64 library into
+    # this 2020-era image because every Multi-Arch: same pair (libc6,
+    # libcrypt1, gcc-10-base, ...) must match the amd64 copy byte-for-byte,
+    # and no amount of upgrade/dist-upgrade converges (tried; each run
+    # failed one library deeper). We do not need a coherent arm64 userland,
+    # only ALSA's headers, .so symlink, and alsa.pc for the LINK step; the
+    # aarch64 sysroot glibc that resolves the final link ships with the
+    # cross toolchain itself. `apt-get download` + `dpkg -x /` lays the
+    # files down with no dependency resolution at all.
+    "apt-get update && apt-get install -y pkg-config",
+    "cd /tmp && apt-get download libasound2:arm64 libasound2-dev:arm64 && for f in /tmp/libasound2*.deb; do dpkg -x \"$f\" /; done",
 ]
 
 [target.aarch64-unknown-linux-musl]
