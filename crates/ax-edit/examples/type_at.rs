@@ -10,6 +10,14 @@
 //!
 //! Types into the FOCUSED window. Intended for scripted use.
 
+// `ax_edit::synth` only exists behind `#[cfg(target_os = "macos")]` in
+// lib.rs, but `cargo clippy --all-targets` compiles every example on every
+// platform, so an ungated body fails the Linux job while building fine on a
+// Mac. The gate lives here rather than in Cargo.toml because
+// `required-features` expresses a *feature* constraint, not a target one:
+// there is no feature to require, the split is by OS. A stub main keeps the
+// example honest off-macOS instead of silently doing nothing.
+#[cfg(target_os = "macos")]
 fn main() {
     let mut args = std::env::args().skip(1);
     let us: u64 = args
@@ -23,4 +31,12 @@ fn main() {
         eprintln!("type_at: {e}");
         std::process::exit(1);
     }
+}
+
+/// Off macOS there is no synthetic-keys backend, so say so loudly rather
+/// than pretend the text was typed.
+#[cfg(not(target_os = "macos"))]
+fn main() {
+    eprintln!("type_at is macOS-only: ax_edit::synth has no backend on this platform");
+    std::process::exit(1);
 }
