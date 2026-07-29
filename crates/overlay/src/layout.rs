@@ -218,6 +218,15 @@ pub const WORD_GAP: f64 = 6.5;
 /// independent, no start/stop discontinuity, and it bends smoothly when a
 /// target changes mid-fade. This is the "flowy vs jerky" knob.
 pub const EASE_TAU: f64 = 0.22;
+
+/// Delay added per word when several arrive in one hypothesis.
+///
+/// Small on purpose. At 55ms a four-word burst finishes staggering in
+/// 165ms, comfortably faster than the ~1.3s between hypotheses, so the
+/// cascade always completes before the next batch lands and never becomes
+/// a backlog. Large enough to be legible as motion; small enough that
+/// nobody waits for it.
+pub const BIRTH_STAGGER: f64 = 0.055;
 /// Committed words start decaying this long after commitment: the text
 /// already lives in the target field, so the overlay repeating it forever
 /// is noise. In-flight words never stale-decay — text that might still
@@ -256,6 +265,19 @@ pub struct WordSlot {
     stable_updates: usize,
     /// Displayed opacity, eased toward the per-frame target.
     pub opacity: f64,
+    /// Seconds still to wait before this word begins to bloom in.
+    ///
+    /// Exists because the recognizer does not deliver words one at a time.
+    /// Apple's `SpeechTranscriber` emits a whole revised hypothesis every
+    /// ~1.3s, so several new words arrive in the same frame and, sharing one
+    /// easing constant, used to bloom in perfect unison. That reads as a
+    /// block of text being stamped down, which is exactly the jolt this
+    /// staggering removes: the words fade up left to right instead, so an
+    /// arrival looks like speech landing rather than a paste.
+    ///
+    /// It buys nothing in latency and is not meant to. The first word is
+    /// never delayed; only its followers are, and only by a few frames.
+    birth_delay: f64,
 }
 
 /// The rolling window of transcribed words.
@@ -348,6 +370,9 @@ impl RollingWindow {
             return; // frame-rate polling of an unchanged hypothesis
         }
         let units = split_units(hypothesis);
+        // Counts words created by THIS call, so the stagger resets per
+        // hypothesis rather than growing unbounded across an utterance.
+        let mut born_this_ingest = 0usize;
         // Units the display already retired (committed, faded, removed).
         // The horizon's never-retract property means the hypothesis still
         // starts with them; if a recognizer rewrites that deeply anyway we
@@ -382,7 +407,14 @@ impl RollingWindow {
                         committed_at: None,
                         stable_updates: 0,
                         opacity: 0.0, // words are born transparent and bloom in
+                        // Stagger only within THIS hypothesis. The first new
+                        // word never waits, so nothing about perceived
+                        // latency changes; each later one starts a beat
+                        // after, which is what turns a simultaneous batch
+                        // into a left-to-right cascade.
+                        birth_delay: born_this_ingest as f64 * BIRTH_STAGGER,
                     });
+                    born_this_ingest += 1;
                 }
             }
             j += 1;
@@ -493,7 +525,38 @@ impl RollingWindow {
                 }
                 w.opacity = tier;
             } else {
+                // Spend elapsed time on the birth delay first, then ease with
+                // whatever remains. Splitting it this way keeps the stagger
+                // wall-clock accurate at any refresh rate AND stops a coarse
+                // frame from being swallowed whole: a step longer than the
+                // delay still leaves the word visibly easing, rather than
+                // arriving and sitting blank for a frame.
+                let mut remaining = dt;
+                if w.birth_delay > 0.0 {
+                    let spent = w.birth_delay.min(remaining);
+                    w.birth_delay -= spent;
+                    remaining -= spent;
+                    // Pending work, so never report the frame as settled: a
+                    // skipped repaint here is precisely how the cascade would
+                    // collapse back into a simultaneous pop.
+                    moved = true;
+                }
+                let ease = if remaining <= 0.0 {
+                    0.0
+                } else if remaining >= dt {
+                    ease
+                } else {
+                    1.0 - (-remaining / EASE_TAU).exp()
+                };
                 let delta = (target - w.opacity) * ease;
+                // A word still inside its birth delay must not be snapped:
+                // the snap below exists to finish an easing that has nearly
+                // converged, and applying it to a word that has not begun
+                // easing at all would slam it to full opacity, which is the
+                // simultaneous pop the stagger exists to prevent.
+                if w.birth_delay > 0.0 {
+                    continue;
+                }
                 // Snap when within a quarter-percent: exponential decay
                 // never reaches its target, and without a snap "settled"
                 // would never be true and the skip-repaint path dead.
@@ -865,5 +928,53 @@ mod tests {
         // Glance anchor: the newest word sits at 0; older words extend left.
         assert_eq!(*xs.last().unwrap(), 0.0);
         assert!(xs[0] < xs[1] && xs[1] < xs[2]);
+    }
+
+    /// Words arriving together must fade up in sequence, not in unison.
+    ///
+    /// This is the whole point of the stagger. Apple's SpeechTranscriber
+    /// emits a revised hypothesis roughly every 1.3s, so a burst of words
+    /// lands in one frame; without staggering they shared a single easing
+    /// constant and appeared simultaneously, which reads as a block of text
+    /// being stamped down rather than as speech arriving.
+    #[test]
+    fn a_burst_of_words_cascades_rather_than_flashing() {
+        let mut w = RollingWindow::new();
+        w.ingest("one two three four", 0.0, &mut measure60);
+
+        // One frame at 120Hz: only the first word has had any time to ease,
+        // because each later word is still burning its birth delay.
+        w.step(1.0 / 120.0, 1.0 / 120.0, false);
+        let op: Vec<f64> = w.words().iter().map(|x| x.opacity).collect();
+        assert!(op[0] > 0.0, "the first word never waits: {op:?}");
+        assert!(
+            op[0] > op[1] && op[1] >= op[2] && op[2] >= op[3],
+            "opacity must decrease left to right during the cascade: {op:?}"
+        );
+
+        // Well past the whole cascade, everything has caught up, so the
+        // stagger costs nothing in the steady state.
+        for _ in 0..120 {
+            w.step(1.0 / 120.0, 1.0 / 120.0, false);
+        }
+        let op: Vec<f64> = w.words().iter().map(|x| x.opacity).collect();
+        assert!(
+            op.iter().all(|&o| o > 0.9),
+            "all words settle once the cascade finishes: {op:?}"
+        );
+    }
+
+    /// Reduced motion keeps its instant tiers: the cascade is animation, and
+    /// a user who asked for less of it should not be made to wait for words.
+    #[test]
+    fn reduced_motion_skips_the_cascade() {
+        let mut w = RollingWindow::new();
+        w.ingest("one two three four", 0.0, &mut measure60);
+        w.step(1.0 / 120.0, 1.0 / 120.0, true);
+        let op: Vec<f64> = w.words().iter().map(|x| x.opacity).collect();
+        assert!(
+            op.iter().all(|&o| o > 0.9),
+            "reduced motion shows the burst at once: {op:?}"
+        );
     }
 }
