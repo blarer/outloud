@@ -25,7 +25,7 @@ if [[ "$(uname)" != "Darwin" ]]; then
 fi
 
 APP_NAME="OutLoudDoctor"
-BUNDLE_ID="dev.hexavoice.doctor"
+BUNDLE_ID="dev.outloud.doctor"
 APP_DIR="$ROOT/dist/$APP_NAME.app"
 LOG="${TMPDIR:-/tmp}/outloud-doctor-$$.log"
 

@@ -139,7 +139,7 @@ The ad-hoc signature is pinned to the exact build's `cdhash`, so **after every
 rebuild** the grant silently dies while the toggle still reads on:
 
 ```bash
-tccutil reset Accessibility dev.hexavoice.hexad   # then re-grant
+tccutil reset Accessibility dev.outloud.outloud   # then re-grant
 ```
 
 ## 4. Actually dictate
@@ -255,7 +255,7 @@ apply and `Ctrl-X u` to undo through your shell's own undo.
 |---|---|---|
 | No icon in the menu bar after `open` | the app is not running, or the bar is full and macOS hid the item | `ps aux \| grep OutLoud.app`; if it is running, widen the bar (quit another menu bar app) or check with `cargo run -p overlay --bin status-demo` |
 | `via clipboard-paste` on every run | no Accessibility grant, or the grant is on the wrong process | step 3, and mind the responsible-process trap |
-| Toggle is on but everything is denied | rebuilt since granting (`cdhash` changed), or wrong responsible process | `tccutil reset Accessibility dev.hexavoice.hexad`, re-grant |
+| Toggle is on but everything is denied | rebuilt since granting (`cdhash` changed), or wrong responsible process | `tccutil reset Accessibility dev.outloud.outloud`, re-grant |
 | Recognizer never becomes ready | macOS below 26, so no `SpeechTranscriber` | `--asr mock` to test wiring; a downloadable backend is stubbed |
 | Records silence | Microphone permission | System Settings > Privacy & Security > Microphone |
 | Anything else | run `./scripts/doctor.sh` | it classifies each failure as permission, configuration, or bug |

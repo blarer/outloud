@@ -20,7 +20,11 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 APP_NAME="OutLoud"
-BUNDLE_ID="dev.hexavoice.hexad"
+BUNDLE_ID="dev.outloud.outloud"
+# The identifier the app shipped under before the OutLoud rename. Old bundles
+# on disk still declare it, so LaunchServices cleanup below must consider
+# them too; drop this once no pre-rename bundles remain in the wild.
+LEGACY_BUNDLE_ID="dev.hexavoice.hexad"
 # LaunchServices' registration tool. Not on PATH; the full path is stable
 # across macOS versions.
 LSREGISTER="/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister"
@@ -135,10 +139,15 @@ if [[ "${OUTLOUD_KEEP_TCC:-0}" != "1" ]]; then
     # Best-effort: fails harmlessly when nothing was granted yet.
     tccutil reset Accessibility "$BUNDLE_ID" >/dev/null 2>&1 || true
     tccutil reset ListenEvent "$BUNDLE_ID" >/dev/null 2>&1 || true
+    # The legacy identifier too: a grant made before the rename is pinned to
+    # it and is unreachable from the renamed app, so leaving it makes System
+    # Settings show a stale "already granted" entry that explains nothing.
+    tccutil reset Accessibility "$LEGACY_BUNDLE_ID" >/dev/null 2>&1 || true
+    tccutil reset ListenEvent "$LEGACY_BUNDLE_ID" >/dev/null 2>&1 || true
     echo "==> Cleared the stale permission entries this rebuild invalidated"
 fi
 
-# Unregister any OTHER bundle claiming our identifier.
+# Unregister any OTHER bundle claiming our identifier, current or legacy.
 #
 # Two product renames left Hexavoice.app and AquaSpike.app bundles on disk,
 # and copies under /tmp from audit runs, ALL declaring dev.hexavoice.hexad.
@@ -151,20 +160,25 @@ fi
 # LaunchServices resolved, so a stale winner means the grant lands on an app
 # that is not the one running.
 #
+# The legacy identifier is included because old bundles declare IT, not the
+# new one: after the rename they would no longer look like rivals and could
+# win a resolution for the old id, which is exactly the confusion above.
+# Legacy cleanup only; drop it once no old bundles remain in the wild.
+#
 # Only the freshly built bundle should answer to this identifier, so drop
 # the rest from the database. The bundles themselves are left alone: this
 # script does not delete anything a human might still want.
 stale=$(
     "$LSREGISTER" -dump 2>/dev/null \
-        | awk -v id="$BUNDLE_ID" '
+        | awk -v id="$BUNDLE_ID" -v legacy="$LEGACY_BUNDLE_ID" '
             /^path:/ { p = $2 }
-            $1 == "identifier:" && $2 == id { print p }
+            $1 == "identifier:" && ($2 == id || $2 == legacy) { print p }
           ' \
         | sort -u \
         | grep -v "^$APP_DIR$" || true
 )
 if [[ -n "$stale" ]]; then
-    echo "==> Other bundles claim $BUNDLE_ID; unregistering so this build wins:"
+    echo "==> Other bundles claim $BUNDLE_ID or $LEGACY_BUNDLE_ID; unregistering so this build wins:"
     while IFS= read -r path; do
         [[ -n "$path" ]] || continue
         echo "    $path"

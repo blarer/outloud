@@ -136,7 +136,8 @@ say "3. Resetting permission grants"
 # id, so an old id left un-reset keeps a stale entry in System Settings that
 # reads as "already granted" and explains nothing.
 for bundle_id in dev.aquaoss.aquad dev.aquaoss.spike dev.aquaoss.doctor \
-                 dev.hexavoice.hexad dev.hexavoice.spike dev.hexavoice.doctor; do
+                 dev.hexavoice.hexad dev.hexavoice.spike dev.hexavoice.doctor \
+                 dev.outloud.outloud dev.outloud.doctor; do
     # tccutil fails when there is no grant to reset, which is fine.
     act tccutil reset Accessibility "$bundle_id" || true
     act tccutil reset Microphone "$bundle_id" || true

@@ -32,7 +32,7 @@
 /// doctor told users to run a `tccutil reset` against an identifier no
 /// installed app had. `tccutil` prints "Successfully reset" for an unknown
 /// identifier, so the advice looked like it worked and changed nothing.
-pub const BUNDLE_ID: &str = "dev.hexavoice.hexad";
+pub const BUNDLE_ID: &str = "dev.outloud.outloud";
 
 pub mod checks;
 pub mod redact;
