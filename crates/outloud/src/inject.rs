@@ -118,6 +118,10 @@ pub enum Outcome {
     /// rewrite itself when the user presses the plugin's key (^X^A), which
     /// is the only in-place, undo-preserving edit path a terminal has.
     StagedShellIntent { command: String },
+    /// Delivery was suppressed by OUTLOUD_NO_INJECT. Carries the text that
+    /// would have been written, so a measurement run still reports what the
+    /// recognizer produced.
+    Suppressed { text: String },
     /// Everything failed. `situation_action` is the one-line
     /// "situation -> next action" string for the Error overlay state.
     Failed { situation_action: String },
@@ -131,6 +135,19 @@ pub fn deliver(mode: &Mode, transcript: &str) -> Outcome {
     let text = transcript.trim();
     if text.is_empty() {
         return Outcome::EmptyTranscript;
+    }
+
+    // OUTLOUD_NO_INJECT=1: measure everything, type nothing.
+    //
+    // Not a nicety. A `--once --wav` run delivers into whatever window
+    // happens to be focused, so benchmarking against a recording while the
+    // user is working types the test sentence into their chat window. That
+    // happened. An automated run must be able to exercise the whole
+    // pipeline without touching a UI it does not own.
+    if std::env::var_os("OUTLOUD_NO_INJECT").is_some_and(|v| v == "1") {
+        return Outcome::Suppressed {
+            text: text.to_string(),
+        };
     }
 
     // A terminal destination inverts the transport decision for edit

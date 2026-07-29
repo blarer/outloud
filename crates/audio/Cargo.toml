@@ -56,6 +56,10 @@ vad-rs = { version = "0.1", optional = true }
 # capture backend is compiled in. Without this, `cargo clippy --all-targets
 # --no-default-features` tries to build them against an absent
 # `audio::capture` and fails, which is what a headless CI job does.
+[target.'cfg(unix)'.dev-dependencies]
+# Only for the mic_level example's SIGINT handler.
+libc = "0.2"
+
 [[example]]
 name = "first_sample_latency"
 required-features = ["capture"]

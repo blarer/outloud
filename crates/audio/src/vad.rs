@@ -20,6 +20,24 @@ pub trait VoiceDetector: Send {
     fn reset(&mut self) {}
 }
 
+/// The sensitivity steps offered to users, quietest threshold last.
+///
+/// Defined here, next to the mapping they index into, so the menu bar and
+/// the `mic_level` diagnostic cannot drift apart from each other or from
+/// the knee anchor. They already did once: a hardcoded copy of the steps
+/// kept recommending a setting the menu no longer offered.
+///
+/// The ceiling is a measurement, not a preference: above roughly 75 the
+/// gate scores a quiet room's noise floor as speech, so the top step sits
+/// one increment below that. `crates/audio/tests/noise_floor.rs` derives
+/// the bound and fails if these steps cross it.
+pub const SENSITIVITY_STEPS: [(u8, &str); 4] = [
+    (25, "Low (noisy room)"),
+    (40, "Below normal"),
+    (50, "Normal"),
+    (70, "High (sitting back)"),
+];
+
 /// RMS-energy gate with a soft knee.
 ///
 /// Not a serious VAD (it cannot tell speech from a hairdryer), but it is
@@ -49,35 +67,32 @@ impl EnergyVad {
     ///
     /// Sensitivity is the inverse of the knee: turning it *up* means a
     /// quieter voice still counts as speech, which means a *lower* RMS
-    /// threshold. Users think in "more sensitive", not "0.0025 RMS".
+    /// threshold. Users think in "more sensitive", not "0.0009 RMS".
     ///
     /// The mapping is geometric because loudness is. A linear dial would
     /// spend most of its travel in a range no microphone produces and then
     /// cross the entire useful band between two adjacent steps. Each step
     /// here is a constant *ratio*, so the dial feels the same at both ends.
     ///
-    /// Endpoints are chosen from measurement, not taste:
-    /// - 1 (least sensitive) is 0.05 RMS, near a shout, for noisy rooms.
-    /// - 50 (default) is 0.0025, the measured median of ordinary speech at
-    ///   a normal seated distance on a built-in microphone.
-    /// - 100 is 0.000125, low enough to hear someone across a quiet room,
-    ///   at the price of also hearing a fan.
+    /// The anchor is the *quiet tail* of speech, not its median. Anchoring
+    /// at the median looks right and fails in practice: half of all speech
+    /// frames sit below the median by definition, and the quiet ones are
+    /// not noise, they are word endings, trailing syllables, and the start
+    /// of a sentence before the voice is at full volume. Measured against
+    /// a real utterance, a median anchor dropped "A quick" off the front of
+    /// "A quick brown fox..." while reporting healthy levels.
     ///
-    /// The endpoints are deliberately geometric around the median, so 50
-    /// lands exactly on measured ordinary speech rather than near it.
+    /// So 50 sits at roughly the 10th percentile of measured speech
+    /// (~0.0009 RMS), comfortably below ordinary words and still an order
+    /// of magnitude above a quiet room's floor (~0.0002).
     pub fn from_sensitivity(sensitivity: u8) -> Self {
         let s = sensitivity.clamp(1, 100) as f32;
-        // Anchored at the median and stepped geometrically outward, rather
-        // than interpolated between endpoints: this way 50 is *exactly* the
-        // measured median instead of merely near it, and the endpoints are
-        // whatever that anchoring implies.
-        const MEDIAN: f32 = 0.0025;
-        /// Multiplier per step away from 50. Chosen so the dial spans a
-        /// factor of ~20 in each direction, which covers shouting into a
-        /// headset through to speaking softly across a room.
+        const QUIET_TAIL: f32 = 0.0009;
+        /// Multiplier per step away from 50, giving a ~20x span each way:
+        /// from shouting into a headset to speaking softly across a room.
         const PER_STEP: f32 = 1.0625;
         Self {
-            knee: MEDIAN * PER_STEP.powf(50.0 - s),
+            knee: QUIET_TAIL * PER_STEP.powf(50.0 - s),
         }
     }
 
@@ -233,6 +248,27 @@ mod sensitivity_tests {
         // Roughly a quarter of the median: sat back from the desk.
         let mut vad = EnergyVad::from_sensitivity(85);
         assert!(vad.speech_probability(&tone(0.0006)) >= 0.5);
+    }
+
+    #[test]
+    fn the_default_hears_the_quiet_tail_of_ordinary_speech() {
+        // The regression this anchor exists to prevent. These are real
+        // measured frame levels from a user's microphone; the quiet ones
+        // are word endings and sentence onsets, not silence. With the knee
+        // anchored at the median, 30% of them scored as silence and the
+        // recognizer lost the first two words of the sentence.
+        let measured = [
+            0.00148, 0.00325, 0.00168, 0.00302, 0.00174, 0.00183, 0.00100, 0.00137, 0.00171,
+            0.00247, 0.00203, 0.00234, 0.00231, 0.00216, 0.00128, 0.00167, 0.00198, 0.00233,
+        ];
+        let mut vad = EnergyVad::new();
+        for rms in measured {
+            assert!(
+                vad.speech_probability(&tone(rms)) >= 0.5,
+                "{rms:.5} RMS is quiet speech, not silence, and must be heard \
+                 at the default setting"
+            );
+        }
     }
 
     #[test]

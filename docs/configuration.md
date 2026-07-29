@@ -64,6 +64,16 @@ Environment variables spell the key with `OUTLOUD_` plus the key upper-cased and
 `true/false/1/0/yes/no/on/off`; lists are comma-separated. A mistyped or
 invalid environment override is reported and skipped, never silently ignored.
 
+### `OUTLOUD_NO_INJECT`
+
+Not a setting; a testing guard. With `OUTLOUD_NO_INJECT=1` the daemon runs the
+whole pipeline and reports the transcript, but writes nothing to any app.
+
+Use it for anything that replays audio, because `--once --wav` delivers into
+whatever window is focused. Benchmarking against a recording while someone is
+working will otherwise type the test sentence into their chat window, which is
+exactly how this guard came to exist. `scripts/sweep-sensitivity.sh` sets it.
+
 ## Options
 
 Both spellings work: dotted keys (`insertion.mode = "stream"`) or tables
@@ -97,18 +107,27 @@ how quiet a frame of audio can be and still count as speech; anything below the
 threshold never reaches the recognizer at all.
 
 The scale is 1–100 and geometric, so each step is a constant ratio rather than a
-constant amount. `50` is the default and sits on the measured median of ordinary
-speech at a normal seated distance on a built-in microphone (~0.0025 RMS).
+constant amount. `50` is the default and sits at roughly the 10th percentile of
+measured speech (~0.0009 RMS).
+
+That anchor is deliberately the *quiet tail* of speech rather than its median.
+Half of all speech frames sit below the median by definition, and those quiet
+frames are not noise: they are word endings, trailing syllables, and the start of
+a sentence before the voice reaches full volume. A median anchor measured as
+"70% of frames heard" and dropped `A quick` off the front of *A quick brown fox
+jumps over the lazy dog*.
 
 | Setting | Use when |
 | --- | --- |
 | `25` | Noisy room, or background speech is being transcribed |
+| `40` | Slightly quieter room than default assumes |
 | `50` | Default: normal seated distance |
-| `75` | You sit back from the machine |
-| `90` | Quiet voice, or a distant microphone |
+| `70` | You sit back from the machine, or speak quietly |
 
-Above 90 the gate is low enough that room noise itself can be recognized as
-words, which is why the menu bar stops at 90. `scripts/sweep-sensitivity.sh
+Above roughly 75 the gate is low enough that room noise itself gets recognized
+as words, which is why the menu bar stops at 70. That boundary moves whenever
+the anchor moves, so `crates/audio/tests/noise_floor.rs` derives it from a
+synthetic quiet room rather than hardcoding it. `scripts/sweep-sensitivity.sh
 <wav>` re-derives that boundary against a recording, and `cargo run -p audio
 --example mic_level` reports what your own microphone actually produces so the
 setting can be chosen from a measurement.

@@ -85,6 +85,7 @@ dependencies = [
  "anyhow",
  "cpal",
  "crossbeam-channel",
+ "libc",
  "thiserror 2.0.19",
  "vad-rs",
 ]

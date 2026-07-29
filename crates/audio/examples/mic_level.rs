@@ -1,20 +1,18 @@
 //! What RMS your voice actually produces, at whatever distance you sit.
 //!
-//! The segmenter decides "is this speech" with an RMS gate whose knee is
-//! 0.01 by default: 0.5 probability exactly at the knee, and the segmenter
-//! wants 0.5 or above. So anything quieter than ~0.01 RMS is treated as
-//! silence and never reaches the recognizer.
+//! The segmenter decides "is this speech" with an RMS gate whose knee comes
+//! from `microphone.sensitivity`. Anything quieter than the knee is treated
+//! as silence and never reaches the recognizer, so a threshold set too high
+//! is indistinguishable from a microphone that cannot hear you.
 //!
-//! That number was tuned against synthetic audio, not against a person
-//! leaning back in a chair. This prints what your microphone really
-//! delivers so the threshold can be set from a measurement instead of a
-//! guess.
+//! This reports what your microphone really delivers, and which sensitivity
+//! setting would capture it, so the setting is chosen from a measurement
+//! instead of a guess.
 //!
 //!     cargo run --release -p audio --example mic_level
 //!
-//! Speak normally at your usual distance. Then try leaning back, and try
-//! speaking quietly. The summary reports what a knee would have to be to
-//! hear each case.
+//! Speak the way you normally do, then lean back and speak again. Ctrl-C
+//! when done: the summary prints either way.
 
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
@@ -22,22 +20,24 @@ use std::time::{Duration, Instant};
 
 use audio::capture::start_capture;
 use audio::ring::ring;
+use audio::vad::{EnergyVad, SENSITIVITY_STEPS};
 
 /// 30ms at 16kHz, the frame the segmenter scores.
 const FRAME: usize = 480;
 
-/// How long to listen.
+/// How long to listen before summarizing on our own.
 const RUN: Duration = Duration::from_secs(12);
 
-/// The shipped default, for reference in the output.
-const DEFAULT_KNEE: f32 = 0.01;
-
 fn main() {
-    println!(
-        "Listening for {}s. Speak the way you normally would,",
-        RUN.as_secs()
-    );
-    println!("then lean back and speak again, then try speaking quietly.\n");
+    // Read the live default rather than restating a number: a hardcoded
+    // copy here once reported the OLD threshold after the default moved,
+    // labelling audible speech as silence and making a working microphone
+    // look deaf.
+    let default_knee = EnergyVad::new().knee();
+
+    println!("Listening. Speak normally, then lean back and speak again.");
+    println!("Ctrl-C when you are done.\n");
+    println!("current default (Normal) hears anything above {default_knee:.5} RMS\n");
 
     let (producer, consumer) = ring(16_000 * 20);
     let failed = Arc::new(AtomicBool::new(false));
@@ -49,12 +49,19 @@ fn main() {
         }
     });
 
+    // Ctrl-C must still summarize: the summary is the entire point, and
+    // the natural way to end "speak until you are done" is to interrupt.
+    install_sigint_handler();
+
     let mut frame = vec![0.0f32; FRAME];
     let mut loud: Vec<f32> = Vec::new();
     let deadline = Instant::now() + RUN;
     let mut last_print = Instant::now();
 
-    while Instant::now() < deadline && !failed.load(Ordering::SeqCst) {
+    while Instant::now() < deadline
+        && !INTERRUPTED.load(Ordering::SeqCst)
+        && !failed.load(Ordering::SeqCst)
+    {
         if consumer.pop(&mut frame) < FRAME {
             std::thread::sleep(Duration::from_millis(5));
             continue;
@@ -68,16 +75,14 @@ fn main() {
             loud.push(rms);
         }
 
-        // A live bar, so it is obvious the microphone is working and which
-        // frames are being counted.
         if last_print.elapsed() > Duration::from_millis(120) {
-            let bars = ((rms / 0.05) * 40.0).min(40.0) as usize;
-            let heard = if rms >= DEFAULT_KNEE {
+            let bars = ((rms / 0.02) * 30.0).min(30.0) as usize;
+            let label = if rms >= default_knee {
                 "SPEECH"
             } else {
                 "      "
             };
-            println!("{:>8.5}  {heard} {}", rms, "#".repeat(bars));
+            println!("{rms:>8.5}  {label} {}", "#".repeat(bars));
             last_print = Instant::now();
         }
     }
@@ -91,7 +96,6 @@ fn main() {
     loud.sort_by(|a, b| a.partial_cmp(b).unwrap());
     let pct = |q: f64| loud[((loud.len() - 1) as f64 * q) as usize];
     let (p10, p50, p90) = (pct(0.10), pct(0.50), pct(0.90));
-    let heard = loud.iter().filter(|&&r| r >= DEFAULT_KNEE).count();
 
     println!(
         "\n--- your microphone, {} frames with content ---",
@@ -100,19 +104,49 @@ fn main() {
     println!("  quietest 10%  {p10:.5}");
     println!("  median        {p50:.5}");
     println!("  loudest 10%   {p90:.5}");
-    println!("\n  current knee  {DEFAULT_KNEE:.5}");
-    println!(
-        "  frames the segmenter would call speech: {heard}/{} ({:.0}%)",
-        loud.len(),
-        100.0 * heard as f32 / loud.len() as f32
-    );
 
-    // The recommendation is the point of the exercise. Sit it below the
-    // quiet end of real speech, but comfortably above a room noise floor.
-    let suggested = (p10 * 0.6).max(0.0005);
-    println!("\n  suggested knee for this microphone and distance: {suggested:.5}");
-    if suggested < DEFAULT_KNEE * 0.8 {
-        println!("  (lower than the default: your voice is quieter than the tuning assumed,");
-        println!("   which is exactly the leaning-back case)");
+    // What each setting would actually capture, which is the decision the
+    // user is trying to make. A percentage of *your* frames is a far more
+    // useful answer than an RMS threshold in the abstract.
+    println!("\n  how much of that each setting would hear:");
+    let mut recommended = None;
+    for (value, name) in SENSITIVITY_STEPS {
+        let knee = EnergyVad::from_sensitivity(value).knee();
+        let heard = loud.iter().filter(|&&r| r >= knee).count();
+        let pct_heard = 100.0 * heard as f32 / loud.len() as f32;
+        let marker = if value == 50 { " (current)" } else { "" };
+        println!("    {name:<22} {pct_heard:5.0}% of your speech{marker}");
+        // First setting that captures the quiet tail, since the missing
+        // words are always the quietest frames, not the average ones.
+        if recommended.is_none() && pct_heard >= 90.0 {
+            recommended = Some(name);
+        }
+    }
+
+    match recommended {
+        Some(name) => println!("\n  recommended: {name}"),
+        None => println!(
+            "\n  even Very High misses some of this. Move closer, or check\n  \
+             that the right input device is selected."
+        ),
+    }
+}
+
+/// Minimal SIGINT hook so the summary survives Ctrl-C, without pulling in a
+/// dependency for one signal in one example.
+///
+/// A plain static AtomicBool, because a signal handler may only touch
+/// async-signal-safe state: no allocation, no closures, no locks.
+static INTERRUPTED: AtomicBool = AtomicBool::new(false);
+
+extern "C" fn on_sigint(_: i32) {
+    INTERRUPTED.store(true, Ordering::SeqCst);
+}
+
+fn install_sigint_handler() {
+    // SAFETY: `on_sigint` only stores to a static atomic, which is
+    // async-signal-safe.
+    unsafe {
+        libc::signal(libc::SIGINT, on_sigint as *const () as libc::sighandler_t);
     }
 }

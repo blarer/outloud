@@ -657,6 +657,10 @@ async fn commit_transcript(
             engine.transition(OverlayState::Idle, None);
             via
         }
+        Outcome::Suppressed { .. } => {
+            engine.transition(OverlayState::Idle, None);
+            "suppressed (OUTLOUD_NO_INJECT)".into()
+        }
         Outcome::EmptyTranscript => {
             engine.transition(OverlayState::Idle, None);
             "empty".into()

@@ -418,12 +418,10 @@ fn settings_menu(actions: &mut Vec<Action>, s: &Settings) -> Vec<MenuItem> {
     // This is the one setting users reach for when dictation "just doesn't
     // hear me", so it is in the menu rather than config-file-only.
     items.push(MenuItem::Label("Microphone Sensitivity".to_string()));
-    for (value, label) in [
-        (25u8, "Low (noisy room)"),
-        (50, "Normal"),
-        (75, "High (sitting back)"),
-        (90, "Very High (quiet voice)"),
-    ] {
+    // Steps come from the audio crate, which owns the knee mapping they
+    // index into. Restating them here drifted once already: the diagnostic
+    // kept recommending a setting the menu no longer offered.
+    for (value, label) in audio::vad::SENSITIVITY_STEPS {
         actions.push(Action::Set {
             key: "microphone.sensitivity".into(),
             value: Value::Int(value as i64),
@@ -431,9 +429,10 @@ fn settings_menu(actions: &mut Vec<Action>, s: &Settings) -> Vec<MenuItem> {
         let id = MenuId(actions.len() as u64 - 1);
         // Nearest step wins the checkmark, so a hand-edited 63 still shows
         // a checked row instead of an all-unchecked group that looks broken.
-        let nearest = [25u8, 50, 75, 90]
+        let nearest = audio::vad::SENSITIVITY_STEPS
             .into_iter()
-            .min_by_key(|v| v.abs_diff(s.sensitivity))
+            .min_by_key(|(v, _)| v.abs_diff(s.sensitivity))
+            .map(|(v, _)| v)
             .unwrap();
         items.push(MenuItem::choice(
             format!("   {label}"),
@@ -886,10 +885,14 @@ mod sensitivity_menu_tests {
         build(&Status::default(), &settings).1
     }
 
-    /// The menu stops at 90, not 100, and that is a measurement not a taste:
-    /// swept against a synthetic quiet room (~0.0002 RMS), sensitivity 100
-    /// produced words out of noise while 90 stayed silent. Offering a step
-    /// that invents text would poison the feature it is meant to fix.
+    /// The menu's ceiling is a measurement, not a taste: swept against a
+    /// synthetic quiet room (~0.0002 RMS), sensitivity 75 and above starts
+    /// scoring pure noise as speech. Offering a step that invents text
+    /// would poison the feature it is meant to fix, so the menu stops one
+    /// step below at 70.
+    ///
+    /// This bound moves whenever the knee anchor moves, which is exactly
+    /// why it is asserted rather than remembered.
     ///
     /// See scripts/sweep-sensitivity.sh to re-derive this.
     #[test]
@@ -901,7 +904,7 @@ mod sensitivity_menu_tests {
                         panic!("want an int")
                     };
                     assert!(
-                        n <= 90,
+                        n <= 70,
                         "sensitivity {n} transcribes room noise; the menu must not offer it"
                     );
                 }
@@ -948,13 +951,13 @@ mod sensitivity_menu_tests {
     #[test]
     fn the_checked_row_is_the_one_that_matches_the_setting() {
         let settings = Settings {
-            sensitivity: 75,
+            sensitivity: 70,
             ..Settings::default()
         };
         let (model, actions) = build(&Status::default(), &settings);
         assert_eq!(
             checked_sensitivity_values(&model, &actions),
-            vec![Value::Int(75)]
+            vec![Value::Int(70)]
         );
     }
 
