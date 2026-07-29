@@ -41,7 +41,7 @@ mod demo {
     fn model(state: OverlayState) -> MenuModel {
         MenuModel {
             state,
-            tooltip: format!("Aqua demo: {state}"),
+            tooltip: format!("OutLoud demo: {state}"),
             items: vec![
                 MenuItem::Label(format!("State: {state}")),
                 MenuItem::Separator,

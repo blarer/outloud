@@ -1,7 +1,7 @@
 //! The macOS menu-bar presence: an `NSStatusItem` whose glyph tracks the
 //! product state and whose menu is rebuilt from a [`MenuModel`].
 //!
-//! Why this exists at all: `Aqua.app` sets `LSUIElement`, so it has no Dock
+//! Why this exists at all: `OutLoud.app` sets `LSUIElement`, so it has no Dock
 //! icon and no window. Without a status item a running daemon is completely
 //! invisible — there is no way to tell it is alive, no way to configure it,
 //! and no way to quit it except `killall`. `docs/ux/05-settings-and-states.md`
@@ -57,7 +57,7 @@ define_class!(
     /// handler is.
     #[unsafe(super(NSObject))]
     #[thread_kind = MainThreadOnly]
-    #[name = "AquaStatusTarget"]
+    #[name = "OutLoudStatusTarget"]
     #[ivars = RefCell<Vec<MenuId>>]
     struct StatusTarget;
 
@@ -172,7 +172,7 @@ impl MacStatusItem {
         let tint = glyph_tint(model.state);
         let image = self.mark_image(tint, dark);
         // The accessibility description is the state, not the shape: a
-        // VoiceOver user needs "Aqua: listening", not "megaphone".
+        // VoiceOver user needs "OutLoud: listening", not "megaphone".
         image.setAccessibilityDescription(Some(&NSString::from_str(&model.tooltip)));
         button.setImage(Some(&image));
         // The colour is baked into the drawing, so no tint is applied here.

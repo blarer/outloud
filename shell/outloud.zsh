@@ -1,4 +1,4 @@
-# aqua shell-bridge: zsh ZLE widget (T2 edit-by-voice).
+# outloud shell-bridge: zsh ZLE widget (T2 edit-by-voice).
 #
 # Sourced from .zshrc. Defines a widget that offers the current ZLE buffer
 # to the bridge daemon and applies the returned rewrite through ZLE itself,
@@ -9,14 +9,17 @@
 
 # Socket path must match shell_bridge::server::default_socket_path.
 # XDG_RUNTIME_DIR on Linux, TMPDIR on macOS, uid-scoped /tmp as last resort.
-: ${AQUA_BRIDGE_SOCKET:="${XDG_RUNTIME_DIR:-${TMPDIR:-/tmp/aqua-$UID}}/aqua/shell.sock"}
+# AQUA_BRIDGE_SOCKET is the product's previous name for this variable and is
+# still honored so an existing install's environment keeps working; it will
+# be dropped once no pre-rename installs remain.
+: ${OUTLOUD_BRIDGE_SOCKET:="${AQUA_BRIDGE_SOCKET:-${XDG_RUNTIME_DIR:-${TMPDIR:-/tmp/outloud-$UID}}/outloud/shell.sock}"}
 
-aqua-edit() {
+outloud-edit() {
   emulate -L zsh
   setopt no_unset pipe_fail
 
-  if [[ ! -S $AQUA_BRIDGE_SOCKET ]]; then
-    zle -M "aqua: bridge not running (no socket at $AQUA_BRIDGE_SOCKET)"
+  if [[ ! -S $OUTLOUD_BRIDGE_SOCKET ]]; then
+    zle -M "outloud: bridge not running (no socket at $OUTLOUD_BRIDGE_SOCKET)"
     return 1
   fi
 
@@ -29,8 +32,8 @@ aqua-edit() {
   # which is exactly the protocol's zsh unit. One request, one reply,
   # connection closed; -w 2 keeps a wedged daemon from freezing the shell.
   reply=$(printf 'EDIT v1 zsh %d %s\n' "$CURSOR" "$b64" \
-          | command nc -U -w 2 "$AQUA_BRIDGE_SOCKET" 2>/dev/null) || {
-    zle -M "aqua: bridge did not answer"
+          | command nc -U -w 2 "$OUTLOUD_BRIDGE_SOCKET" 2>/dev/null) || {
+    zle -M "outloud: bridge did not answer"
     return 1
   }
 
@@ -45,7 +48,7 @@ aqua-edit() {
       # character cursor; the byte one is for readline clients.
       local new_buffer
       new_buffer=$(printf %s "${fields[3]}" | base64 -d) || {
-        zle -M "aqua: bad payload from bridge"
+        zle -M "outloud: bad payload from bridge"
         return 1
       }
       # Make the voice edit its own undo unit, so one ^Xu reverts exactly
@@ -56,21 +59,22 @@ aqua-edit() {
       zle redisplay
       ;;
     NOOP)
-      zle -M "aqua: $(printf %s "$rest" | base64 -d 2>/dev/null)"
+      zle -M "outloud: $(printf %s "$rest" | base64 -d 2>/dev/null)"
       ;;
     ERR)
-      zle -M "aqua error: $(printf %s "$rest" | base64 -d 2>/dev/null)"
+      zle -M "outloud error: $(printf %s "$rest" | base64 -d 2>/dev/null)"
       return 1
       ;;
     *)
-      zle -M "aqua: unexpected reply '$verb'"
+      zle -M "outloud: unexpected reply '$verb'"
       return 1
       ;;
   esac
 }
 
-zle -N aqua-edit
+zle -N outloud-edit
 # ^X^A by default: unbound in stock emacs and vi keymaps, so we never
-# shadow a binding the user already relies on. Override AQUA_BRIDGE_KEY
-# before sourcing to move it.
-bindkey "${AQUA_BRIDGE_KEY:-^X^A}" aqua-edit
+# shadow a binding the user already relies on. Override OUTLOUD_BRIDGE_KEY
+# (or the legacy AQUA_BRIDGE_KEY, honored for existing installs) before
+# sourcing to move it.
+bindkey "${OUTLOUD_BRIDGE_KEY:-${AQUA_BRIDGE_KEY:-^X^A}}" outloud-edit

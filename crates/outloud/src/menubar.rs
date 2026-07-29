@@ -252,7 +252,7 @@ pub fn build(status: &Status, settings: &Settings) -> (MenuModel, Vec<Action>) {
             // that appears to have done nothing until some future restart
             // is worse than one that admits it. Comparing the live bind to
             // the configured value catches this however it happened: the
-            // menu, a hand edit, or an AQUA_HOTKEY override.
+            // menu, a hand edit, or an OUTLOUD_HOTKEY (or legacy AQUA_HOTKEY) override.
             if !same_chord(chord, &settings.hotkey) {
                 items.push(MenuItem::Label(format!(
                     "   \"{}\" takes effect after Quit and reopen",
@@ -706,7 +706,7 @@ mod tests {
     #[test]
     fn regained_accessibility_stops_nagging() {
         // The opposite direction, and the more common one: the quickstart
-        // tells users to grant the permission with Aqua already running. The
+        // tells users to grant the permission with OutLoud already running. The
         // row must disappear on its own, or they learn the menu lies.
         let st = status(OverlayState::Idle); // trusted, hotkey bound
         let (model, _) = build(&st, &settings());

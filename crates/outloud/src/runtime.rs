@@ -175,7 +175,7 @@ mod tests {
 
     /// Granting the permission while the daemon runs must take effect
     /// without a restart. This is the common direction: the quickstart tells
-    /// users to grant Accessibility, and they do it with Aqua already
+    /// users to grant Accessibility, and they do it with OutLoud already
     /// running.
     #[test]
     fn regaining_trust_clears_the_block() {

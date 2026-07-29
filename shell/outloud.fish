@@ -1,4 +1,4 @@
-# aqua shell-bridge: fish binding (T2 edit-by-voice).
+# outloud shell-bridge: fish binding (T2 edit-by-voice).
 #
 # Installed as a symlink in ~/.config/fish/conf.d/, which fish sources
 # automatically. Uses the `commandline` builtin for both read and write, so
@@ -8,20 +8,25 @@
 # `commandline -r` replaces text, it never submits it.
 
 # Socket path must match shell_bridge::server::default_socket_path.
-if not set -q AQUA_BRIDGE_SOCKET
-    if set -q XDG_RUNTIME_DIR
-        set -g AQUA_BRIDGE_SOCKET $XDG_RUNTIME_DIR/aqua/shell.sock
+# AQUA_BRIDGE_SOCKET is the product's previous name for this variable and is
+# still honored so an existing install's environment keeps working; it will
+# be dropped once no pre-rename installs remain.
+if not set -q OUTLOUD_BRIDGE_SOCKET
+    if set -q AQUA_BRIDGE_SOCKET
+        set -g OUTLOUD_BRIDGE_SOCKET $AQUA_BRIDGE_SOCKET
+    else if set -q XDG_RUNTIME_DIR
+        set -g OUTLOUD_BRIDGE_SOCKET $XDG_RUNTIME_DIR/outloud/shell.sock
     else if set -q TMPDIR
-        set -g AQUA_BRIDGE_SOCKET $TMPDIR/aqua/shell.sock
+        set -g OUTLOUD_BRIDGE_SOCKET $TMPDIR/outloud/shell.sock
     else
-        set -g AQUA_BRIDGE_SOCKET /tmp/aqua-(id -u)/aqua/shell.sock
+        set -g OUTLOUD_BRIDGE_SOCKET /tmp/outloud-(id -u)/outloud/shell.sock
     end
 end
 
-function _aqua_edit
-    if not test -S $AQUA_BRIDGE_SOCKET
+function _outloud_edit
+    if not test -S $OUTLOUD_BRIDGE_SOCKET
         commandline -f repaint
-        echo "aqua: bridge not running (no socket at $AQUA_BRIDGE_SOCKET)" >&2
+        echo "outloud: bridge not running (no socket at $OUTLOUD_BRIDGE_SOCKET)" >&2
         return 1
     end
 
@@ -32,9 +37,9 @@ function _aqua_edit
     # fish's cursor offset counts characters, the protocol's fish unit.
     set -l cur (commandline -C)
 
-    set -l reply (printf 'EDIT v1 fish %d %s\n' $cur $b64 | nc -U -w 2 $AQUA_BRIDGE_SOCKET 2>/dev/null)
+    set -l reply (printf 'EDIT v1 fish %d %s\n' $cur $b64 | nc -U -w 2 $OUTLOUD_BRIDGE_SOCKET 2>/dev/null)
     if test -z "$reply"
-        echo "aqua: bridge did not answer" >&2
+        echo "outloud: bridge did not answer" >&2
         return 1
     end
 
@@ -47,21 +52,24 @@ function _aqua_edit
             commandline -C $parts[3]
             commandline -f repaint
         case NOOP
-            echo "aqua:" (printf %s $parts[2] | base64 -d) >&2
+            echo "outloud:" (printf %s $parts[2] | base64 -d) >&2
         case ERR
-            echo "aqua error:" (printf %s $parts[2] | base64 -d) >&2
+            echo "outloud error:" (printf %s $parts[2] | base64 -d) >&2
             return 1
         case '*'
-            echo "aqua: unexpected reply $parts[1]" >&2
+            echo "outloud: unexpected reply $parts[1]" >&2
             return 1
     end
 end
 
 # Same default chord as bash/zsh: ctrl-x ctrl-a, unbound in stock fish.
+# AQUA_BRIDGE_KEY is honored for installs that predate the rename.
 if status is-interactive
-    if set -q AQUA_BRIDGE_KEY
-        bind $AQUA_BRIDGE_KEY _aqua_edit
+    if set -q OUTLOUD_BRIDGE_KEY
+        bind $OUTLOUD_BRIDGE_KEY _outloud_edit
+    else if set -q AQUA_BRIDGE_KEY
+        bind $AQUA_BRIDGE_KEY _outloud_edit
     else
-        bind \cx\ca _aqua_edit
+        bind \cx\ca _outloud_edit
     end
 end

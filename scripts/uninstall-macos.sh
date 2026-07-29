@@ -147,11 +147,10 @@ say ""
 #    the user's rc file and has no uninstall of its own, so a stale line
 #    pointing at a deleted repo would print an error on every new shell.
 #
-#    Matched on the marker comment the installer writes, in BOTH spellings.
-#    `shell-bridge install` still writes "# aqua shell-bridge" (see
-#    shell-bridge/src/main.rs), so matching only the new product name would
-#    silently leave every existing user's rc file broken. Verified against the
-#    source rather than inferred from the product name.
+#    Matched on the marker comment the installer writes, in BOTH spellings:
+#    `shell-bridge install` writes "# outloud shell-bridge" today, but
+#    pre-rename installs left "# aqua shell-bridge", and matching only the
+#    new name would silently leave every existing user's rc file broken.
 say "4. Removing the shell plugin line"
 REMOVED_RC=0
 # One pattern for both generations; also matches the sourced plugin line.
@@ -181,11 +180,10 @@ say ""
 #    something the user authored.
 #
 #    Paths verified against the code rather than assumed from the product
-#    name, because the rename moved some names and not others. As of writing
-#    the daemon still reports `~/.aqua-oss/models` (diag/src/checks.rs) and the
-#    bridge still binds `<runtime>/aqua/shell.sock` (shell-bridge/src/server.rs),
-#    so both spellings are listed: the old ones because they are what exists
-#    today, the new ones so this keeps working once those catch up.
+#    name. The bridge binds `<runtime>/outloud/shell.sock` today but bound
+#    `<runtime>/aqua/shell.sock` before the rename, and the model directory
+#    is deliberately still `~/.aqua-oss/models` (diag/src/checks.rs), so both
+#    spellings are listed.
 say "5. Removing runtime state"
 REMOVED_STATE=0
 RUNTIME_BASE="${XDG_RUNTIME_DIR:-${TMPDIR:-/tmp}}"

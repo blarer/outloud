@@ -127,7 +127,7 @@ impl WinOverlay {
                 );
             }
 
-            let class_name = wide("AquaOverlayClass");
+            let class_name = wide("OutLoudOverlayClass");
             let wc = WNDCLASSW {
                 lpfnWndProc: Some(wnd_proc),
                 lpszClassName: PCWSTR(class_name.as_ptr()),
@@ -144,7 +144,7 @@ impl WinOverlay {
                     | WS_EX_TOPMOST
                     | WS_EX_TOOLWINDOW,
                 PCWSTR(class_name.as_ptr()),
-                PCWSTR(wide("Aqua").as_ptr()),
+                PCWSTR(wide("OutLoud").as_ptr()),
                 WS_POPUP,
                 0,
                 0,

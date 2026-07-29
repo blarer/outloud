@@ -224,7 +224,7 @@ define_class!(
     /// the guarantee unconditional even if AppKit's heuristics change.
     #[unsafe(super(NSPanel))]
     #[thread_kind = MainThreadOnly]
-    #[name = "AquaOverlayPanel"]
+    #[name = "OutLoudOverlayPanel"]
     struct OverlayPanel;
 
     impl OverlayPanel {
@@ -246,7 +246,7 @@ define_class!(
     /// `aquaTick:` is the per-refresh animation step.
     #[unsafe(super(NSView))]
     #[thread_kind = MainThreadOnly]
-    #[name = "AquaOverlayView"]
+    #[name = "OutLoudOverlayView"]
     #[ivars = RefCell<Model>]
     struct OverlayView;
 

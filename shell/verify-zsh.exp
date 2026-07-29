@@ -1,6 +1,6 @@
 #!/usr/bin/env expect -f
 # Live verification: drives a real interactive zsh (temp ZDOTDIR) through
-# the aqua ZLE widget and asserts the command line was rewritten in place.
+# the outloud ZLE widget and asserts the command line was rewritten in place.
 # Args: <bridge-bin> <socket> <zdotdir>
 set timeout 10
 set bridge [lindex $argv 0]
@@ -9,7 +9,7 @@ set zdot   [lindex $argv 2]
 
 set env(ZDOTDIR) $zdot
 spawn zsh -i
-expect "aqua-demo"
+expect "outloud-demo"
 
 # Type a command but DO NOT run it.
 send "kubectl get pods --namespace prod-web --output wide"
@@ -38,7 +38,7 @@ send "\x18u"
 # widget again (no intent staged, so it is a NOOP) which makes the plugin
 # report its buffer to the daemon, then ask the daemon what it saw.
 send "\x18\x01"
-expect "aqua:"
+expect "outloud:"
 set peeked [exec $bridge peek --socket $socket]
 if {[string match "*prod-web*" $peeked]} {
     puts "\nVERIFY: zsh undo restored prod-web (daemon peek: $peeked)"

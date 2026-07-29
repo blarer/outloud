@@ -162,7 +162,7 @@ fn report_refusal_to_the_user(message: &str) {
     // future edit containing a quote from silently breaking the dialog.
     let escaped = message.replace('\\', "\\\\").replace('"', "\\\"");
     let script = format!(
-        "display dialog \"{escaped}\" with title \"Aqua\" buttons {{\"OK\"}} \
+        "display dialog \"{escaped}\" with title \"OutLoud\" buttons {{\"OK\"}} \
          default button \"OK\" with icon caution"
     );
     // Best effort: failing to show a dialog must not change the exit path.
@@ -193,7 +193,7 @@ fn main() -> anyhow::Result<()> {
     } else {
         let lock = outloud::instance::acquire().map_err(|e| {
             // A bundled launch has no terminal, so this message would go
-            // nowhere: double-clicking Aqua.app while a daemon is running
+            // nowhere: double-clicking OutLoud.app while a daemon is running
             // would simply do nothing at all, which reads as "the app is
             // broken" rather than "it is already running". Say it where a
             // GUI user can see it before the error goes to a stderr nobody
@@ -442,7 +442,7 @@ fn overlay_main(
     // while the daemon runs. Revocation (TCC reset, re-sign, OS update)
     // otherwise leaves a daemon that believes it is trusted and silently
     // degrades; the grant being ADDED is even more common, because the
-    // quickstart tells people to do exactly that with Aqua already running,
+    // quickstart tells people to do exactly that with OutLoud already running,
     // and without a re-check they conclude the fix did not work.
     //
     // Once a second, not every frame: `AXIsProcessTrusted` is a cross-process

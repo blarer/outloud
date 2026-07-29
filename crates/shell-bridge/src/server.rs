@@ -43,19 +43,31 @@ pub const INTENT_TTL: Duration = Duration::from_secs(30);
 /// pipeline, stingy for a wedged one.
 const READ_TIMEOUT: Duration = Duration::from_secs(2);
 
-/// Default socket path: `$XDG_RUNTIME_DIR/aqua/shell.sock` where that
+/// Default socket path: `$XDG_RUNTIME_DIR/outloud/shell.sock` where that
 /// exists (Linux: correct lifetime and 0700 by contract), else a 0700 dir
-/// under `$TMPDIR` (macOS: per-user by construction), else `/tmp/aqua-$UID`.
+/// under `$TMPDIR` (macOS: per-user by construction), else
+/// `/tmp/outloud-$UID`.
+///
+/// `$OUTLOUD_BRIDGE_SOCKET` overrides everything, and the pre-rename
+/// `$AQUA_BRIDGE_SOCKET` is still honored: an existing install exported it
+/// from a shell rc, and ignoring it would split the daemon and that user's
+/// plugins onto two different sockets. Drop the legacy name once no
+/// pre-rename installs remain.
 pub fn default_socket_path() -> PathBuf {
+    if let Some(p) =
+        std::env::var_os("OUTLOUD_BRIDGE_SOCKET").or_else(|| std::env::var_os("AQUA_BRIDGE_SOCKET"))
+    {
+        return PathBuf::from(p);
+    }
     let base = std::env::var_os("XDG_RUNTIME_DIR")
         .or_else(|| std::env::var_os("TMPDIR"))
         .map(PathBuf::from)
         .unwrap_or_else(|| {
             // /tmp fallback: encode the uid so two users never collide on
             // a predictable path (a collision is a symlink-attack invitation).
-            PathBuf::from(format!("/tmp/aqua-{}", unsafe { libc::geteuid() }))
+            PathBuf::from(format!("/tmp/outloud-{}", unsafe { libc::geteuid() }))
         });
-    base.join("aqua").join("shell.sock")
+    base.join("outloud").join("shell.sock")
 }
 
 /// What the daemon knows between connections.

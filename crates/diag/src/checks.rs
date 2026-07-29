@@ -96,11 +96,12 @@ impl Check for AccessibilityPermission {
 ///
 /// Complication: `open --env` (used by scripts/doctor.sh) passes the caller's
 /// environment through, so TERM survives a LaunchServices launch. The wrapper
-/// therefore sets AQUA_LAUNCHED_VIA_LS=1 explicitly, which overrides the
+/// therefore sets OUTLOUD_LAUNCHED_VIA_LS=1 explicitly, which overrides the
 /// shell markers: LaunchServices decides the responsible process regardless
-/// of what env vars leaked through.
+/// of what env vars leaked through. The pre-rename AQUA_LAUNCHED_VIA_LS is
+/// still accepted because older wrapper scripts in the wild set it.
 pub fn launched_from_shell(env: &Env) -> bool {
-    if env.get("AQUA_LAUNCHED_VIA_LS").is_some() {
+    if env.get("OUTLOUD_LAUNCHED_VIA_LS").is_some() || env.get("AQUA_LAUNCHED_VIA_LS").is_some() {
         return false;
     }
     // TERM_SESSION_ID / ITERM_SESSION_ID mark Terminal.app/iTerm2 sessions;
@@ -1069,6 +1070,14 @@ mod tests {
         // scripts/doctor.sh uses `open --env`, which leaks the caller's TERM
         // into the launched app. The explicit marker must win, or a correct
         // launch would be misdiagnosed as a shell launch.
+        let env = Env::from_pairs(&[("TERM", "xterm"), ("OUTLOUD_LAUNCHED_VIA_LS", "1")]);
+        assert!(!launched_from_shell(&env));
+    }
+
+    #[test]
+    fn legacy_launchservices_marker_still_wins() {
+        // Pre-rename wrapper scripts set the AQUA_ name; a stale copy of
+        // doctor.sh must not be misdiagnosed as a shell launch.
         let env = Env::from_pairs(&[("TERM", "xterm"), ("AQUA_LAUNCHED_VIA_LS", "1")]);
         assert!(!launched_from_shell(&env));
     }

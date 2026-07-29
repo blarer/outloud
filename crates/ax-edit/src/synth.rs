@@ -269,6 +269,6 @@ mod tests {
     #[test]
     #[ignore = "posts real keystrokes into the focused application"]
     fn synth_types_into_the_focused_app() {
-        type_text("aqua synth test\n").expect("typing must succeed when trusted");
+        type_text("outloud synth test\n").expect("typing must succeed when trusted");
     }
 }

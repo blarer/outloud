@@ -154,7 +154,7 @@ fn plugin_dir(explicit: Option<String>) -> anyhow::Result<PathBuf> {
     let mut dir = exe.parent().map(Path::to_path_buf);
     while let Some(d) = dir {
         let candidate = d.join("shell");
-        if candidate.join("aqua.zsh").exists() {
+        if candidate.join("outloud.zsh").exists() {
             return Ok(candidate);
         }
         dir = d.parent().map(Path::to_path_buf);
@@ -167,9 +167,9 @@ fn plugin_dir(explicit: Option<String>) -> anyhow::Result<PathBuf> {
 #[cfg(unix)]
 fn plugin_path(dir: &Path, shell: &str) -> anyhow::Result<PathBuf> {
     let file = match shell {
-        "bash" => "aqua.bash",
-        "zsh" => "aqua.zsh",
-        "fish" => "aqua.fish",
+        "bash" => "outloud.bash",
+        "zsh" => "outloud.zsh",
+        "fish" => "outloud.fish",
         other => anyhow::bail!("unsupported shell '{other}' (bash, zsh, fish)"),
     };
     Ok(dir.join(file))
@@ -197,7 +197,7 @@ fn install(shell: &str, rc_override: Option<PathBuf>, dir: &Path) -> anyhow::Res
                 .join(".zshrc"),
             "bash" => home.join(".bashrc"),
             // fish sources conf.d/*.fish automatically: drop-in, no rc edit.
-            "fish" => home.join(".config/fish/conf.d/aqua.fish"),
+            "fish" => home.join(".config/fish/conf.d/outloud.fish"),
             other => anyhow::bail!("unsupported shell '{other}'"),
         },
     };
@@ -211,12 +211,26 @@ fn install(shell: &str, rc_override: Option<PathBuf>, dir: &Path) -> anyhow::Res
         if rc.symlink_metadata().is_ok() {
             std::fs::remove_file(&rc)?;
         }
+        // A conf.d symlink from a pre-rename install points at a plugin
+        // file that no longer exists; fish silently skips a dangling
+        // symlink, so the user's binding would just vanish. Remove it.
+        let legacy = rc.with_file_name("aqua.fish");
+        if legacy.symlink_metadata().is_ok() {
+            std::fs::remove_file(&legacy)?;
+            println!("removed pre-rename plugin link: {}", legacy.display());
+        }
         std::os::unix::fs::symlink(&plugin, &rc)?;
         println!("installed: {} -> {}", rc.display(), plugin.display());
         return Ok(());
     }
 
-    let marker = "# aqua shell-bridge";
+    let marker = "# outloud shell-bridge";
+    // Pre-rename installs left "# aqua shell-bridge" plus a source line for
+    // a shell/aqua.* file that no longer exists. Rewriting our own old
+    // marker block (marker line + the guarded source line under it) is what
+    // keeps `install` idempotent across the rename instead of silently
+    // leaving a dead source line and appending a second block.
+    let legacy_marker = "# aqua shell-bridge";
     let line = format!(
         "{marker}\n[ -f \"{p}\" ] && source \"{p}\"\n",
         p = plugin.display()
@@ -224,6 +238,32 @@ fn install(shell: &str, rc_override: Option<PathBuf>, dir: &Path) -> anyhow::Res
     let existing = std::fs::read_to_string(&rc).unwrap_or_default();
     if existing.contains(marker) {
         println!("already installed in {}", rc.display());
+        return Ok(());
+    }
+    if existing.contains(legacy_marker) {
+        let rewritten: String = existing
+            .lines()
+            .scan(false, |skip_next, l| {
+                if *skip_next {
+                    *skip_next = false;
+                    // The guarded source line that followed the old marker.
+                    if l.contains("&& source ") {
+                        return Some(None);
+                    }
+                }
+                if l.trim() == legacy_marker {
+                    *skip_next = true;
+                    return Some(None);
+                }
+                Some(Some(l))
+            })
+            .flatten()
+            .collect::<Vec<_>>()
+            .join("\n");
+        let updated = format!("{}\n\n{line}", rewritten.trim_end());
+        std::fs::write(&rc, updated)?;
+        println!("updated pre-rename install in {}", rc.display());
+        println!("restart your shell or: source {}", rc.display());
         return Ok(());
     }
     let mut f = std::fs::OpenOptions::new()

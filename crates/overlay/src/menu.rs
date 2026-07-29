@@ -163,7 +163,7 @@ mod tests {
             state: OverlayState::Idle,
             tooltip: "idle".into(),
             items: vec![
-                MenuItem::Label("Aqua: idle".into()),
+                MenuItem::Label("OutLoud: idle".into()),
                 MenuItem::Separator,
                 MenuItem::action("Quit", MenuId(1)),
                 MenuItem::Submenu {
@@ -188,6 +188,6 @@ mod tests {
             items: vec![MenuItem::action(title, MenuId(1))],
         };
         assert_eq!(mk("Quit"), mk("Quit"));
-        assert_ne!(mk("Quit"), mk("Quit Aqua"));
+        assert_ne!(mk("Quit"), mk("Quit OutLoud"));
     }
 }

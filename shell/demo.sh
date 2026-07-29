@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# aqua shell-bridge demo: launch the bridge, open a zsh with the plugin
+# outloud shell-bridge demo: launch the bridge, open a zsh with the plugin
 # installed into a THROWAWAY ZDOTDIR (your real ~/.zshrc is not touched),
 # stage an edit, and let you watch the command line rewrite itself.
 #
@@ -19,7 +19,7 @@ bridge="$here/target/debug/shell-bridge"
 
 # Isolated socket so the demo never collides with a real daemon.
 demo_dir=$(mktemp -d)
-socket="$demo_dir/aqua/shell.sock"
+socket="$demo_dir/outloud/shell.sock"
 trap 'kill $bridge_pid 2>/dev/null || true; rm -rf "$demo_dir"' EXIT
 
 "$bridge" serve --socket "$socket" &
@@ -35,10 +35,10 @@ for _ in $(seq 50); do [ -S "$socket" ] && break; sleep 0.1; done
 zdot="$demo_dir/zdot"
 mkdir -p "$zdot"
 cat > "$zdot/.zshrc" <<RC
-export AQUA_BRIDGE_SOCKET="$socket"
-source "$here/shell/aqua.zsh"
-PROMPT='aqua-demo %% '
-echo "aqua demo shell. Type: kubectl get pods --namespace prod-web"
+export OUTLOUD_BRIDGE_SOCKET="$socket"
+source "$here/shell/outloud.zsh"
+PROMPT='outloud-demo %% '
+echo "outloud demo shell. Type: kubectl get pods --namespace prod-web"
 echo "Then press Ctrl-X Ctrl-A to apply the staged edit. Ctrl-X u undoes."
 RC
 

@@ -91,7 +91,7 @@ pub mod palette {
     use super::Color;
 
     /// `#4288FF` — the primary action colour across Aqua's product and site.
-    /// This is the hue a user recognises as "Aqua is doing something".
+    /// This is the hue a user recognises as "OutLoud is doing something".
     pub const COBALT: Color = Color::rgb(0x42, 0x88, 0xFF);
     /// `#67BEFF` — the lighter brand blue.
     pub const AQUA: Color = Color::rgb(0x67, 0xBE, 0xFF);
@@ -299,7 +299,7 @@ mod tests {
 
     #[test]
     fn card_is_translucent_ink() {
-        assert_eq!(CARD_BG.hex(), 0x292C3D, "the card must be Aqua's ink");
+        assert_eq!(CARD_BG.hex(), 0x292C3D, "the card must be OutLoud's ink");
         // A const block, so a bad edit fails to compile rather than failing
         // a test run someone might not have started.
         const {

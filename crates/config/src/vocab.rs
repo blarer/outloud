@@ -1,7 +1,7 @@
 //! Vocabulary: user terms that bias recognition and post-correct output.
 //!
 //! Unlimited size, plain text, one entry per line, because "your data stays
-//! yours, in a file you can read" is the product position (Aqua caps this at
+//! yours, in a file you can read" is the product position (Aqua Voice caps this at
 //! 800 entries on Pro and 5 on free; we cap it at nothing).
 //!
 //! Line grammar (docs/configuration.md has the user-facing version):

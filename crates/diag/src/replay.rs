@@ -41,7 +41,11 @@ use crate::ErrorClass;
 
 /// First line of every record. Bump the version when the format changes so an
 /// old replayer refuses politely instead of misreading fields.
-pub const SCHEMA: &str = "aqua-replay v1";
+pub const SCHEMA: &str = "outloud-replay v1";
+
+/// Schema line written by pre-rename builds. Same v1 field format, so old
+/// records stay replayable; only the product name in the header changed.
+const LEGACY_SCHEMA: &str = "aqua-replay v1";
 
 /// Environment variables whose *presence* matters to transport selection.
 ///
@@ -467,7 +471,7 @@ impl SessionRecord {
     pub fn parse(text: &str) -> Result<Self, ParseError> {
         let mut lines = text.lines().enumerate();
         match lines.next() {
-            Some((_, first)) if first.trim() == SCHEMA => {}
+            Some((_, first)) if first.trim() == SCHEMA || first.trim() == LEGACY_SCHEMA => {}
             Some((_, first)) => {
                 return Err(ParseError {
                     line: 1,

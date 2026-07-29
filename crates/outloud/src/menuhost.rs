@@ -105,7 +105,11 @@ impl MenuHost {
             .ok()
             .map(|t| (config::system_config_path(), t));
         let env: std::collections::BTreeMap<String, String> = std::env::vars()
-            .filter(|(k, _)| k.starts_with("AQUA_"))
+            // Both prefixes: config::layers resolves OUTLOUD_* first and
+            // still honours the pre-rename AQUA_* variables.
+            .filter(|(k, _)| {
+                k.starts_with(config::ENV_PREFIX) || k.starts_with(config::LEGACY_ENV_PREFIX)
+            })
             .collect();
 
         let built = config::Config::build(
@@ -259,16 +263,10 @@ impl MenuHost {
     /// on a shell instead (docs/macos-permissions.md).
     fn run_diagnostics(&self) {
         let reports = diag::run_all(&diag::Env::capture());
-        let mut out = String::from("Aqua diagnostics\n\n");
-        for r in &reports {
-            out.push_str(&format!(
-                "[{}] {:<26} {}\n",
-                r.outcome.status, r.name, r.outcome.detail
-            ));
-            if let Some(remedy) = &r.outcome.remedy {
-                out.push_str(&format!("       remedy: {remedy}\n"));
-            }
-        }
+        // Through the redactor, same as the CLI doctor's --report: this file
+        // is written to be attached to bug reports, and raw detail/remedy
+        // strings carry absolute home paths and therefore the username.
+        let out = diag::redact::bundle(&reports);
         // Beside the config file, not in the temp directory. A
         // LaunchServices launch gets a per-app sandboxed TMPDIR under
         // /var/folders that a user cannot find, cannot guess, and cannot
@@ -280,7 +278,7 @@ impl MenuHost {
                 let _ = std::fs::create_dir_all(&dir);
                 dir.join("diagnostics.txt")
             }
-            None => std::env::temp_dir().join("aqua-diagnostics.txt"),
+            None => std::env::temp_dir().join("outloud-diagnostics.txt"),
         };
         match std::fs::write(&path, &out) {
             // A text file opened in the editor rather than an AppKit alert:
