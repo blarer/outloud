@@ -233,6 +233,24 @@ pub fn may_use_insert_only_tier(mode: &Mode) -> bool {
 
 #[cfg(not(target_os = "macos"))]
 fn deliver_via_tiers(mode: &Mode, text: &str) -> Outcome {
+    // Same rule the macOS path applies, for the same shipped-broken reason:
+    // a selection means an edit is POSSIBLE, not INTENDED. A phrase that
+    // does not parse as a deterministic command is ordinary dictation that
+    // happened while something was selected, so it is inserted rather than
+    // refused. Demoting the MODE (not just the payload) also keeps the
+    // sentence away from replace-shaped transports, which would otherwise
+    // overwrite a selection the user never aimed at.
+    let mode = match mode {
+        Mode::Edit { .. }
+            if matches!(
+                edit_intent::parse(text.trim_end_matches(['.', '!', '?', ','])),
+                EditIntent::Freeform { .. }
+            ) =>
+        {
+            &Mode::Dictate
+        }
+        m => m,
+    };
     let payload = match payload_for(mode, text) {
         Ok(p) => p,
         Err(outcome) => return outcome,

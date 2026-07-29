@@ -45,10 +45,12 @@ pre-build = [
     # package and at the SAME version. apt refuses otherwise:
     #   libasound2-dev:arm64 : Depends: libasound2:arm64 (= 1.2.2-2.1ubuntu2.5)
     #   E: Unable to correct problems, you have held broken packages.
-    # Naming both lets apt resolve one consistent version for the pair
-    # rather than pulling -dev against whatever runtime is already present
-    # for the host arch.
-    "apt-get update && apt-get install -y libasound2:arm64 libasound2-dev:arm64 pkg-config",
+    # libc6 is named for BOTH arches because it is Multi-Arch: same: the
+    # arm64 copy must match the amd64 version byte-for-byte, and the image
+    # ships a libc6:amd64 older than what the archive now publishes. Without
+    # naming the pair, apt reports "libc6:arm64 (>= 2.29) but it is not
+    # going to be installed" instead of upgrading both to one version.
+    "apt-get update && apt-get install -y libc6 libc6:arm64 libasound2:arm64 libasound2-dev:arm64 pkg-config",
 ]
 
 [target.aarch64-unknown-linux-musl]
