@@ -36,6 +36,11 @@ pre-build = [
     "sed -i 's/^deb http/deb [arch=amd64] http/' /etc/apt/sources.list",
     "echo 'deb [arch=arm64] http://ports.ubuntu.com/ubuntu-ports focal main universe' >> /etc/apt/sources.list",
     "echo 'deb [arch=arm64] http://ports.ubuntu.com/ubuntu-ports focal-updates main universe' >> /etc/apt/sources.list",
+    # focal-security must be listed too: focal-updates packages routinely
+    # depend on exact versions published through security (the observed
+    # failure was libasound2:arm64 -> libc6:arm64 >= 2.29 "not going to be
+    # installed", because the resolvable libc6 lived in focal-security).
+    "echo 'deb [arch=arm64] http://ports.ubuntu.com/ubuntu-ports focal-security main universe' >> /etc/apt/sources.list",
     # libasound2 (the runtime lib) must be installed alongside its -dev
     # package and at the SAME version. apt refuses otherwise:
     #   libasound2-dev:arm64 : Depends: libasound2:arm64 (= 1.2.2-2.1ubuntu2.5)

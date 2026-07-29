@@ -419,14 +419,21 @@ fn typing_strategy(_app: Option<&str>, _field_reads_but_refuses_writes: bool) ->
 /// rather than merely unhelpful: Terminal.app exposes its scrollback as a
 /// readable `AXTextArea` with a caret, and writing a spliced value back
 /// replaces the visible history with mangled text.
-#[cfg(target_os = "macos")]
+///
+/// `any(..., test)` rather than macOS-only: the unit tests below encode the
+/// Terminal.app regression and must keep running on every platform's test
+/// suite, not just where the live caller compiles.
+#[cfg(any(target_os = "macos", test))]
 fn is_read_only(snap: &TextSnapshot) -> bool {
     !snap.value_settable && !snap.selected_text_settable
 }
 
 /// The spliced whole-field value for inserting `text` at the caret, or
 /// `None` when the snapshot does not pin down where the caret is.
-#[cfg(target_os = "macos")]
+///
+/// `any(..., test)` for the same reason as [`is_read_only`]: the splice
+/// tests caught a real off-by-one and must not be lost off macOS.
+#[cfg(any(target_os = "macos", test))]
 fn spliced_at_caret(snap: &TextSnapshot, text: &str) -> Option<String> {
     let value = snap.value.as_deref()?;
     if value.is_empty() {
