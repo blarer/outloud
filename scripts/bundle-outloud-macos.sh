@@ -21,6 +21,9 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 APP_NAME="OutLoud"
 BUNDLE_ID="dev.hexavoice.hexad"
+# LaunchServices' registration tool. Not on PATH; the full path is stable
+# across macOS versions.
+LSREGISTER="/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister"
 APP_DIR="$ROOT/dist/$APP_NAME.app"
 
 echo "==> Building outloud (release)"
@@ -134,6 +137,47 @@ if [[ "${OUTLOUD_KEEP_TCC:-0}" != "1" ]]; then
     tccutil reset ListenEvent "$BUNDLE_ID" >/dev/null 2>&1 || true
     echo "==> Cleared the stale permission entries this rebuild invalidated"
 fi
+
+# Unregister any OTHER bundle claiming our identifier.
+#
+# Two product renames left Hexavoice.app and AquaSpike.app bundles on disk,
+# and copies under /tmp from audit runs, ALL declaring dev.hexavoice.hexad.
+# LaunchServices happily indexes every one of them, then resolves the id to
+# whichever it likes. The user saw the symptom: granting Accessibility
+# brought up a bundle with the pre-rename star icon, because the winning
+# record pointed at an old app that has no icon of its own.
+#
+# This is not cosmetic. The permission is granted to whichever bundle
+# LaunchServices resolved, so a stale winner means the grant lands on an app
+# that is not the one running.
+#
+# Only the freshly built bundle should answer to this identifier, so drop
+# the rest from the database. The bundles themselves are left alone: this
+# script does not delete anything a human might still want.
+stale=$(
+    "$LSREGISTER" -dump 2>/dev/null \
+        | awk -v id="$BUNDLE_ID" '
+            /^path:/ { p = $2 }
+            $1 == "identifier:" && $2 == id { print p }
+          ' \
+        | sort -u \
+        | grep -v "^$APP_DIR$" || true
+)
+if [[ -n "$stale" ]]; then
+    echo "==> Other bundles claim $BUNDLE_ID; unregistering so this build wins:"
+    while IFS= read -r path; do
+        [[ -n "$path" ]] || continue
+        echo "    $path"
+        "$LSREGISTER" -u "$path" 2>/dev/null || true
+    done <<< "$stale"
+fi
+# Re-register ours last so it is unambiguously the current record, then
+# nudge the icon cache. LaunchServices resolving to the right bundle is not
+# sufficient on its own: macOS caches the rendered icon per bundle, so a
+# corrected registration can still be drawn with a previous build's artwork.
+# Touching the bundle invalidates that cache entry.
+"$LSREGISTER" -f "$APP_DIR" 2>/dev/null || true
+touch "$APP_DIR"
 
 cat <<EOF
 
