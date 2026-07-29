@@ -94,10 +94,34 @@ pub use macos::AxRegion;
 #[cfg(not(target_os = "macos"))]
 pub struct AxRegion;
 
+/// The non-macOS stub must mirror the real type's WHOLE surface, not just
+/// its constructor.
+///
+/// `begin` alone compiles on its own but not at the call sites, which hold
+/// an `AxRegion` and then drive it. Those calls are inside
+/// `cfg(target_os = "macos")` blocks in the pipeline today, so this only
+/// broke once a caller reached them from a shared path, and it broke on the
+/// Linux and Windows runners rather than here.
+///
+/// Every method returns the same `Unsupported` its constructor does, so a
+/// port that forgets to implement streaming degrades to the buffered path
+/// instead of silently doing nothing.
 #[cfg(not(target_os = "macos"))]
 impl AxRegion {
     pub fn begin(_snap: &TextSnapshot) -> Result<AxRegion, NotStreamable> {
         Err(NotStreamable::Unsupported)
+    }
+
+    pub fn apply(&mut self, _cmd: &stream::WriteCommand) -> Result<(), String> {
+        Err("streaming writes are macOS-only today".into())
+    }
+
+    pub fn seal(&mut self) -> Result<(), String> {
+        Err("streaming writes are macOS-only today".into())
+    }
+
+    pub fn wrote_any(&self) -> bool {
+        false
     }
 }
 

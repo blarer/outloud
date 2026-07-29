@@ -28,6 +28,12 @@ echo "==> workflow YAML"
 # diagnose from the GitHub UI than from here.
 scripts/ci-validate-workflows.sh
 
+echo "==> platform cfg stubs"
+# Cheap, and catches the class that has broken CI twice: a
+# cfg(not(target_os = "macos")) stub whose surface drifted from the real
+# type, which a Mac-only `cargo check` cannot see.
+scripts/ci-check-cfg.sh
+
 echo "==> cargo fmt --check"
 cargo fmt --all -- --check
 
