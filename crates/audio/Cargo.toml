@@ -63,3 +63,7 @@ required-features = ["capture"]
 [[example]]
 name = "latency_impact"
 required-features = ["capture"]
+
+[[example]]
+name = "mic_level"
+required-features = ["capture"]

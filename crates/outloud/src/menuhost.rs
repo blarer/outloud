@@ -78,6 +78,11 @@ impl MenuHost {
         self.settings.insertion_mode == "stream"
     }
 
+    /// `microphone.sensitivity`: how quiet a voice still counts as speech.
+    pub fn sensitivity(&self) -> u8 {
+        self.settings.sensitivity
+    }
+
     /// Reload if the file changed underneath us. Called every frame by the
     /// render loop; the watcher does the work on its own thread, so this is
     /// a non-blocking channel drain.

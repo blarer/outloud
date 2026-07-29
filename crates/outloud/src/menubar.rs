@@ -101,6 +101,9 @@ pub struct Settings {
     pub insertion_mode: String,
     pub casing: String,
     pub overlay_position: String,
+    /// `microphone.sensitivity`, 1-100. How quiet a voice still registers as
+    /// speech.
+    pub sensitivity: u8,
     pub enabled: bool,
     pub launch_at_login: bool,
     pub config_path: Option<PathBuf>,
@@ -130,6 +133,12 @@ impl Default for Settings {
             Some(config::schema::Value::Str(v)) => v,
             _ => String::new(),
         };
+        let i = |key: &str, fallback: i64| match config::schema::spec_for(key)
+            .map(|k| k.default.clone())
+        {
+            Some(config::schema::Value::Int(v)) => v,
+            _ => fallback,
+        };
         let b = |key: &str| {
             matches!(
                 config::schema::spec_for(key).map(|k| k.default.clone()),
@@ -142,6 +151,7 @@ impl Default for Settings {
             insertion_mode: s("insertion.mode"),
             casing: s("formatting.casing"),
             overlay_position: s("overlay.position"),
+            sensitivity: i("microphone.sensitivity", 50).clamp(1, 100) as u8,
             enabled: b("enabled"),
             launch_at_login: b("launch-at-login"),
             config_path: None,
@@ -159,6 +169,10 @@ impl Settings {
             Some(Value::Str(v)) => v,
             _ => fallback.to_string(),
         };
+        let i = |key: &str, fallback: i64| match cfg.get(key).map(|p| p.value) {
+            Some(Value::Int(v)) => v,
+            _ => fallback,
+        };
         let b = |key: &str, fallback: bool| match cfg.get(key).map(|p| p.value) {
             Some(Value::Bool(v)) => v,
             _ => fallback,
@@ -169,6 +183,10 @@ impl Settings {
             insertion_mode: s("insertion.mode", "on-release"),
             casing: s("formatting.casing", "standard"),
             overlay_position: s("overlay.position", "bottom-center"),
+            // Clamped, not trusted: this is a hand-edited text file, and an
+            // out-of-range value must degrade to the default rather than
+            // reach the VAD as a nonsense threshold.
+            sensitivity: i("microphone.sensitivity", 50).clamp(1, 100) as u8,
             enabled: b("enabled", true),
             launch_at_login: b("launch-at-login", false),
             config_path,
@@ -392,6 +410,39 @@ fn settings_menu(actions: &mut Vec<Action>, s: &Settings) -> Vec<MenuItem> {
         ],
         &s.hotkey,
     );
+    // Microphone sensitivity. Named steps, not a 1-100 spinner: the number
+    // is meaningless to a user, but "I'm sitting back from the mic" is
+    // exactly how the problem gets described. Values are the dial positions
+    // those descriptions map to.
+    //
+    // This is the one setting users reach for when dictation "just doesn't
+    // hear me", so it is in the menu rather than config-file-only.
+    items.push(MenuItem::Label("Microphone Sensitivity".to_string()));
+    for (value, label) in [
+        (25u8, "Low (noisy room)"),
+        (50, "Normal"),
+        (75, "High (sitting back)"),
+        (90, "Very High (quiet voice)"),
+    ] {
+        actions.push(Action::Set {
+            key: "microphone.sensitivity".into(),
+            value: Value::Int(value as i64),
+        });
+        let id = MenuId(actions.len() as u64 - 1);
+        // Nearest step wins the checkmark, so a hand-edited 63 still shows
+        // a checked row instead of an all-unchecked group that looks broken.
+        let nearest = [25u8, 50, 75, 90]
+            .into_iter()
+            .min_by_key(|v| v.abs_diff(s.sensitivity))
+            .unwrap();
+        items.push(MenuItem::choice(
+            format!("   {label}"),
+            id,
+            value == nearest,
+        ));
+    }
+    items.push(MenuItem::Separator);
+
     // Overlay: a switch, not the five-way position picker the schema
     // allows, because "hidden" is the only position value the renderer can
     // honor today. Offering the other four would be four rows that write a
@@ -820,5 +871,115 @@ mod tests {
             None
         }
         walk(&model.items, title)
+    }
+}
+
+#[cfg(test)]
+mod sensitivity_menu_tests {
+    use super::*;
+
+    fn actions_for(sensitivity: u8) -> Vec<Action> {
+        let settings = Settings {
+            sensitivity,
+            ..Settings::default()
+        };
+        build(&Status::default(), &settings).1
+    }
+
+    /// The menu stops at 90, not 100, and that is a measurement not a taste:
+    /// swept against a synthetic quiet room (~0.0002 RMS), sensitivity 100
+    /// produced words out of noise while 90 stayed silent. Offering a step
+    /// that invents text would poison the feature it is meant to fix.
+    ///
+    /// See scripts/sweep-sensitivity.sh to re-derive this.
+    #[test]
+    fn the_menu_does_not_offer_a_hallucinating_sensitivity() {
+        for action in actions_for(50) {
+            if let Action::Set { key, value } = action {
+                if key == "microphone.sensitivity" {
+                    let Value::Int(n) = value else {
+                        panic!("want an int")
+                    };
+                    assert!(
+                        n <= 90,
+                        "sensitivity {n} transcribes room noise; the menu must not offer it"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn every_offered_value_passes_schema_validation() {
+        // A menu row that writes a value the config layer then rejects is
+        // worse than a missing row: it looks like it worked and silently
+        // does not survive a reload.
+        let spec = config::schema::spec_for("microphone.sensitivity")
+            .expect("sensitivity must be in the schema");
+        for action in actions_for(50) {
+            if let Action::Set { key, value } = action {
+                if key == "microphone.sensitivity" {
+                    assert!(
+                        spec.constraint.check(&value).is_ok(),
+                        "menu offers {value:?}, which the schema rejects"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn exactly_one_row_is_checked_for_an_off_step_value() {
+        // A hand-edited 63 is not one of the four presets. The group must
+        // still show one checkmark, or the menu reads as broken.
+        let settings = Settings {
+            sensitivity: 63,
+            ..Settings::default()
+        };
+        let (model, actions) = build(&Status::default(), &settings);
+        let checked = checked_sensitivity_values(&model, &actions);
+        assert_eq!(
+            checked.len(),
+            1,
+            "expected exactly one checked row, got {checked:?}"
+        );
+    }
+
+    #[test]
+    fn the_checked_row_is_the_one_that_matches_the_setting() {
+        let settings = Settings {
+            sensitivity: 75,
+            ..Settings::default()
+        };
+        let (model, actions) = build(&Status::default(), &settings);
+        assert_eq!(
+            checked_sensitivity_values(&model, &actions),
+            vec![Value::Int(75)]
+        );
+    }
+
+    /// Walk the menu (including submenus) collecting the values of checked
+    /// rows whose action writes the sensitivity key.
+    fn checked_sensitivity_values(model: &MenuModel, actions: &[Action]) -> Vec<Value> {
+        fn walk(items: &[MenuItem], actions: &[Action], out: &mut Vec<Value>) {
+            for item in items {
+                match item {
+                    MenuItem::Submenu { items, .. } => walk(items, actions, out),
+                    MenuItem::Item {
+                        id, checked: true, ..
+                    } => {
+                        if let Some(Action::Set { key, value }) = actions.get(id.0 as usize) {
+                            if key == "microphone.sensitivity" {
+                                out.push(value.clone());
+                            }
+                        }
+                    }
+                    _ => {}
+                }
+            }
+        }
+        let mut out = Vec::new();
+        walk(&model.items, actions, &mut out);
+        out
     }
 }

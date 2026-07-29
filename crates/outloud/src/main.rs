@@ -38,6 +38,10 @@ struct Args {
     no_overlay: bool,
     /// Feed file audio at real-time pace instead of as fast as possible.
     realtime: bool,
+    /// `--sensitivity N` (1-100): override `microphone.sensitivity` for this
+    /// run. Exists so the threshold can be swept against a recording without
+    /// editing the config file between runs.
+    sensitivity: Option<u8>,
 }
 
 fn parse_args() -> anyhow::Result<Args> {
@@ -50,6 +54,7 @@ fn parse_args() -> anyhow::Result<Args> {
         chord_from_flag: false,
         no_overlay: false,
         realtime: false,
+        sensitivity: None,
     };
     let mut it = std::env::args().skip(1);
     while let Some(a) = it.next() {
@@ -65,6 +70,17 @@ fn parse_args() -> anyhow::Result<Args> {
             "--chord" => {
                 args.chord = val("--chord")?;
                 args.chord_from_flag = true;
+            }
+            "--sensitivity" => {
+                let raw = val("--sensitivity")?;
+                let n: u8 = raw.parse().map_err(|_| {
+                    anyhow::anyhow!("--sensitivity wants a number 1-100, got {raw:?}")
+                })?;
+                anyhow::ensure!(
+                    (1..=100).contains(&n),
+                    "--sensitivity must be 1-100, got {n}"
+                );
+                args.sensitivity = Some(n);
             }
             "--no-overlay" => args.no_overlay = true,
             "--realtime" => args.realtime = true,
@@ -99,10 +115,15 @@ fn parse_args() -> anyhow::Result<Args> {
 /// plus once per utterance).
 type RecognizerFactory = Box<dyn Fn() -> anyhow::Result<Box<dyn Recognizer>> + Send + Sync>;
 
-fn make_recognizer_factory(kind: &str) -> anyhow::Result<RecognizerFactory> {
+fn make_recognizer_factory(kind: &str, sensitivity: u8) -> anyhow::Result<RecognizerFactory> {
     match kind {
-        "mock" => Ok(Box::new(|| {
-            Ok(Box::new(asr::backends::mock::MockRecognizer::new()) as _)
+        "mock" => Ok(Box::new(move || {
+            // Track the segmenter's threshold rather than keeping a fixed
+            // one: otherwise the mock re-gates audio the segmenter already
+            // accepted, and a sensitivity sweep measures the fixture
+            // instead of the product.
+            let knee = audio::vad::EnergyVad::from_sensitivity(sensitivity).knee();
+            Ok(Box::new(asr::backends::mock::MockRecognizer::new().with_voiced_rms(knee)) as _)
         })),
         "apple" => Ok(Box::new(|| {
             let r = asr::backends::apple::AppleRecognizer::new()?;
@@ -248,7 +269,6 @@ fn main() -> anyhow::Result<()> {
         "--wav/--say only make sense with --once"
     );
 
-    let factory = make_recognizer_factory(&args.asr)?;
     let cfg = Config {
         once: args.once,
         // File-driven runs commit on the synthetic KeyUp; mic-driven --once
@@ -258,7 +278,20 @@ fn main() -> anyhow::Result<()> {
         // buffered path: it is a measurement mode and its numbers must stay
         // comparable across runs.
         prefer_streaming: !args.once && menu_host.as_ref().is_some_and(|h| h.prefer_streaming()),
+        // Falls back to the schema default when there is no menu host, which
+        // is the `--once` measurement path: same threshold as a real run, so
+        // the numbers stay comparable.
+        // Flag beats file beats schema default, the config crate's own
+        // layer order.
+        sensitivity: args
+            .sensitivity
+            .or_else(|| menu_host.as_ref().map(|h| h.sensitivity()))
+            .unwrap_or(50),
     };
+
+    // After cfg, so the mock's voiced-window gate can follow the same
+    // sensitivity the segmenter uses.
+    let factory = make_recognizer_factory(&args.asr, cfg.sensitivity)?;
 
     let chord = args.chord.clone();
     let runtime_for_pipeline = runtime.clone();

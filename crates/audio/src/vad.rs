@@ -35,12 +35,55 @@ pub struct EnergyVad {
 
 impl EnergyVad {
     pub fn new() -> Self {
-        Self { knee: 0.01 }
+        // Must agree with sensitivity 50, the schema default, or the dial's
+        // midpoint would silently differ from the out-of-box behaviour.
+        Self::from_sensitivity(50)
     }
 
     pub fn with_knee(knee: f32) -> Self {
         assert!(knee > 0.0);
         Self { knee }
+    }
+
+    /// Build from the user-facing 1-100 sensitivity dial.
+    ///
+    /// Sensitivity is the inverse of the knee: turning it *up* means a
+    /// quieter voice still counts as speech, which means a *lower* RMS
+    /// threshold. Users think in "more sensitive", not "0.0025 RMS".
+    ///
+    /// The mapping is geometric because loudness is. A linear dial would
+    /// spend most of its travel in a range no microphone produces and then
+    /// cross the entire useful band between two adjacent steps. Each step
+    /// here is a constant *ratio*, so the dial feels the same at both ends.
+    ///
+    /// Endpoints are chosen from measurement, not taste:
+    /// - 1 (least sensitive) is 0.05 RMS, near a shout, for noisy rooms.
+    /// - 50 (default) is 0.0025, the measured median of ordinary speech at
+    ///   a normal seated distance on a built-in microphone.
+    /// - 100 is 0.000125, low enough to hear someone across a quiet room,
+    ///   at the price of also hearing a fan.
+    ///
+    /// The endpoints are deliberately geometric around the median, so 50
+    /// lands exactly on measured ordinary speech rather than near it.
+    pub fn from_sensitivity(sensitivity: u8) -> Self {
+        let s = sensitivity.clamp(1, 100) as f32;
+        // Anchored at the median and stepped geometrically outward, rather
+        // than interpolated between endpoints: this way 50 is *exactly* the
+        // measured median instead of merely near it, and the endpoints are
+        // whatever that anchoring implies.
+        const MEDIAN: f32 = 0.0025;
+        /// Multiplier per step away from 50. Chosen so the dial spans a
+        /// factor of ~20 in each direction, which covers shouting into a
+        /// headset through to speaking softly across a room.
+        const PER_STEP: f32 = 1.0625;
+        Self {
+            knee: MEDIAN * PER_STEP.powf(50.0 - s),
+        }
+    }
+
+    /// The RMS at which speech probability reaches 0.5.
+    pub fn knee(&self) -> f32 {
+        self.knee
     }
 }
 
@@ -130,5 +173,86 @@ mod tests {
         let mid = vad.speech_probability(&sine(0.05));
         let loud = vad.speech_probability(&sine(0.5));
         assert!(quiet < mid && mid < loud);
+    }
+}
+
+#[cfg(test)]
+mod sensitivity_tests {
+    use super::*;
+
+    /// 30ms of steady tone at a chosen RMS, the shape the segmenter scores.
+    fn tone(rms: f32) -> Vec<f32> {
+        let amp = rms * std::f32::consts::SQRT_2;
+        (0..480).map(|i| amp * (i as f32 * 0.3).sin()).collect()
+    }
+
+    #[test]
+    fn dial_is_monotonic_in_the_direction_users_expect() {
+        // Higher sensitivity must mean a lower threshold, every step of the
+        // way. A non-monotonic dial is worse than no dial: turning it up
+        // would sometimes make things worse and destroy trust in the knob.
+        let mut prev = f32::MAX;
+        for s in 1..=100u8 {
+            let knee = EnergyVad::from_sensitivity(s).knee();
+            assert!(knee < prev, "sensitivity {s} did not lower the threshold");
+            prev = knee;
+        }
+    }
+
+    #[test]
+    fn default_matches_the_schema_midpoint() {
+        // If these drift apart, a user who explicitly writes the default
+        // value into their config gets different behaviour from a user who
+        // omits it. Same intent, different result: a real bug.
+        assert_eq!(
+            EnergyVad::new().knee(),
+            EnergyVad::from_sensitivity(50).knee()
+        );
+    }
+
+    #[test]
+    fn measured_quiet_speech_is_heard_when_turned_up() {
+        // 0.0025 RMS is the measured median of ordinary speech at a normal
+        // seated distance. The old fixed 0.01 knee scored it as silence,
+        // which is the leaning-away failure this dial exists to fix.
+        let mut old = EnergyVad::with_knee(0.01);
+        assert!(
+            old.speech_probability(&tone(0.0025)) < 0.5,
+            "precondition: the old threshold really did miss this"
+        );
+
+        let mut now = EnergyVad::new();
+        assert!(
+            now.speech_probability(&tone(0.0025)) >= 0.5,
+            "the new default must hear ordinary seated speech"
+        );
+    }
+
+    #[test]
+    fn leaning_far_back_is_heard_at_high_sensitivity() {
+        // Roughly a quarter of the median: sat back from the desk.
+        let mut vad = EnergyVad::from_sensitivity(85);
+        assert!(vad.speech_probability(&tone(0.0006)) >= 0.5);
+    }
+
+    #[test]
+    fn a_quiet_room_is_still_silence_at_the_default() {
+        // The dial must not be bought by transcribing the noise floor.
+        // ~0.0002 RMS is a quiet room on a built-in microphone.
+        let mut vad = EnergyVad::new();
+        assert!(vad.speech_probability(&tone(0.0002)) < 0.5);
+    }
+
+    #[test]
+    fn out_of_range_values_clamp_rather_than_panic() {
+        // Config is a text file a human edits; 0 and 255 will happen.
+        assert_eq!(
+            EnergyVad::from_sensitivity(0).knee(),
+            EnergyVad::from_sensitivity(1).knee()
+        );
+        assert_eq!(
+            EnergyVad::from_sensitivity(255).knee(),
+            EnergyVad::from_sensitivity(100).knee()
+        );
     }
 }

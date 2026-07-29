@@ -33,7 +33,7 @@ file: choosing a value writes it here, preserving your comments, and editing
 the file by hand is picked up by the menu within a second.
 
 The menu deliberately surfaces only the settings that are implemented today
-(`hotkey`, `enabled`, and hiding the overlay). The rest of the table below is
+(`hotkey`, `enabled`, `microphone.sensitivity`, and hiding the overlay). The rest of the table below is
 schema and documentation ahead of the code: the keys validate, migrate, and
 report provenance, but the pipeline does not read them yet. They are listed
 here rather than offered as menu rows because a settings control that writes
@@ -82,12 +82,36 @@ Both spellings work: dotted keys (`insertion.mode = "stream"`) or tables
 | `formatting.smart-quotes` | `true` | Convert straight quotes to typographic quotes. |
 | `formatting.trailing-punctuation` | `true` | End utterances with inferred punctuation. |
 | `history.enabled` | `true` | Keep a local plain-text transcription history. |
+| `microphone.sensitivity` | `50` | How quiet a voice still counts as speech (1–100). Raise it if you sit back from the mic; lower it if room noise is transcribed. |
 | `silence-timeout-ms` | `1500` | Stop listening after this much silence in latch mode (200–30000). |
 | `overlay.position` | `"bottom-center"` | `bottom-center`, `bottom-left`, `bottom-right`, `top-center`, or `hidden`. |
 | `vocabulary.sets` | `[]` | Named vocabulary sets active by default; profiles override per app. |
 | `telemetry.enabled` | `false` | Anonymous usage reporting. Off by default, forever. |
 | `launch-at-login` | `false` | Start the daemon when you log in. |
 | `schema-version` | `1` | Written by the daemon; used for automatic migration. |
+
+### Microphone sensitivity
+
+If dictation misses words unless you lean in and enunciate, raise this. It sets
+how quiet a frame of audio can be and still count as speech; anything below the
+threshold never reaches the recognizer at all.
+
+The scale is 1–100 and geometric, so each step is a constant ratio rather than a
+constant amount. `50` is the default and sits on the measured median of ordinary
+speech at a normal seated distance on a built-in microphone (~0.0025 RMS).
+
+| Setting | Use when |
+| --- | --- |
+| `25` | Noisy room, or background speech is being transcribed |
+| `50` | Default: normal seated distance |
+| `75` | You sit back from the machine |
+| `90` | Quiet voice, or a distant microphone |
+
+Above 90 the gate is low enough that room noise itself can be recognized as
+words, which is why the menu bar stops at 90. `scripts/sweep-sensitivity.sh
+<wav>` re-derives that boundary against a recording, and `cargo run -p audio
+--example mic_level` reports what your own microphone actually produces so the
+setting can be chosen from a measurement.
 
 Hotkey grammar (see `crates/hotkey`): a bare side-specific modifier
 (`"right-option"`), bare `"fn"`, a function key (`"f13"`), or a classic chord

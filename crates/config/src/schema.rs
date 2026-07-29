@@ -257,6 +257,15 @@ pub fn schema() -> &'static [KeySpec] {
                 wired: false,
             },
             KeySpec {
+                key: "microphone.sensitivity",
+                default: Value::Int(50),
+                constraint: IntRange(1, 100),
+                doc: "How quiet a voice still counts as speech. Raise it if you \
+                      sit back from the microphone or speak softly; lower it if \
+                      room noise is being transcribed as words.",
+                wired: true,
+            },
+            KeySpec {
                 key: "silence-timeout-ms",
                 default: Value::Int(1500),
                 constraint: IntRange(200, 30_000),
@@ -399,7 +408,13 @@ mod tests {
         let wired: Vec<&str> = schema().iter().filter(|s| s.wired).map(|s| s.key).collect();
         assert_eq!(
             wired,
-            vec!["hotkey", "enabled", "insertion.mode", "overlay.position"]
+            vec![
+                "hotkey",
+                "enabled",
+                "insertion.mode",
+                "microphone.sensitivity",
+                "overlay.position"
+            ]
         );
     }
 
@@ -409,7 +424,11 @@ mod tests {
         // Not asserted as a fixed list on purpose: this number should only
         // ever go DOWN, and pinning it exactly would make wiring a setting
         // fail an unrelated-looking test. What must hold is the invariant.
-        assert_eq!(inert.len(), schema().len() - 4);
+        assert_eq!(inert.len(), schema().len() - 5);
+        assert!(
+            !inert.contains(&"microphone.sensitivity"),
+            "microphone.sensitivity is wired: the pipeline builds its VAD from it"
+        );
         assert!(
             !inert.contains(&"insertion.mode"),
             "insertion.mode is wired: the pipeline streams partials when it is \"stream\""

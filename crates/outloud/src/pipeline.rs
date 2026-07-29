@@ -42,6 +42,25 @@ pub struct Config {
     /// other field silently keeps commit-on-release (docs/streaming.md's
     /// degradation matrix).
     pub prefer_streaming: bool,
+    /// `microphone.sensitivity` (1-100): how quiet a voice still counts as
+    /// speech. Carried here rather than read at the VAD so a config reload
+    /// takes effect on the next utterance without restarting capture.
+    pub sensitivity: u8,
+}
+
+impl Default for Config {
+    /// A plain interactive run. Exists so a test (or a future field) names
+    /// only what is unusual about its case, rather than every field: the
+    /// same reason `menubar::Settings` has one.
+    fn default() -> Config {
+        Config {
+            once: false,
+            auto_endpoint: false,
+            prefer_streaming: false,
+            // The schema default, kept in one place.
+            sensitivity: 50,
+        }
+    }
 }
 
 /// What one utterance actually cost, measured where the user feels it.
@@ -124,7 +143,7 @@ pub async fn run(
         mut mic,
     } = channels;
     let mut reports = Vec::new();
-    let mut segmenter = new_segmenter();
+    let mut segmenter = new_segmenter(cfg.sensitivity);
     let mut listening = false;
     // Key held before the recognizer was ready: the model-loading state
     // buffers the capture instead of losing the user's words (UX doc).
@@ -273,7 +292,7 @@ pub async fn run(
                         } else {
                             None
                         };
-                        segmenter = new_segmenter();
+                        segmenter = new_segmenter(cfg.sensitivity);
                         // Open the device HERE, not at startup. Holding a
                         // stream open all session lights the system's
                         // recording indicator permanently, which tells the
@@ -689,9 +708,9 @@ type Segmenter = audio::segment::SpeechSegmenter<audio::vad::EnergyVad>;
 /// enough behind push-to-talk, where the key edges, not the VAD, bound the
 /// utterance; swap for Silero (the `silero` feature in crates/audio) when
 /// voice activation lands.
-fn new_segmenter() -> Segmenter {
+fn new_segmenter(sensitivity: u8) -> Segmenter {
     audio::segment::SpeechSegmenter::new(
-        audio::vad::EnergyVad::new(),
+        audio::vad::EnergyVad::from_sensitivity(sensitivity),
         audio::segment::SegmenterConfig::default(),
     )
 }
@@ -732,6 +751,7 @@ mod tests {
             once: true,
             auto_endpoint: false,
             prefer_streaming: false,
+            ..Default::default()
         };
         let reports = run(
             cfg,
@@ -788,6 +808,7 @@ mod tests {
             once: true,
             auto_endpoint: false,
             prefer_streaming: true,
+            ..Default::default()
         };
         let reports = tokio::time::timeout(
             std::time::Duration::from_secs(20),
@@ -830,6 +851,7 @@ mod tests {
             once: true,
             auto_endpoint: false,
             prefer_streaming: false,
+            ..Default::default()
         };
         let reports = run(
             cfg,
@@ -863,6 +885,7 @@ mod tests {
             once: true,
             auto_endpoint: false,
             prefer_streaming: false,
+            ..Default::default()
         };
         let err = run(
             cfg,
@@ -927,6 +950,7 @@ mod tests {
             once: true,
             auto_endpoint: false,
             prefer_streaming: false,
+            ..Default::default()
         };
         let reports = run(
             cfg,
@@ -976,6 +1000,7 @@ mod tests {
             once: true,
             auto_endpoint: false,
             prefer_streaming: false,
+            ..Default::default()
         };
         run(
             cfg,

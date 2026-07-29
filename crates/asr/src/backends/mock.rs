@@ -34,11 +34,20 @@ pub struct MockRecognizer {
     tail: Vec<f32>,
     /// Words emitted so far.
     words: Vec<String>,
+    /// RMS above which a window counts as voiced.
+    ///
+    /// Configurable, not a constant, because a fixed 0.01 here silently
+    /// gated a real sensitivity sweep: the segmenter passed quiet audio
+    /// through correctly and the *mock* threw it away, making a working
+    /// dial look broken. A test fixture must not impose its own audio
+    /// threshold on the thing under test.
+    voiced_rms: f32,
 }
 
 impl MockRecognizer {
     pub fn new() -> Self {
         Self {
+            voiced_rms: 0.01,
             voiced_windows: 0,
             samples_fed: 0,
             tail: Vec::new(),
@@ -57,6 +66,15 @@ impl Default for MockRecognizer {
     }
 }
 
+impl MockRecognizer {
+    /// Count windows quieter than the default as voiced. For tests that
+    /// feed deliberately quiet audio.
+    pub fn with_voiced_rms(mut self, rms: f32) -> Self {
+        self.voiced_rms = rms;
+        self
+    }
+}
+
 impl Recognizer for MockRecognizer {
     fn feed(&mut self, samples: &[f32]) -> Option<Partial> {
         self.samples_fed += samples.len();
@@ -66,7 +84,7 @@ impl Recognizer for MockRecognizer {
         let drained: Vec<f32> = self.tail.drain(..take).collect();
         for w in drained.chunks_exact(WINDOW) {
             let rms = (w.iter().map(|s| s * s).sum::<f32>() / WINDOW as f32).sqrt();
-            if rms > 0.01 {
+            if rms > self.voiced_rms {
                 self.voiced_windows += 1;
             }
         }
