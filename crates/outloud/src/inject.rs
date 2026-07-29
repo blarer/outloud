@@ -503,6 +503,7 @@ fn insert_with_fallback(text: &str) -> Outcome {
                     text,
                     &AxError::NotSettable,
                     typing_strategy(snap.app.as_deref(), true),
+                    char_before_caret(&snap),
                 );
             }
 
@@ -516,6 +517,7 @@ fn insert_with_fallback(text: &str) -> Outcome {
                     text,
                     &AxError::NotSettable,
                     typing_strategy(snap.app.as_deref(), true),
+                    char_before_caret(&snap),
                 );
             }
             // A non-empty selection at commit time: typing replaces it, so
@@ -529,10 +531,14 @@ fn insert_with_fallback(text: &str) -> Outcome {
                 }
                 // Field readable but caret unknown/unmappable: paste inserts
                 // at the caret without us knowing where it is.
+                // The field was readable but its caret was not mappable, so
+                // the snapshot can still say what precedes the insertion
+                // even though the splice could not be computed.
                 None => deliver_without_ax(
                     text,
                     &AxError::NoTextValue,
                     typing_strategy(snap.app.as_deref(), false),
+                    char_before_caret(&snap),
                 ),
             }
         }
@@ -540,10 +546,15 @@ fn insert_with_fallback(text: &str) -> Outcome {
         // Ask for the frontmost application separately: knowing the app is
         // what allows the fast batched typing path, and one extra AX call
         // is cheap next to the 40ms the per-character path would cost.
+        // No snapshot at all, so nothing is known about the caret. Passing
+        // None means no space is added, which is the safe direction: a
+        // stray leading space would be visible on every utterance, while a
+        // missing one only shows when appending to existing text.
         Err(e) => deliver_without_ax(
             text,
             &e,
             typing_strategy(ax_edit::frontmost_app().as_deref(), false),
+            None,
         ),
     }
 }
@@ -622,6 +633,49 @@ fn spliced_at_caret(snap: &TextSnapshot, text: &str) -> Option<String> {
     Some(out)
 }
 
+/// Whether a transcript needs a space in front of it, given what already
+/// precedes the caret.
+///
+/// Dictation is not a single utterance. People stop, think, and start
+/// again, and each utterance arrives as its own transcript, so the join
+/// between them is ours to make. The AX splice path has always handled
+/// this by reading the field; the typing and clipboard fallbacks could
+/// not, because they never see the existing text, so on every destination
+/// that refuses AX writes a new sentence was glued onto the last one:
+/// "you'll see.Right now I'm talking".
+///
+/// `preceding` is whatever the caller could learn about the character
+/// before the caret. `None` means "unknown", which is treated as needing
+/// no space: a spurious leading space at the very start of an empty field
+/// is a visible defect on every single utterance, whereas a missing one
+/// only shows up when appending, and the caller supplies the character
+/// whenever it can.
+fn needs_leading_space(preceding: Option<char>) -> bool {
+    match preceding {
+        // Whitespace already separates us, and a second space would show.
+        Some(c) if c.is_whitespace() => false,
+        // An opening bracket or quote hugs the word that follows it, the
+        // way a human types `("hello` rather than `( "hello`.
+        Some('(' | '[' | '{' | '<' | '"' | '\'' | '\u{201c}' | '\u{2018}') => false,
+        Some(_) => true,
+        None => false,
+    }
+}
+
+/// The character immediately before the caret, when the field can be read.
+///
+/// Returns `None` for an empty field or an unmappable caret, which
+/// [`needs_leading_space`] reads as "do not add a space".
+fn char_before_caret(snap: &TextSnapshot) -> Option<char> {
+    let value = snap.value.as_deref()?;
+    let (loc, len) = snap.selection?;
+    if len != 0 {
+        return None;
+    }
+    let at = crate::utf16_offset_to_byte(value, loc)?;
+    value[..at].chars().next_back()
+}
+
 /// One AX write with typed/clipboard fallback, shared by both paths.
 /// `typing` is decided by the caller, which has the snapshot naming the
 /// destination app; recomputing it here would race a focus change.
@@ -632,7 +686,10 @@ fn write_focused(text: &str, typing: TypingChoice) -> Outcome {
             text: text.to_string(),
             via: strategy.to_string(),
         },
-        Err(e) => deliver_without_ax(text, &e, typing),
+        // No preceding character: whatever the caller handed us was already
+        // spliced or spaced upstream, so asking for a space again would
+        // double it.
+        Err(e) => deliver_without_ax(text, &e, typing, None),
     }
 }
 
@@ -654,15 +711,21 @@ fn replace_selection(rewritten: &str) -> Outcome {
         // a click landed). Writing the rewritten SELECTION as the whole
         // field value would replace the user's document with a fragment,
         // so type it instead: that is what their keyboard would have done.
+        // No leading space on either arm: `rewritten` REPLACES text the
+        // user selected, it is not a new utterance appended after one. The
+        // spacing rule belongs to dictation only, and applying it here
+        // would indent every edit by one space.
         Ok(snap) => deliver_without_ax(
             rewritten,
             &AxError::NotSettable,
             typing_strategy(snap.app.as_deref(), false),
+            None,
         ),
         Err(e) => deliver_without_ax(
             rewritten,
             &e,
             typing_strategy(ax_edit::frontmost_app().as_deref(), false),
+            None,
         ),
     }
 }
@@ -712,7 +775,9 @@ fn replace_selection(rewritten: &str) -> Outcome {
 fn write_over_selection(snap: &TextSnapshot, text: &str) -> Outcome {
     let typing = typing_strategy(snap.app.as_deref(), false);
     if !snap.selected_text_settable {
-        return deliver_without_ax(text, &AxError::NotSettable, typing);
+        // Replacing a selection, so no leading space: the text is standing
+        // in for what was highlighted, not following it.
+        return deliver_without_ax(text, &AxError::NotSettable, typing, None);
     }
     write_focused(text, typing)
 }
@@ -804,7 +869,24 @@ fn type_with_strategy(text: &str, _typing: TypingChoice) -> Result<String, Strin
 /// than granting a general-purpose scripting interpreter blanket input
 /// synthesis.
 #[cfg(target_os = "macos")]
-fn deliver_without_ax(text: &str, ax_err: &AxError, typing: TypingChoice) -> Outcome {
+fn deliver_without_ax(
+    text: &str,
+    ax_err: &AxError,
+    typing: TypingChoice,
+    preceding: Option<char>,
+) -> Outcome {
+    // Typing and pasting both append blind: neither can read the field, so
+    // the caller has to tell them what the caret is sitting behind. Without
+    // this, a second utterance lands hard against the first and reads as
+    // "you'll see.Right now I'm talking".
+    let owned;
+    let text = if needs_leading_space(preceding) {
+        owned = format!(" {text}");
+        &owned
+    } else {
+        text
+    };
+
     // Logged, not just folded into the outcome: the fallback usually
     // succeeds, and the AX refusal that caused it would otherwise vanish.
     eprintln!("outloud: AX write path refused ({ax_err}); typing it instead");
@@ -1231,5 +1313,47 @@ mod tier_tests {
             );
             assert_eq!(shell_bridge_command(None, "change quick to slow"), None);
         }
+    }
+
+    /// The reported bug: a second utterance glued onto the first.
+    ///
+    /// Verbatim from the report, dictated into Discord: "...and you'll
+    /// see.Right now I'm talking again". The AX splice path had always
+    /// spaced correctly, so this only appeared on destinations that refuse
+    /// AX writes and fall back to typing, which is exactly where a user is
+    /// least likely to blame the transport.
+    #[test]
+    fn a_second_utterance_is_separated_from_the_first() {
+        // Sentence-ending punctuation is the case that was reported.
+        assert!(needs_leading_space(Some('.')));
+        assert!(needs_leading_space(Some('!')));
+        assert!(needs_leading_space(Some('?')));
+        // Any other word character too: "hello" + "world", not "helloworld".
+        assert!(needs_leading_space(Some('o')));
+        // Closing punctuation separates; only OPENERS hug (see the test
+        // below). A double quote is ambiguous in ASCII, so it is treated as
+        // an opener: gluing onto `"` is far commoner than gluing after one.
+        assert!(needs_leading_space(Some(',')));
+        assert!(needs_leading_space(Some(')')));
+    }
+
+    /// Cases where a space would be the defect rather than the fix.
+    #[test]
+    fn no_space_where_a_human_would_not_type_one() {
+        // Already separated. A second space would be visible.
+        assert!(!needs_leading_space(Some(' ')));
+        assert!(!needs_leading_space(Some('\n')));
+        assert!(!needs_leading_space(Some('\t')));
+
+        // Openers hug what follows: a human types ("hello, never ( "hello.
+        for c in ['(', '[', '{', '<', '\'', '\u{201c}', '\u{2018}'] {
+            assert!(!needs_leading_space(Some(c)), "opener {c:?} must hug");
+        }
+
+        // Unknown means an empty field or an unreadable caret. Erring
+        // toward no space is deliberate: a stray leading space shows on
+        // every single utterance, while a missing one only shows when
+        // appending, and the caller passes the character whenever it has it.
+        assert!(!needs_leading_space(None));
     }
 }
