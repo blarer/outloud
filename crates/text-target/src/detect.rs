@@ -232,7 +232,7 @@ pub fn detect_with_env(env: &dyn Env) -> Result<Box<dyn TextTarget>, TargetError
         #[cfg(all(feature = "display", target_os = "windows"))]
         "windows-uia" => Box::new(crate::targets::ax::UiaTarget::new()?),
         #[cfg(feature = "display")]
-        "clipboard-paste" => Box::new(ClipboardTarget::new()?),
+        "clipboard-paste" => Box::new(ClipboardTarget::new_with_env(env)?),
         "daemon-socket" => Box::new(crate::targets::headless::DaemonTarget::new(
             crate::targets::headless::DaemonTarget::default_socket_path(),
         )),

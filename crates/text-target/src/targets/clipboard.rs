@@ -36,6 +36,16 @@ enum Backend {
 
 impl Backend {
     fn detect() -> Option<Backend> {
+        Self::detect_with_env(&crate::detect::SystemEnv)
+    }
+
+    /// Backend choice as a function of a described [`Env`], so selection
+    /// (`select()`) and construction (`detect_with_env`) consult the same
+    /// facts. With a hardcoded probe of the real machine, a simulated
+    /// Wayland environment selected clipboard-paste and then failed to
+    /// construct it on any host without a clipboard tool, which is exactly
+    /// the select/construct drift the transport matrix exists to forbid.
+    fn detect_with_env(env: &dyn crate::detect::Env) -> Option<Backend> {
         if cfg!(target_os = "macos") {
             return Some(Backend::Pasteboard);
         }
@@ -44,10 +54,10 @@ impl Backend {
             // with every Windows since 7. No probe needed.
             return Some(Backend::WinClip);
         }
-        if std::env::var_os("WAYLAND_DISPLAY").is_some() && which("wl-copy") {
+        if env.var("WAYLAND_DISPLAY").is_some() && env.has_command("wl-copy") {
             return Some(Backend::WlClipboard);
         }
-        if std::env::var_os("DISPLAY").is_some() && which("xclip") {
+        if env.var("DISPLAY").is_some() && env.has_command("xclip") {
             return Some(Backend::Xclip);
         }
         None
@@ -90,12 +100,6 @@ impl Backend {
     }
 }
 
-fn which(bin: &str) -> bool {
-    std::env::var_os("PATH")
-        .map(|paths| std::env::split_paths(&paths).any(|p| p.join(bin).is_file()))
-        .unwrap_or(false)
-}
-
 /// Clipboard-based delivery: set clipboard, synthesize paste, restore.
 pub struct ClipboardTarget {
     backend: Backend,
@@ -106,7 +110,13 @@ impl ClipboardTarget {
     /// Errors rather than defaulting when no clipboard tool exists, because
     /// a clipboard target that silently drops text is worse than none.
     pub fn new() -> Result<Self, TargetError> {
-        let backend = Backend::detect().ok_or(TargetError::Unsupported(
+        Self::new_with_env(&crate::detect::SystemEnv)
+    }
+
+    /// [`ClipboardTarget::new`] against an explicit environment, so
+    /// `detect_with_env` builds from the same facts `select()` decided on.
+    pub fn new_with_env(env: &dyn crate::detect::Env) -> Result<Self, TargetError> {
+        let backend = Backend::detect_with_env(env).ok_or(TargetError::Unsupported(
             "no clipboard tool found (need pbcopy, wl-copy, or xclip)",
         ))?;
         Ok(ClipboardTarget {

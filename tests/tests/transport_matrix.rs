@@ -136,7 +136,8 @@ fn matrix() -> Vec<Row> {
                 ..Default::default()
             }
             .with_var("WAYLAND_DISPLAY", "wayland-0")
-            .with_var("XDG_SESSION_TYPE", "wayland"),
+            .with_var("XDG_SESSION_TYPE", "wayland")
+            .with_command("wl-copy"),
             expect: "clipboard-paste",
         },
         Row {

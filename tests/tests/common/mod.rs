@@ -27,13 +27,21 @@ pub struct SimEnv {
 
 impl SimEnv {
     /// The common desktop case: trusted GUI session, everything available.
+    ///
+    /// "Everything available" is stated as concrete facts, not just flags:
+    /// clipboard construction resolves the actual tool from the same Env
+    /// that selection reads, so `has_clipboard: true` must be accompanied
+    /// by a display variable and a tool on PATH or the two halves disagree
+    /// (select picks clipboard-paste, construction finds no backend).
     pub fn desktop_trusted() -> Self {
         SimEnv {
             ax_trusted: true,
             has_display: true,
             has_clipboard: true,
+            commands: vec!["wl-copy"],
             ..Default::default()
         }
+        .with_var("WAYLAND_DISPLAY", "wayland-0")
     }
 
     pub fn with_var(mut self, k: &str, v: &str) -> Self {
