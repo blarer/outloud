@@ -49,10 +49,11 @@ pre-build = [
     # Core libraries (libc6, libcrypt1, ...) are Multi-Arch: same, so their
     # arm64 copy must match the amd64 copy byte-for-byte, and the pinned
     # 2020 image ships amd64 versions older than anything the archive still
-    # publishes for arm64. Upgrading amd64 to current first lets apt pick
-    # one version for every pair instead of failing down the dependency
-    # chain one library per CI run (libc6, then libcrypt1, then ...).
-    "apt-get update && apt-get upgrade -y && apt-get install -y libasound2:arm64 libasound2-dev:arm64 pkg-config",
+    # publishes for arm64. dist-upgrade rather than upgrade: current libc6
+    # pulls in libcrypt1 (split out of glibc mid-focal), and plain upgrade
+    # never installs new packages, so it holds libc6 back ("11 not
+    # upgraded") and the arm64 install fails exactly as before.
+    "apt-get update && apt-get dist-upgrade -y && apt-get install -y libasound2:arm64 libasound2-dev:arm64 pkg-config",
 ]
 
 [target.aarch64-unknown-linux-musl]
