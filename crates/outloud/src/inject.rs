@@ -1083,7 +1083,10 @@ mod tier_tests {
 
         #[test]
         fn edit_command_at_a_gui_app_takes_the_gui_path() {
-            assert_eq!(shell_bridge_command(Some("Safari"), "change quick to slow"), None);
+            assert_eq!(
+                shell_bridge_command(Some("Safari"), "change quick to slow"),
+                None
+            );
             assert_eq!(shell_bridge_command(None, "change quick to slow"), None);
         }
     }
