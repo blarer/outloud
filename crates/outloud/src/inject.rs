@@ -650,6 +650,10 @@ fn spliced_at_caret(snap: &TextSnapshot, text: &str) -> Option<String> {
 /// is a visible defect on every single utterance, whereas a missing one
 /// only shows up when appending, and the caller supplies the character
 /// whenever it can.
+/// Gated like the other splice helpers: the real caller is macOS-only, but
+/// `test` keeps the rule verified on every platform, because this encodes a
+/// user-visible formatting decision rather than a platform detail.
+#[cfg(any(target_os = "macos", test))]
 fn needs_leading_space(preceding: Option<char>) -> bool {
     match preceding {
         // Whitespace already separates us, and a second space would show.
@@ -666,6 +670,10 @@ fn needs_leading_space(preceding: Option<char>) -> bool {
 ///
 /// Returns `None` for an empty field or an unmappable caret, which
 /// [`needs_leading_space`] reads as "do not add a space".
+/// Gated like the other splice helpers: the real caller is macOS-only, but
+/// `test` keeps the rule verified on every platform, because this encodes a
+/// user-visible formatting decision rather than a platform detail.
+#[cfg(any(target_os = "macos", test))]
 fn char_before_caret(snap: &TextSnapshot) -> Option<char> {
     let value = snap.value.as_deref()?;
     let (loc, len) = snap.selection?;
