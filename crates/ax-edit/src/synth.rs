@@ -166,6 +166,19 @@ fn spin_for(d: std::time::Duration) {
 /// that is already there. A destination that supports selection will replace
 /// its selection, because that is what typing does.
 pub fn type_text(text: &str) -> Result<(), AxError> {
+    type_text_paced(text, KEY_INTERVAL)
+}
+
+/// [`type_text`] with an explicit inter-character interval.
+///
+/// Exists so the pacing floor can be *measured* rather than asserted.
+/// `KEY_INTERVAL` was chosen as a value that stopped Terminal.app dropping
+/// characters, never as the minimum that works, and it is paid per
+/// character on every utterance that takes this path. A measurement tool
+/// that reimplemented the posting loop would be measuring itself, so the
+/// shipped path takes the interval as a parameter and production passes the
+/// constant.
+pub fn type_text_paced(text: &str, interval: std::time::Duration) -> Result<(), AxError> {
     if text.is_empty() {
         return Ok(());
     }
@@ -194,7 +207,7 @@ pub fn type_text(text: &str) -> Result<(), AxError> {
                 CGEventPost(SESSION_TAP, ev.0);
             }
         }
-        spin_for(KEY_INTERVAL);
+        spin_for(interval);
     }
     Ok(())
 }

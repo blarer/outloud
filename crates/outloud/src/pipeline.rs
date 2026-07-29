@@ -308,10 +308,40 @@ pub async fn run(
                         ) {
                             engine.transition(OverlayState::Idle, None);
                         }
-                        // Snapshot at KEY-DOWN decides dictate-vs-edit: it
-                        // captures the selection the user is looking at while
-                        // they speak. Warm AX read is ~134us (docs/latency.md),
-                        // cheap enough for the event loop.
+                        // Open the device FIRST. It does not depend on the
+                        // snapshot, and the device is the slow part: a cold
+                        // AX read costs up to 20.8ms and the stream needs
+                        // ~64ms to deliver its first sample, so taking the
+                        // snapshot first spent that AX time with the
+                        // microphone shut. That is not latency the user
+                        // waits out, it is audio the device never captured,
+                        // and lost head audio is MISRECOGNISED rather than
+                        // dropped ("quick" -> "Like"). See
+                        // docs/investigations/latency.md.
+                        //
+                        // Opening HERE rather than at startup still holds:
+                        // a stream open all session lights the recording
+                        // indicator permanently, telling the user they are
+                        // being recorded while idle. See mic.rs.
+                        if let Some(m) = mic.as_mut() {
+                            if let Err(e) = m.open() {
+                                eprintln!("outloud: could not open the microphone: {e}");
+                                engine.transition(
+                                    OverlayState::Error,
+                                    Some("could not open the microphone -> check Privacy settings".into()),
+                                );
+                                continue;
+                            }
+                            // Stamp the open so the first chunk's arrival
+                            // measures this device's real startup latency.
+                            startup.on_open(Instant::now());
+                            capture_opened_at = Some(Instant::now());
+                        }
+                        // Snapshot decides dictate-vs-edit from the selection
+                        // the user is looking at. Still semantically at
+                        // key-down: the microphone opening a few hundred
+                        // microseconds earlier cannot change what is
+                        // selected, and the stream spins up concurrently.
                         let span = recorder.start(Stage::Read);
                         let (mode, snap) = inject::snapshot_and_mode_at_keydown();
                         recorder.finish(span);
@@ -327,25 +357,6 @@ pub async fn run(
                             None
                         };
                         segmenter = new_segmenter(cfg.sensitivity);
-                        // Open the device HERE, not at startup. Holding a
-                        // stream open all session lights the system's
-                        // recording indicator permanently, which tells the
-                        // user they are being recorded while idle. See
-                        // crates/outloud/src/mic.rs.
-                        if let Some(m) = mic.as_mut() {
-                            if let Err(e) = m.open() {
-                                eprintln!("outloud: could not open the microphone: {e}");
-                                engine.transition(
-                                    OverlayState::Error,
-                                    Some("could not open the microphone -> check Privacy settings".into()),
-                                );
-                                continue;
-                            }
-                            // Stamp the open so the first chunk's arrival
-                            // measures this device's real startup latency.
-                            startup.on_open(Instant::now());
-                            capture_opened_at = Some(Instant::now());
-                        }
                         in_flight = Some(InFlight { mode, released_at: Instant::now(), streamer });
                         if recognizer_ready {
                             listening = true;
