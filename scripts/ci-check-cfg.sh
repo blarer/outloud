@@ -60,5 +60,6 @@ echo "    headless OK"
 
 echo "==> cfg check OK"
 echo
-echo "NOTE: crates/outloud is not cross-checked here (ring needs a C"
-echo "cross-compiler). Its stubs are still covered by CI's Linux jobs."
+echo "NOTE: crates/outloud is not cross-checked here, because ureq -> rustls"
+echo "-> ring needs a C compiler for the target and none is installed. Its"
+echo "non-macOS branches are covered by CI's Linux jobs, not by this script."

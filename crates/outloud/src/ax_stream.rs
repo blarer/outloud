@@ -41,6 +41,12 @@ pub enum NotStreamable {
 ///
 /// `applied` is the region text already in the field (excluding `lead`),
 /// `lead` the one-time joining space inserted before the region.
+///
+/// Compiled on macOS (where the writer calls it) and under cfg(test)
+/// everywhere, so its unit tests still run on Linux and Windows. Without
+/// the gate it is dead code off macOS, and clippy's -D warnings makes dead
+/// code a build failure.
+#[cfg(any(target_os = "macos", test))]
 fn abs_range(
     region_start_u16: usize,
     lead: &str,
@@ -65,6 +71,9 @@ fn abs_range(
 /// snapshot: a space before if the caret touches the end of a word, and a
 /// trailing space at settle if it touches the start of one. Mirrors the
 /// buffered path's `spliced_at_caret` so both modes join text identically.
+///
+/// Same gate and same reason as [`abs_range`].
+#[cfg(any(target_os = "macos", test))]
 fn joins(value: &str, caret_byte: usize) -> (&'static str, &'static str) {
     let lead = if value[..caret_byte]
         .chars()
