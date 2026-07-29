@@ -3,6 +3,7 @@ name = "stream"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+rust-version.workspace = true
 publish = false
 description = "Streaming text commit layer: stability horizon, minimal diffs, coalescing, degradation, undo ring, backpressure"
 

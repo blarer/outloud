@@ -88,6 +88,40 @@ pub fn typing_strategy_for(
     }
 }
 
+/// Destinations whose accessibility `AXValue` write is accepted but ignored.
+///
+/// Electron apps built on a React-controlled contenteditable are the case
+/// this exists for. `AXUIElementSetAttributeValue` on `AXValue` returns
+/// success and the text visibly lands, but the write goes around the app's
+/// own editor state: React's model still holds the previous value, so the
+/// next keystroke reconciles against stale state. In Discord the observed
+/// result is text merged with whatever was there before, the caret parked at
+/// offset zero, and Enter inserting a newline instead of sending, because
+/// the component never learned a message exists.
+///
+/// The accessibility API gives no way to ask "will this write reach your
+/// model", so the only honest signal is the destination's identity. These
+/// apps skip the AXValue tier entirely and go to synthesized typing, which
+/// enters through the same path a human's keyboard does and therefore
+/// updates the editor exactly like typing.
+///
+/// Matched as a lowercase substring, so "Discord Canary" and "Discord PTB"
+/// are covered by "discord".
+const AX_VALUE_IGNORED_APPS: &[&str] = &[
+    "discord", "slack", "notion", "obsidian", "linear", "figma", "spotify", "signal", "element",
+    "teams",
+];
+
+/// Whether `app`'s editor ignores an `AXValue` write (see
+/// [`AX_VALUE_IGNORED_APPS`]).
+///
+/// Public because the injection layer decides the tier while this crate owns
+/// the list: one list, one consumer per decision, no drift.
+pub fn ignores_ax_value_writes(app: &str) -> bool {
+    let app = app.to_ascii_lowercase();
+    AX_VALUE_IGNORED_APPS.iter().any(|a| app.contains(a))
+}
+
 /// Whether `app` names a terminal emulator (a tty-backed destination).
 ///
 /// Public because the injection layer needs the same fact for a different
@@ -714,5 +748,31 @@ mod sendinput_tests {
         // The insert path short-circuits on an empty plan rather than
         // calling SendInput with a zero-length array.
         assert!(unicode_key_plan("").is_empty());
+    }
+
+    /// Discord is the destination this list was built for.
+    ///
+    /// Reported symptom: text pasted but Enter broke the line instead of
+    /// sending, and the message could not be sent at all. Cause: Discord
+    /// accepts an AXValue write and its React editor ignores it, so the
+    /// component's model never learns a message exists.
+    #[test]
+    fn discord_is_known_to_ignore_ax_value_writes() {
+        assert!(ignores_ax_value_writes("Discord"));
+        // Beta channels ship under their own names.
+        assert!(ignores_ax_value_writes("Discord Canary"));
+        assert!(ignores_ax_value_writes("Discord PTB"));
+    }
+
+    /// Native apps must NOT be diverted: the AX path preserves their undo,
+    /// which typing does not, so diverting them would be a real regression.
+    #[test]
+    fn native_apps_keep_the_accessibility_path() {
+        for app in ["TextEdit", "Notes", "Mail", "Safari", "Pages"] {
+            assert!(
+                !ignores_ax_value_writes(app),
+                "{app} handles AXValue correctly and must keep the AX tier"
+            );
+        }
     }
 }

@@ -436,6 +436,31 @@ fn insert_with_fallback(text: &str) -> Outcome {
             //
             // Checked before the selection branch as well as the caret one,
             // because AXSelectedText is refused on the same elements.
+            // Some Electron editors ACCEPT an AXValue write and then ignore
+            // it. Discord is the case this was found in: the text lands
+            // visibly, but React's model still holds the old value, so the
+            // caret sits at offset zero, the new text is merged with
+            // whatever was there before, and Enter inserts a newline
+            // instead of sending, because the component never learned a
+            // message exists. The write reports success, which makes this
+            // strictly worse than a refusal: the fallback never runs.
+            //
+            // There is no accessibility query for "will this reach your
+            // model", so the destination's identity is the only honest
+            // signal. Treat it as a refusal and type instead, which enters
+            // through the same path a human's keyboard does.
+            if snap
+                .app
+                .as_deref()
+                .is_some_and(text_target::targets::keys::ignores_ax_value_writes)
+            {
+                return deliver_without_ax(
+                    text,
+                    &AxError::NotSettable,
+                    typing_strategy(snap.app.as_deref(), true),
+                );
+            }
+
             if is_read_only(&snap) {
                 // A readable-but-unwritable field is the accessibility
                 // signature of a terminal scrollback, so the typing

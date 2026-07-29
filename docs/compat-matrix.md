@@ -64,7 +64,7 @@ merely wastes 40ms, so unknown destinations default to paced.
 | VS Code (editor) | AX | partial | partial | Monaco virtualizes: AX sees rendered lines only. Reliable for the current line, not the file |
 | VS Code (integrated terminal) | Term (HL) | via shell | via shell | xterm.js pane, no writable AX field; shell integration or extension API is the real path |
 | Slack | AX | yes | yes | M0 exit criterion row; Quill editor exposes contenteditable AX |
-| Discord | AX | yes | yes | Same contenteditable shape as Slack |
+| Discord | synthetic keys | no | no | ACCEPTS an AXValue write and ignores it: React's model keeps the old value, so Enter breaks the line instead of sending. Diverted to typing (`keys::ignores_ax_value_writes`) |
 | Obsidian | AX | partial | partial | CodeMirror 6 virtualization, same caveat as VS Code |
 | Notion | AX | partial | partial | Block editor: focused block reads fine, cross-block edits need per-block traversal |
 

@@ -6,6 +6,16 @@ members = ["crates/outloud", "crates/asr", "crates/audio", "crates/ax-edit", "cr
 version = "0.1.0"
 edition = "2021"
 license = "MIT"
+# Declared so cargo REFUSES an old toolchain with a clear message naming the
+# version, instead of failing somewhere deep in a dependency with an error
+# that looks like a bug in this project. A contributor hit exactly that: the
+# build failed and nothing said which Rust to use.
+#
+# Verified by building the whole workspace on 1.85.0 with a clean target dir,
+# not assumed. rust-toolchain.toml pins a much newer compiler for development
+# and CI; this is the floor we promise downstream packagers, and raising it is
+# a compatibility break.
+rust-version = "1.85"
 
 [workspace.dependencies]
 anyhow = "1"
