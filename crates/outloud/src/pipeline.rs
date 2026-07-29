@@ -658,6 +658,15 @@ async fn commit_transcript(
             engine.transition(OverlayState::Error, Some(msg.clone()));
             format!("edit-no-match: {msg}")
         }
+        Outcome::StagedShellIntent { command } => {
+            // Not an error and not silence: nothing appeared on screen, so
+            // without a cue the user cannot tell a staged intent from a
+            // dropped utterance. Idle would show nothing; a transient
+            // message says what to press next.
+            let msg = format!("staged \"{command}\" -> press ^X^A on the command line");
+            engine.transition(OverlayState::Idle, Some(msg.clone()));
+            format!("staged-shell-intent: {msg}")
+        }
         Outcome::Failed { situation_action } => {
             engine.transition(OverlayState::Error, Some(situation_action.clone()));
             format!("failed: {situation_action}")

@@ -277,7 +277,9 @@ cargo run --release -p shell-bridge -- serve
 Then, at a prompt:
 
 1. Type a command but **do not run it**.
-2. Speak an edit (same commands as above).
+2. Speak an edit (same deterministic commands as above) while the terminal
+   is the focused window. The daemon stages it on the bridge instead of
+   typing it; the menu bar shows what was staged.
 3. Press **Ctrl-X Ctrl-A**. The command line rewrites in place.
 4. **Ctrl-X u** undoes it, through your shell's own undo.
 
@@ -290,6 +292,17 @@ $ kubectl get pods --namespace staging-web --output wide
 Bash and fish are supported too. The bridge never executes anything: the
 protocol has no execution verb at all, and a rewritten line always waits for
 you to press enter.
+
+Two boundaries, both deliberate. Only the deterministic commands
+(change/replace/delete/add/case) are routed to the bridge: a freeform phrase
+spoken at a prompt is dictation (a commit message, a grep pattern) and is
+typed as text, so voice typing at a terminal keeps working. And if no bridge
+is serving, spoken edits are typed as text too. You can also stage an edit
+by hand, no microphone involved:
+
+```bash
+cargo run --release -p shell-bridge -- intent "change prod-web to staging-web"
+```
 
 ### Useful flags
 
@@ -365,7 +378,7 @@ evidence in [`docs/beta-readiness.md`](docs/beta-readiness.md).
 | Unsigned and un-notarized | An app copied or downloaded from another machine silently refuses to open. `spctl -a -t exec dist/OutLoud.app` says `rejected` | Build it locally; local builds carry no quarantine flag |
 | `cargo build` alone is not enough | `recognizer failed to load (speech helper not found...)` | Use `./scripts/bundle-outloud-macos.sh`, which compiles the Swift helper |
 | Only one copy may run | A second launch is refused, naming the pid to quit | Quit the first from the menu bar, or `kill N` |
-| Accessibility grant dies on every rebuild | Toggle reads "on", every call fails. The menu bar glyph turns into a warning triangle within a second | `tccutil reset Accessibility dev.hexavoice.hexad`, then re-grant |
+| Accessibility grant dies on every rebuild | Toggle reads "on", every call fails. The menu bar glyph turns into a warning triangle within a second | `tccutil reset Accessibility dev.outloud.outloud`, then re-grant |
 | macOS 13-25 has no bundled recognizer | `recognizer never becomes ready` | Only macOS 26+ has `SpeechTranscriber`; other backends are stubbed |
 | Most config settings are not read yet | Changing them has no effect and no warning | Only `hotkey`, `enabled`, and `overlay.position` are wired today |
 | Freeform edits are not wired up | "tighten this up" reports that it needs the language model | Use the literal commands listed above |

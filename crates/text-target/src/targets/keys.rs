@@ -88,6 +88,17 @@ pub fn typing_strategy_for(
     }
 }
 
+/// Whether `app` names a terminal emulator (a tty-backed destination).
+///
+/// Public because the injection layer needs the same fact for a different
+/// decision: a terminal destination is where the shell bridge, not typing,
+/// is the right transport for an edit command. One list, two consumers,
+/// zero drift.
+pub fn destination_is_tty_backed(app: &str) -> bool {
+    let app = app.to_ascii_lowercase();
+    TTY_BACKED_APPS.iter().any(|t| app.contains(t))
+}
+
 /// Split `text` into chunks of at most `max_units` UTF-16 code units,
 /// never splitting a `char` (a surrogate pair must ride one event: half a
 /// pair is not a character and renders as a replacement glyph).

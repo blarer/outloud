@@ -55,6 +55,10 @@ libc = "0.2.189"
 
 # The overlay itself needs a main-thread AppKit run loop; the daemon hosts it.
 [target.'cfg(target_os = "macos")'.dependencies]
+# The voice half of terminal edit-by-voice: when the focused destination is
+# a terminal and a bridge is serving, the daemon stages the utterance as an
+# INTENT instead of typing it (inject::stage_terminal_edit).
+shell-bridge = { path = "../shell-bridge" }
 # ax_stream's AXSelectedTextRange writes: same FFI crates ax-edit uses, for
 # the one primitive (range-addressed replacement) ax-edit does not expose.
 accessibility-sys = "0.1"

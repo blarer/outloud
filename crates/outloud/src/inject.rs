@@ -113,6 +113,11 @@ pub enum Outcome {
     FreeformUnsupported { instruction: String },
     /// The edit command's search text was not in the selection.
     EditNoMatch { command: String },
+    /// A deterministic edit command spoken at a terminal, staged as an
+    /// INTENT on the shell bridge. Nothing was typed: the shell applies the
+    /// rewrite itself when the user presses the plugin's key (^X^A), which
+    /// is the only in-place, undo-preserving edit path a terminal has.
+    StagedShellIntent { command: String },
     /// Everything failed. `situation_action` is the one-line
     /// "situation -> next action" string for the Error overlay state.
     Failed { situation_action: String },
@@ -126,6 +131,16 @@ pub fn deliver(mode: &Mode, transcript: &str) -> Outcome {
     let text = transcript.trim();
     if text.is_empty() {
         return Outcome::EmptyTranscript;
+    }
+
+    // A terminal destination inverts the transport decision for edit
+    // commands: a terminal's line buffer is unreachable by AX and typing
+    // the words "change x to y" into a prompt is not an edit, it is
+    // corruption one Enter away from running. When a bridge is serving,
+    // stage the utterance as an INTENT instead and let the shell pull it.
+    #[cfg(all(target_os = "macos", feature = "display"))]
+    if let Some(outcome) = stage_terminal_edit(text) {
+        return outcome;
     }
 
     // Non-macOS platforms have no ax-edit, so they take the platform-tier
@@ -229,6 +244,57 @@ pub fn payload_for(mode: &Mode, text: &str) -> Result<String, Outcome> {
 /// selection natively through the app's own paste handling.
 pub fn may_use_insert_only_tier(mode: &Mode) -> bool {
     matches!(mode, Mode::Dictate)
+}
+
+/// The pure half of the terminal edit-by-voice decision: given the focused
+/// destination and the transcript, the shell-bridge command to stage, or
+/// `None` when this utterance is ordinary dictation.
+///
+/// Stages only DETERMINISTIC edit commands. A freeform phrase spoken at a
+/// terminal is someone dictating text into their shell (a commit message,
+/// a grep pattern), and hijacking it into a bridge intent would make plain
+/// dictation silently stop typing.
+///
+/// Pure and compiled wherever the keys tier exists, so the decision is
+/// unit-tested without a bridge, a terminal, or an accessibility grant.
+#[cfg(feature = "display")]
+pub fn shell_bridge_command(destination_app: Option<&str>, transcript: &str) -> Option<String> {
+    let app = destination_app?;
+    if !text_target::targets::keys::destination_is_tty_backed(app) {
+        return None;
+    }
+    // Recognizers punctuate; spoken imperatives do not. Same stripping as
+    // the GUI edit path, so "to staging-web." stages "to staging-web".
+    let command = transcript.trim_end_matches(['.', '!', '?', ',']);
+    match edit_intent::parse(command) {
+        EditIntent::Freeform { .. } => None,
+        _ => Some(command.to_string()),
+    }
+}
+
+/// Stage an edit command on the shell bridge when the focused destination
+/// is a terminal and a bridge is serving. `None` means "not this path":
+/// the caller falls through to the ordinary delivery ladder.
+#[cfg(all(target_os = "macos", feature = "display"))]
+fn stage_terminal_edit(text: &str) -> Option<Outcome> {
+    let app = ax_edit::frontmost_app()?;
+    let command = shell_bridge_command(Some(&app), text)?;
+    let socket = shell_bridge::server::default_socket_path();
+    // No bridge serving: fall through to typing. Refusing outright would
+    // break dictating literal words at a prompt for everyone who never
+    // installed the shell integration.
+    if !socket.exists() {
+        return None;
+    }
+    match shell_bridge::server::stage_intent(&socket, &command) {
+        Ok(_) => Some(Outcome::StagedShellIntent { command }),
+        Err(e) => {
+            // A dead socket file from a crashed bridge: say so, then fall
+            // through to typing rather than swallowing the utterance.
+            eprintln!("outloud: bridge socket present but staging failed ({e}); typing instead");
+            None
+        }
+    }
 }
 
 #[cfg(not(target_os = "macos"))]
@@ -978,5 +1044,47 @@ mod tier_tests {
             edit_intent::apply("the quick brown fox", &command).as_deref(),
             Some("the slow brown fox"),
         );
+    }
+
+    /// The terminal edit-by-voice decision, as a pure function of the
+    /// destination app and the transcript (no bridge, no AX, no terminal).
+    #[cfg(feature = "display")]
+    mod shell_bridge_routing {
+        use super::super::shell_bridge_command;
+
+        #[test]
+        fn edit_command_at_a_terminal_is_staged() {
+            assert_eq!(
+                shell_bridge_command(Some("iTerm2"), "change prod-web to staging-web").as_deref(),
+                Some("change prod-web to staging-web"),
+            );
+        }
+
+        #[test]
+        fn recognizer_punctuation_is_stripped_before_staging() {
+            // Spoken imperatives carry no trailing period; the recognizer
+            // added it, so it must not survive into the staged intent.
+            assert_eq!(
+                shell_bridge_command(Some("Terminal"), "change prod to staging.").as_deref(),
+                Some("change prod to staging"),
+            );
+        }
+
+        #[test]
+        fn freeform_phrase_at_a_terminal_is_dictation() {
+            // Someone dictating a commit message into their shell must keep
+            // getting typed text; hijacking it into an intent would make
+            // plain dictation silently stop working at a prompt.
+            assert_eq!(
+                shell_bridge_command(Some("Terminal"), "fix the login bug and add tests"),
+                None,
+            );
+        }
+
+        #[test]
+        fn edit_command_at_a_gui_app_takes_the_gui_path() {
+            assert_eq!(shell_bridge_command(Some("Safari"), "change quick to slow"), None);
+            assert_eq!(shell_bridge_command(None, "change quick to slow"), None);
+        }
     }
 }

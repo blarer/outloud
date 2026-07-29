@@ -264,6 +264,17 @@ pub fn request(path: &Path, req_line: &str) -> anyhow::Result<Response> {
     Response::parse(&line).map_err(|e| anyhow::anyhow!("bad response: {e}"))
 }
 
+/// Stage `utterance` as an INTENT on the bridge at `path`.
+///
+/// The one client-side write the voice pipeline needs, wrapped here so
+/// callers (the daemon, the CLI) share the framing and never touch base64
+/// themselves: the encoding is a protocol detail, not an API.
+pub fn stage_intent(path: &Path, utterance: &str) -> anyhow::Result<Response> {
+    use base64::engine::general_purpose::STANDARD as B64;
+    use base64::Engine;
+    request(path, &format!("INTENT {}", B64.encode(utterance)))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -394,6 +405,29 @@ mod tests {
                 // Cursor at byte 4 (before the edit) stays at 4/4.
                 assert_eq!((cursor_bytes, cursor_chars), (4, 4));
             }
+            other => panic!("expected Replace, got {other:?}"),
+        }
+        handle.join().unwrap().unwrap();
+    }
+
+    /// The daemon-side helper the voice pipeline calls: staging through it
+    /// must be observable by the next EDIT, exactly like the CLI's INTENT.
+    #[test]
+    fn stage_intent_helper_stages_like_the_cli() {
+        let mut s = test_server("stage-helper");
+        let path = s.socket_path().to_path_buf();
+        let handle = std::thread::spawn(move || s.serve(Some(2)));
+
+        let r = stage_intent(&path, "change prod to staging").unwrap();
+        assert_eq!(r, Response::Ok);
+
+        let r = request(
+            &path,
+            &format!("EDIT v1 zsh 0 {}", B64.encode("deploy --env prod")),
+        )
+        .unwrap();
+        match r {
+            Response::Replace { buffer, .. } => assert_eq!(buffer, "deploy --env staging"),
             other => panic!("expected Replace, got {other:?}"),
         }
         handle.join().unwrap().unwrap();
