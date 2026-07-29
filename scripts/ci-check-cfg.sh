@@ -45,14 +45,17 @@ CRATES=(
     -p diag
 )
 
+# clippy, not check: CI runs clippy with -D warnings, so a dead constant
+# left behind a platform gate is a BUILD FAILURE there while being merely
+# unused here. `cargo check` is blind to exactly that.
 echo "==> cross-checking platform stubs for ${TARGET}"
-cargo check "${CRATES[@]}" --no-default-features --target "$TARGET" --quiet
-echo "    stubs compile for ${TARGET}"
+cargo clippy "${CRATES[@]}" --no-default-features --target "$TARGET" --quiet -- -D warnings
+echo "    stubs compile clean for ${TARGET}"
 
 # The headless configuration on the host: the most cfg branches reachable
 # without a cross toolchain, and the shape a Linux server actually runs.
 echo "==> checking headless build on the host"
-cargo check --workspace --no-default-features --quiet
+cargo clippy --workspace --all-targets --no-default-features --quiet -- -D warnings
 echo "    headless OK"
 
 echo "==> cfg check OK"

@@ -217,6 +217,11 @@ mod cgevent {
 }
 
 /// UTF-16 units per event. See [`unicode_event_chunks`] for why 20.
+///
+/// Gated with its only caller: the CGEvent path below is macOS-and-display
+/// only, so on every other target this is a dead constant and clippy's
+/// `-D warnings` turns that into a build failure.
+#[cfg(all(target_os = "macos", feature = "display"))]
 const CGEVENT_CHUNK_UNITS: usize = 20;
 
 impl TextTarget for CgEventTarget {

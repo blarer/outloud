@@ -50,3 +50,15 @@ vad-rs = { version = "0.1", optional = true }
 
 [dev-dependencies]
 # Only used by ignored hardware tests; synthetic-audio tests need nothing.
+
+# Both examples drive a real input stream, so they only exist when the
+# capture backend is compiled in. Without this, `cargo clippy --all-targets
+# --no-default-features` tries to build them against an absent
+# `audio::capture` and fails, which is what a headless CI job does.
+[[example]]
+name = "first_sample_latency"
+required-features = ["capture"]
+
+[[example]]
+name = "latency_impact"
+required-features = ["capture"]

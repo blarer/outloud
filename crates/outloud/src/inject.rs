@@ -406,10 +406,11 @@ fn typing_strategy(
     text_target::targets::keys::typing_strategy_for(app, field_reads_but_refuses_writes)
 }
 
-/// Headless builds have no synthetic-keys tier to choose a strategy for;
-/// a unit type keeps the call sites identical.
+/// Headless builds have no synthetic-keys tier to choose a strategy for.
 #[cfg(all(target_os = "macos", not(feature = "display")))]
-fn typing_strategy(_app: Option<&str>, _field_reads_but_refuses_writes: bool) {}
+fn typing_strategy(_app: Option<&str>, _field_reads_but_refuses_writes: bool) -> TypingChoice {
+    NoTypingStrategy
+}
 
 /// Whether the focused element refuses every write the AX tier has.
 ///
@@ -494,11 +495,22 @@ fn replace_selection(rewritten: &str) -> Outcome {
 }
 
 /// The typing strategy type as this build knows it: the real enum on a
-/// display build, unit on headless where no synthetic-keys tier exists.
+/// display build, a named empty type on headless where no synthetic-keys
+/// tier exists.
+///
+/// Not `()` for headless. Unit made every call site "pass a unit value to a
+/// function", which clippy denies under `-D warnings`, so the headless
+/// build failed on Linux while compiling fine on a Mac. A named type also
+/// reads as deliberate at the call site, where a bare `()` looks like an
+/// oversight.
 #[cfg(all(target_os = "macos", feature = "display"))]
 type TypingChoice = text_target::targets::keys::TypingStrategy;
+
 #[cfg(all(target_os = "macos", not(feature = "display")))]
-type TypingChoice = ();
+#[derive(Debug, Clone, Copy)]
+pub struct NoTypingStrategy;
+#[cfg(all(target_os = "macos", not(feature = "display")))]
+type TypingChoice = NoTypingStrategy;
 
 /// Type `text` using the chosen strategy and name the transport used.
 ///
