@@ -57,7 +57,10 @@ objc2-app-kit = { version = "0.3", optional = true, features = [
     # type, so that feature has to be named too. Without it the status item
     # glyph would be a fixed bitmap and wrong on most menu bar heights.
     "NSFontDescriptor",
+    "NSGradient",
     "NSGraphics",
+    "NSGraphicsContext",
+    "NSShadow",
     "NSImage",
     "NSMenu",
     "NSMenuItem",

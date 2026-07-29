@@ -60,8 +60,8 @@ use objc2::{
 };
 use objc2_app_kit::{
     NSBackingStoreType, NSBezierPath, NSColor, NSFont, NSFontAttributeName,
-    NSForegroundColorAttributeName, NSPanel, NSScreen, NSStatusWindowLevel, NSStringDrawing,
-    NSView, NSWindowCollectionBehavior, NSWindowStyleMask,
+    NSForegroundColorAttributeName, NSGradient, NSGraphicsContext, NSPanel, NSScreen, NSShadow,
+    NSStatusWindowLevel, NSStringDrawing, NSView, NSWindowCollectionBehavior, NSWindowStyleMask,
 };
 use objc2_foundation::{
     NSDictionary, NSPoint, NSRect, NSRunLoop, NSRunLoopCommonModes, NSSize, NSString, NSTimer,
@@ -277,14 +277,28 @@ fn ns_color(c: theme::Color, alpha_scale: f64) -> Retained<NSColor> {
     NSColor::colorWithSRGBRed_green_blue_alpha(c.r, c.g, c.b, c.a * alpha_scale)
 }
 
-/// Fill one skull polygon, mapping the unit-square geometry into the
-/// panel's SKULL box. The mapping lives here — not in `skull.rs` — so the
-/// pure geometry stays resolution-free and the same points serve any panel
-/// size or Retina factor (NSBezierPath is drawn in points; AppKit handles
-/// the backing scale).
-fn fill_poly(poly: &[crate::layout::Point], color: &NSColor) {
+/// Where the light comes from.
+///
+/// Depth is not a pile of effects; it is every highlight and shadow
+/// agreeing about one light. Inconsistent lighting is the specific thing
+/// that makes an interface look assembled rather than designed, so this
+/// constant exists to be the single answer, and everything below derives
+/// from it instead of choosing its own direction.
+///
+/// Top-front, very slightly left, which is the convention macOS itself
+/// uses: lit surfaces face up, shadows fall down and a little right.
+const LIGHT_ELEVATION: f64 = 0.92;
+
+/// Build the mapped path for one unit-square polygon.
+///
+/// Split out of [`fill_poly`] because the depth passes need the same path
+/// several times over (shade, fill, rim) and rebuilding it per pass would
+/// be both slower and a chance for the passes to disagree by a rounding
+/// error, which is exactly how a rim light ends up half a point off its
+/// own shape.
+fn poly_path(poly: &[crate::layout::Point]) -> Option<Retained<NSBezierPath>> {
     if poly.len() < 3 {
-        return;
+        return None;
     }
     let map = |p: &crate::layout::Point| {
         NSPoint::new(SKULL_X + p.x * SKULL_SIZE, SKULL_Y + p.y * SKULL_SIZE)
@@ -295,8 +309,68 @@ fn fill_poly(poly: &[crate::layout::Point], color: &NSColor) {
         path.lineToPoint(map(p));
     }
     path.closePath();
+    Some(path)
+}
+
+/// Fill one skull polygon, mapping the unit-square geometry into the
+/// panel's SKULL box. The mapping lives here — not in `skull.rs` — so the
+/// pure geometry stays resolution-free and the same points serve any panel
+/// size or Retina factor (NSBezierPath is drawn in points; AppKit handles
+/// the backing scale).
+fn fill_poly(poly: &[crate::layout::Point], color: &NSColor) {
+    let Some(path) = poly_path(poly) else {
+        return;
+    };
     color.setFill();
     path.fill();
+}
+
+/// Fill a polygon with a vertical gradient instead of one flat tone.
+///
+/// A single flat fill is what makes a shape read as a sticker. Giving the
+/// bone a lit top and a shaded underside is the cheapest possible cue that
+/// it is a solid object, and it costs one extra draw rather than a blur.
+fn fill_poly_lit(poly: &[crate::layout::Point], lit: &NSColor, shade: &NSColor) {
+    let Some(path) = poly_path(poly) else {
+        return;
+    };
+    // A gradient can fail to construct only if AppKit rejects the colours;
+    // falling back to the flat lit tone keeps the skull drawn rather than
+    // leaving a hole in it.
+    let Some(gradient) = NSGradient::initWithStartingColor_endingColor(
+        <NSGradient as objc2::AllocAnyThread>::alloc(),
+        shade,
+        lit,
+    ) else {
+        lit.setFill();
+        path.fill();
+        return;
+    };
+    // 90 degrees is bottom-to-top in AppKit's default space, so `lit` lands
+    // on the upper surface, agreeing with LIGHT_ELEVATION.
+    gradient.drawInBezierPath_angle(&path, 90.0 * LIGHT_ELEVATION);
+}
+
+/// Draw `body` with a soft drop shadow beneath it.
+///
+/// Uses an explicit shadow rather than compositing a blurred copy: AppKit
+/// renders it once into the same context, and confining it to a saved
+/// graphics state keeps it from leaking onto the passes that follow, which
+/// is the usual way a stray shadow ends up smeared under the text lane.
+fn with_drop_shadow(offset_y: f64, blur: f64, alpha: f64, body: impl FnOnce()) {
+    NSGraphicsContext::saveGraphicsState_class();
+    let shadow = NSShadow::new();
+    // Negative y: AppKit's default coordinate space puts positive y up,
+    // so the shadow must fall DOWN to agree with a light from above.
+    shadow.setShadowOffset(NSSize::new(0.0, -offset_y));
+    shadow.setShadowBlurRadius(blur);
+    let ink = theme::palette::INK;
+    shadow.setShadowColor(Some(&NSColor::colorWithSRGBRed_green_blue_alpha(
+        ink.r, ink.g, ink.b, alpha,
+    )));
+    shadow.set();
+    body();
+    NSGraphicsContext::restoreGraphicsState_class();
 }
 
 /// Measure a word's width in points with the lane font. Points, not
@@ -450,16 +524,45 @@ impl OverlayView {
         // only during the entry animation. Fading the whole skull as one
         // object keeps the features from appearing to float in separately.
         let fade = model.pose.opacity;
-        let bone = ns_color(theme::palette::PAPER, 0.96 * fade);
-        let bone_shade = ns_color(theme::palette::PAPER.alpha(0.80), 0.96 * fade);
+        // Three bone tones instead of one, so a lit top can meet a shaded
+        // underside. A single flat fill is what made this read as a sticker
+        // rather than an object.
+        let bone_lit = ns_color(theme::palette::PAPER, 0.99 * fade);
+        let bone = ns_color(theme::palette::PAPER.alpha(0.86), 0.96 * fade);
+        let bone_shade = ns_color(theme::palette::PAPER.alpha(0.66), 0.96 * fade);
         let dark = ns_color(theme::palette::INK, 0.94 * fade);
 
+        // Cast the whole skull onto the desktop behind it. One shadow for
+        // the silhouette, not one per polygon: the parts are a single solid
+        // object, and shadowing them individually would advertise that they
+        // are separate shapes, which is precisely the flatness being fixed.
+        //
+        // Reduced motion keeps the shadow. It is depth, not animation, and
+        // removing it would flatten the object for the users who most need
+        // to find it quickly.
+        let shadow_alpha = 0.42 * fade;
+        with_drop_shadow(2.0, 5.0, shadow_alpha, || {
+            fill_poly(&geo.cranium, &bone);
+            fill_poly(&geo.jaw, &bone_shade);
+        });
+
+        // Now the lit passes, drawn over the shadowed silhouette so the
+        // shadow reads as cast by the whole head.
         fill_poly(&geo.mouth, &dark);
-        fill_poly(&geo.cranium, &bone);
-        fill_poly(&geo.jaw, &bone_shade);
-        for socket in &geo.sockets {
-            fill_poly(socket, &dark);
-        }
+        fill_poly_lit(&geo.cranium, &bone_lit, &bone_shade);
+        // The jaw sits under the cranium, so it never catches the top light:
+        // its own gradient runs darker at both ends. This is what stops the
+        // two pieces looking like one flat outline.
+        fill_poly_lit(&geo.jaw, &bone, &bone_shade);
+
+        // Sockets last among the dark features, and with an inner shadow, so
+        // they read as holes in a solid rather than black paint on a
+        // surface. Cheapest possible cue that the bone has thickness.
+        with_drop_shadow(-1.0, 2.0, 0.5 * fade, || {
+            for socket in &geo.sockets {
+                fill_poly(socket, &dark);
+            }
+        });
         // Eye glow: the state's accent inside the sockets, alpha from the
         // pose (listening brightens with the voice, transcribing shimmers,
         // loading pulses, errors stare).
