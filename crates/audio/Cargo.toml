@@ -61,6 +61,10 @@ vad-rs = { version = "0.1", optional = true }
 libc = "0.2"
 
 [[example]]
+name = "device_latency"
+required-features = ["capture"]
+
+[[example]]
 name = "first_sample_latency"
 required-features = ["capture"]
 

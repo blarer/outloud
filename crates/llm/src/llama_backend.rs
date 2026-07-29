@@ -38,6 +38,20 @@ pub struct LlamaTransformer {
     backend: LlamaBackend,
     model: LlamaModel,
     n_ctx: NonZeroU32,
+    /// System prompt for every request. Overridable so prompt changes can be
+    /// A/B measured against a live model (see `examples/prompt_ablation.rs`)
+    /// instead of argued about: the shipped default was measured returning
+    /// the input verbatim on half of all requests.
+    system_prompt: String,
+}
+
+impl LlamaTransformer {
+    /// Replace the system prompt. Builder-style so an experiment reads as
+    /// one expression; the default is [`prompt::SYSTEM_PROMPT`].
+    pub fn with_system_prompt(mut self, system_prompt: impl Into<String>) -> Self {
+        self.system_prompt = system_prompt.into();
+        self
+    }
 }
 
 impl LlamaTransformer {
@@ -53,6 +67,7 @@ impl LlamaTransformer {
             backend,
             model,
             n_ctx: NonZeroU32::new(4096).unwrap(),
+            system_prompt: prompt::SYSTEM_PROMPT.to_string(),
         })
     }
 
@@ -66,11 +81,8 @@ impl LlamaTransformer {
             .chat_template(None)
             .map_err(|e| TransformError::Backend(format!("no chat template: {e}")))?;
         let messages = vec![
-            LlamaChatMessage::new(
-                "system".into(),
-                format!("{} /no_think", prompt::SYSTEM_PROMPT),
-            )
-            .map_err(|e| TransformError::Backend(e.to_string()))?,
+            LlamaChatMessage::new("system".into(), format!("{} /no_think", self.system_prompt))
+                .map_err(|e| TransformError::Backend(e.to_string()))?,
             LlamaChatMessage::new("user".into(), prompt::user_prompt(original, instruction))
                 .map_err(|e| TransformError::Backend(e.to_string()))?,
         ];

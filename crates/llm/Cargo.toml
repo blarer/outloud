@@ -26,3 +26,35 @@ llama-cpp-2 = { version = "0.1.152", optional = true, features = ["metal"] }
 [[example]]
 name = "bench_freeform"
 required-features = ["llama"]
+
+[[example]]
+name = "bench_investigation"
+required-features = ["llama"]
+
+[[example]]
+name = "prompt_ablation"
+required-features = ["llama"]
+
+[[example]]
+name = "size_sweep"
+required-features = ["llama"]
+
+[[example]]
+name = "det_vs_model"
+required-features = ["llama"]
+
+[[example]]
+name = "ttft_breakdown"
+required-features = ["llama"]
+
+[[example]]
+name = "ctx_cost"
+required-features = ["llama"]
+
+[[example]]
+name = "ctx_reuse"
+required-features = ["llama"]
+
+[[example]]
+name = "rule5_confirm"
+required-features = ["llama"]
