@@ -1,126 +1,128 @@
-# Release checklist
+# v0.1.0 release checklist and audit verdict
 
-The ordered human steps for cutting a release. One command answers the
-mechanical half: `./scripts/preflight.sh`. This document is the other half,
-plus the order in which everything happens.
+Audited 2026-07-29 on macOS 26.5.2 (M-series, arm64), commit `7504a41`.
+Every claim below marked **verified** was reproduced on this machine by
+running the thing, not by reading the docs. The mechanical half of a release
+is still `./scripts/preflight.sh`; this document records what that run and a
+manual README-claims audit actually found, and ends with the verdict.
 
-Split rationale: preflight covers everything a script can verify (gates,
-bundle shape, focus behaviour, idle CPU, stale names, doctor remedies).
-Humans cover everything that needs eyes or judgement: visual quality, real
-dictation feel, and the decision to accept a SKIP. Anything found automatable
-during a release should move out of this file and into `scripts/preflight.sh`
-in the same PR.
+## 1. What was verified (evidence, not assertion)
 
-## 0. Preconditions
+| Claim | What was run | What was seen |
+|---|---|---|
+| Bundle builds | `./scripts/bundle-outloud-macos.sh` | `dist/OutLoud.app` built, ad-hoc signed, helper `aqua-speech-helper` present, `codesign` valid on disk. **Verified** |
+| Dictation | `dist/OutLoud.app/Contents/MacOS/OutLoud --once --say "hello from a local dictation daemon" --no-overlay` | Text delivered via set-value, `release->text 131ms`. (Recognizer heard "demon" for "daemon", which is an ASR accuracy note, not a pipeline bug.) **Verified** |
+| Edit-by-voice | TextEdit doc "the quick brown fox", select-all, `--once --say "change quick to slow"` | Document read back through AppleScript: `the slow brown fox`, via set-selected-text, 119ms. **Verified** |
+| Shell bridge protocol + zsh plugin | bridge `serve` on a temp socket, real interactive zsh in a temp ZDOTDIR, `shell-bridge intent`, `^X^A`, `^Xu` | Line rewrote `prod-web` → `staging-web` in place; zsh undo restored it; daemon peek confirmed. **Verified, but only after fixing the broken verify script by hand — see blocker 2** |
+| Doctor | `./scripts/doctor.sh` | Ran via its own LaunchServices bundle; correctly FAILed accessibility (grant invalidated by the rebuild, exactly as its own remedy text predicts) and named remedies for each check. **Verified** |
+| Streaming write path | `insertion.mode = "stream"` in config, `cargo run --release -p outloud --example stream_probe` against TextEdit | 5 writes + revision splice landed: `the slick brown fox jumps over the lazy dog.`, p50 3.0ms/write. **Verified.** Daemon-integrated streaming is intentionally off for `--once` and README already lists it as not yet wired; consistent. |
+| Licences | `cargo deny check` | `advisories ok, bans ok, licenses ok, sources ok`. LICENSE is MIT; every crate uses `license.workspace = true` → MIT. Weight licences stated separately: Parakeet CC-BY-4.0 (docs/asr-integration.md), Qwen3 Apache-2.0 (docs/llm.md), Apple weights closed and disclosed in the README. **Verified** |
+| Gatekeeper | `spctl -a -t exec dist/OutLoud.app` | `rejected`, `Signature=adhoc`, no TeamIdentifier. Matches the README's own honest disclosure. |
+| Shell-bridge threat model vs code | read `crates/shell-bridge/src/{server,peer}.rs` against docs/shell-integration.md | Matches: dir 0700 + socket 0600 before first accept, kernel peer-cred check before any read, root rejected, non-unix refused, 30s intent TTL, first-EDIT consumption, 1 MiB cap, 2s timeouts, no execution verb anywhere in the protocol. Permission and TTL claims are covered by passing unit tests (17 pass). |
+| diag redaction | read `crates/diag/src/redact.rs` + ran its tests | Tests are real: they assert the secret/username/home strings are *absent* from output, not merely that a function ran. 45 diag tests pass. Caveat in blocker 4. |
 
-- [ ] Working tree clean, on the release commit. Do not release from a tree
-      with sibling swarms' uncommitted changes: preflight tests the tree it
-      is run in, so an uncommitted tree makes its verdict about nothing.
-- [ ] All in-flight UI work (overlay redesign, menu-bar mark, framework
-      evaluation) either merged or explicitly excluded from this release.
-- [ ] `./scripts/verify-head.sh` and `cargo test -p outloud --test docs_paths`
-      run on a **fresh clone** (docs/beta-readiness.md: the rename once made
-      the documented install path wrong at HEAD while looking fine locally).
+## 2. Blockers, ranked
 
-## 1. Automated: run preflight
+### NO-GO blockers
 
-```bash
-./scripts/preflight.sh
-```
+1. **The README's shell edit-by-voice flow does not work by voice.**
+   README ("Editing a shell command line"): run the bridge, type a command,
+   *speak an edit*, press `^X^A`. Reproduction: bridge serving on its default
+   socket, terminal focused, daemon given "change prod-web to staging-web".
+   The daemon typed the transcript into the terminal as text
+   (`via synthetic-keys-paced`) and `shell-bridge status` showed
+   `staged=<none>`: the daemon never sends `INTENT` to the bridge. Nothing in
+   `crates/outloud` references the bridge socket at all (grep confirms). The
+   pipeline only works when the intent is staged manually with
+   `shell-bridge intent "..."`, which is how `verify-zsh.exp` does it.
+   This is the project's headline differentiator ("no other tool does this")
+   claimed as working end to end. **Code fix** (wire daemon → bridge INTENT
+   when a terminal is focused) **or doc fix** (README must say the voice half
+   is not wired and show the manual `shell-bridge intent` flow). One of the
+   two must land before release.
 
-- [ ] Verdict line reads no FAIL. Every FAIL prints a named next action; fix
-      it or file it against the owning swarm, then rerun.
-- [ ] Read the SKIP lines. A skip is a judgement call, not a pass. Typical
-      acceptable skip: `idle-cpu` on a machine without the mic grant.
-      Never-acceptable skip on a release machine: `overlay-focus`.
+2. **`./scripts/verify-shell-bridge.sh` is broken: it verifies files that do
+   not exist.** It copies `shell/outloud.zsh` and exports
+   `OUTLOUD_BRIDGE_SOCKET`; the repo ships `shell/aqua.zsh` reading
+   `AQUA_BRIDGE_SOCKET`. Reproduction: `./scripts/verify-shell-bridge.sh` →
+   `cp: cannot stat '.../shell/outloud.zsh': No such file or directory`.
+   docs/shell-integration.md has the same rot (documents `shell/outloud.*`,
+   `OUTLOUD_BRIDGE_SOCKET`, `OUTLOUD_BRIDGE_KEY`; code implements
+   `aqua.*`/`AQUA_BRIDGE_*`), and the documented socket path
+   (`.../outloud/shell.sock`) differs from the real one
+   (`.../aqua/shell.sock`). This is exactly the incomplete-rename class that
+   already bit this repo twice. **Code + doc fix.** (The underlying bridge is
+   sound: rerunning the same script with the real filenames passes the full
+   pty verification including undo.)
 
-What preflight covers, so nobody re-checks it by hand:
+3. **The project's own gate says no.** `./scripts/preflight.sh` →
+   `VERDICT: NOT SAFE TO SHIP`, failing `stale-product-names` with 19
+   user-visible "Aqua" strings, including the menu-bar diagnostics header
+   ("Aqua diagnostics"), the error dialog title ("Aqua"), the config file
+   header comment, the rc-file marker `# aqua shell-bridge`, and the
+   `shell/aqua.*` plugin filenames. Either finish the rename or explicitly
+   allowlist each survivor; shipping with the gate red makes the gate
+   meaningless. **Code fix**, mostly string renames. Note the plugin
+   filenames interact with blocker 2: fix them together, in one direction.
 
-| Check | What it proves |
-|---|---|
-| ci-check | fmt, clippy -D warnings, `cargo test --workspace` |
-| ci-compliance | licences, CVEs, SBOM |
-| headless-build | headless binary links no display libraries |
-| latency-gate | p50/p99 within budget against a real text field |
-| overlay-focus | overlay never steals focus; keystrokes still land in TextEdit while it is on screen |
-| app-bundle | binary name, speech helper matches what crates/asr looks for, Info.plist valid, icon present, signature verifies |
-| idle-cpu | daemon idles near 0% CPU |
-| stale-product-names | no aqua/hexavoice leftovers in user-visible strings (LEGACY_DIRS and `.aqua-oss` model dir are deliberate and allowlisted) |
-| doctor-remedies | every remedy names a script and bundle that actually exist |
+### Should fix, would not hold the release alone
 
-## 2. Human eyes: visual checks (cannot be automated)
+4. **Menu-bar "Run Diagnostics" writes an unredacted report to disk.**
+   `menuhost.rs::run_diagnostics` formats raw `outcome.detail`/`remedy`
+   strings (which contain absolute home paths, hence the username) into a
+   file beside the config, explicitly intended to be attached to bug reports.
+   The redaction layer exists (`diag::redact::bundle`) and the CLI doctor
+   uses it for `--report`; this path bypasses it. No transcript content is
+   at risk today (checks never capture field text), but the privacy story
+   says redacted *by construction*. One-line **code fix**: run the output
+   through `redact::bundle` / `scrub_free_text`.
 
-Run `cargo run -p overlay --bin overlay-demo` and watch a full cycle (~40s):
+5. **Bundle identifier is `dev.hexavoice.hexad`.** TCC pins Accessibility
+   grants to the identifier, so renaming it *after* v0.1.0 silently kills
+   every user's grant. Decide the final identifier now, before first public
+   release, not after. **Human decision + code fix.**
 
-- [ ] **Overlay legibility.** Partial text is readable at arm's length on a
-      standard-DPI external display, not only on Retina. Correct: you can
-      read the rolling transcript without leaning in; the text never clips
-      or overflows the card.
-- [ ] **Overlay fade.** State transitions (Listening -> Transcribing ->
-      Injecting -> hidden) fade smoothly, no flash of an empty frame, no
-      lingering ghost after Injecting. Correct: the panel is simply gone
-      within about a second of the text landing; wrong: it pops, flickers,
-      or leaves a translucent rectangle behind.
-- [ ] **Overlay placement.** The panel sits near the caret / bottom-center
-      without covering the text being dictated into, on both a laptop panel
-      and an external display, and follows a Space switch.
-- [ ] **Error state.** The Error state is visually distinct (red accent) and
-      its message fits the card.
+### Human-only, already honestly disclosed
 
-Run `cargo run -p overlay --bin status-demo` and watch the menu bar:
+6. **Unsigned, un-notarized builds.** Confirmed: `spctl` rejects the bundle.
+   README and the known-limitations table already state this plainly and the
+   build-locally path works, so a *source-only* v0.1.0 is honest without it.
+   Distributing a downloadable .app requires Apple Developer Program
+   enrolment, a Developer ID certificate, and notarization
+   (docs/signing-runbook.md). **Only the human can do this.**
 
-- [ ] **Menu-bar mark reads at 18pt.** The glyph is recognisable at actual
-      menu-bar size, in both light and dark menu bars, and does not blur or
-      alias. Correct: at a glance you can tell idle from listening from
-      error; wrong: the states are only distinguishable side by side.
-- [ ] **Mark state changes are visible.** Trigger listening and error;
-      confirm each is noticeable in peripheral vision without being a
-      strobe.
+## 3. Not blockers (checked, fine)
 
-## 3. Human hands: one real dictation
+- Dictation, GUI edit-by-voice, doctor, streaming probe: all reproduce (§1).
+- Licence hygiene: deny clean, MIT everywhere, weight licences separated and
+  the closed Apple recognizer disclosed in the README's second paragraph.
+- Shell-bridge security posture matches its threat model, including the
+  no-execution-verb invariant and same-uid peer gating; residual risk is
+  stated honestly in docs/shell-integration.md.
+- Preflight's other nine checks pass, including overlay focus-stealing,
+  idle CPU (0.4%), headless build, and the latency gate.
+- README latency numbers (131–215ms) are consistent with what this audit
+  measured (119–163ms across transports).
 
-From the built bundle, not from cargo:
+## 4. Release steps, once blockers 1–3 (and ideally 4–5) land
 
-```bash
-open dist/OutLoud.app
-```
+1. `./scripts/preflight.sh` → must say SAFE TO SHIP (this now also proves
+   blocker 3 is gone).
+2. `./scripts/verify-shell-bridge.sh` → must pass as shipped (proves 2).
+3. Re-run the README shell flow *as written* by a human (proves 1).
+4. Fresh-clone check: `./scripts/verify-head.sh` and
+   `cargo test -p outloud --test docs_paths` on a clean clone.
+5. Tag `v0.1.0`, source-only release notes stating: macOS 26+ for
+   recognition, build locally (unsigned), Windows untested, Linux not yet.
 
-- [ ] Grant flow: on a machine (or fresh TCC state, `tccutil reset
-      Accessibility <bundle id>`) the permission prompts appear, name the
-      right app, and the doctor's advice matches what the screen shows.
-- [ ] Dictate one real sentence into TextEdit and one into a terminal.
-      Correct: text lands where the cursor was, punctuation is sane, and
-      the overlay never becomes the focused window at any point.
-- [ ] Speak one edit command ("delete the last word" or similar) and
-      confirm it edits only the requested span.
+## Verdict
 
-## 4. Version, notes, tag
-
-- [ ] Version bumped everywhere it lives (Cargo.toml workspace version;
-      CFBundleVersion / CFBundleShortVersionString in
-      scripts/bundle-outloud-macos.sh).
-- [ ] Changelog generated from conventional commits; breaking protocol
-      changes called out with the protocol version.
-- [ ] Re-read docs/pre-release-audit.md blockers and confirm each is fixed
-      or consciously accepted in writing.
-- [ ] Tag, push the tag, and verify CI is green **on the tag**, not on a
-      nearby commit.
-
-## 5. Distribution reality check
-
-- [ ] Signing: ad-hoc means every rebuild invalidates the TCC grant
-      (docs/macos-permissions.md). Shipping a downloadable .app requires
-      Developer ID + notarization; without it this is a source-install
-      release only, and the README must say so.
-- [ ] Install from scratch on a machine that has never seen the project
-      (per-milestone DoD rule 4), following only the README.
-- [ ] The uninstall script removes what this release actually installs:
-      skim scripts/uninstall-macos.sh against any new paths added since
-      the last release.
-
-## 6. After tagging
-
-- [ ] Re-pin the eval baselines (latency, WER, edit-accuracy) to the
-      release's measured numbers so the next cycle's regression gates
-      compare against them (per-milestone DoD rule 5).
-- [ ] Write the retro: numbers, what was cut, what surprised us.
+**NO-GO** for v0.1.0 today. The core product is real: dictation, in-place
+edit-by-voice, and the bridge protocol all reproduce with measured latencies
+that beat the README's own claims. But the headline shell feature does not
+work by voice as the README describes it (blocker 1), the script that is
+supposed to prove it is broken by an incomplete rename (blocker 2), and the
+project's own preflight gate currently fails (blocker 3). All three are
+hours of work, not weeks: fix, re-run §4, and this flips to GO for a
+source-only release. Signed binary distribution (blocker 6) remains a
+separate, human-gated milestone.
