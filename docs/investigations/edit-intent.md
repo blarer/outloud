@@ -5,6 +5,16 @@
 **Scope:** `crates/edit-intent`, `crates/llm`, `crates/ax-edit`, `crates/text-target`,
 `crates/outloud/src/inject.rs`, `crates/outloud/src/pipeline.rs`, `docs/ux/`
 
+> **Status update, same day.** Recommendation 2 has since been implemented.
+> The prototype this document refers to
+> (`crates/edit-intent/examples/scope_prototype.rs`) was promoted into
+> `crates/edit-intent/src/` and then **deleted**, so references to it below
+> are historical. Four of its design decisions were wrong and were changed;
+> see `docs/investigations/edit-intent-scope.md` for what landed, what the
+> prototype got wrong, and the shipped numbers (73 of 101 phrasings handled,
+> 24 of the 25 previously-broken commands fixed, 0 regressions, 0.92us p50
+> parse+apply). Everything else in this document still stands.
+
 Every number below was produced by a command run on this machine during the
 investigation. Commands are named next to their results so they can be
 re-run. Nothing here is estimated unless it says so.
@@ -113,7 +123,18 @@ finalize; inject 0.0ms because delivery was suppressed). Consistent with the
 
 **(b) On macOS, a freeform edit is silently dictated into the document.**
 This is the most serious finding and it is a behaviour bug, not a missing
-feature. In `inject.rs::deliver`, the macOS `Mode::Edit` arm does:
+feature.
+
+> **FIXED (2026-07-29), after this investigation.** The rule this section
+> asks for now lives in `crates/outloud/src/freeform.rs`: an utterance
+> aimed at the selection reaches `FreeformUnsupported` and writes nothing,
+> while prose spoken over a stale selection is still inserted. Verified
+> live in TextEdit (`scripts/verify-freeform-live.sh`), and measured on an
+> adversarial corpus at 0/15 destructive misses and 2/19 false refusals
+> (`cargo run -p outloud --example freeform_stress`). The paragraphs below
+> are preserved as the record of what was found.
+
+In `inject.rs::deliver`, the macOS `Mode::Edit` arm did:
 
 ```rust
 if let EditIntent::Freeform { .. } = &intent {

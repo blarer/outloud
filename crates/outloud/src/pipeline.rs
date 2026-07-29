@@ -737,9 +737,21 @@ async fn commit_transcript(
         Outcome::FreeformUnsupported { instruction } => {
             // Deliverable 3: freeform has no local LLM yet. Say so, name
             // what WAS heard and what to do instead. Never silent.
+            //
+            // TWO next actions, not one. This outcome now fires in two
+            // situations that look identical from here: the user really
+            // did ask for a rewrite (rephrase it as a command), or the
+            // classifier in `inject::freeform` mistook their dictation
+            // for an instruction and refused to overwrite the selection
+            // (say it again behind "type:"). Naming only the first left
+            // the second case a dead end, since nothing on screen told
+            // the user the escape hatch existed. A false refusal is
+            // supposed to cost one retry; without this line it cost a
+            // mystery.
             let msg = format!(
                 "freeform edit \"{instruction}\" needs the local LLM (not shipped yet) \
-                 -> rephrase as change/replace/delete/add/case"
+                 -> rephrase as change/replace/delete/add/case, or say \
+                 \"type: {instruction}\" to dictate those words as text"
             );
             engine.transition(OverlayState::Error, Some(msg.clone()));
             format!("freeform-unsupported: {msg}")

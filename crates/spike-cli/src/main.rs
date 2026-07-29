@@ -372,6 +372,11 @@ fn cmd_edit(utterance: &str) -> i32 {
                 "no deterministic rule matched; the shipping client escalates this to \
                  a local language model"
             ),
+            // Undo carries no text transformation: the shipping client
+            // pops its own undo ring, so "nothing matched" would be a lie.
+            EditIntent::Undo(depth) => {
+                println!("undo request ({depth:?}); the shipping client pops its undo ring")
+            }
             _ => println!("command did not match anything in the field; nothing was changed"),
         }
         return 0;
@@ -441,6 +446,16 @@ fn describe(intent: &EditIntent) -> String {
         EditIntent::Delete { text } => format!("delete {text:?}"),
         EditIntent::Append { text } => format!("append {text:?}"),
         EditIntent::Recase(case) => format!("recase to {case:?}"),
+        EditIntent::DeleteScope(scope) => format!("delete {scope:?}"),
+        EditIntent::Scoped { scope, intent } => {
+            format!("within {scope:?}: {}", describe(intent))
+        }
+        EditIntent::Punctuate { mark, anchor } => format!("insert {mark:?} {anchor:?}"),
+        EditIntent::DeleteMark { mark, which } => format!("delete {which:?} {mark:?}"),
+        EditIntent::Wrap { open, close } => format!("wrap in {open:?}..{close:?}"),
+        EditIntent::Identifier(style) => format!("rewrite as {style:?}"),
+        EditIntent::ListOp(op) => format!("restructure: {op:?}"),
+        EditIntent::Undo(depth) => format!("undo {depth:?}"),
         EditIntent::Freeform { instruction } => format!("freeform: {instruction:?}"),
     }
 }

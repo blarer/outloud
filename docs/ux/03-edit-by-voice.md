@@ -15,13 +15,28 @@ pub enum EditIntent {
     Delete  { text: String },              // "delete X"
     Append  { text: String },              // "add X"
     Recase(Case),                          // Upper | Lower | Title | Sentence
+    DeleteScope(Scope),                    // "delete the last sentence"
+    Scoped { scope, intent },              // "in the last sentence, change X to Y"
+    Punctuate { mark, anchor },            // "add a period at the end"
+    DeleteMark { mark, which },            // "remove the last comma"
+    Wrap { open, close },                  // "wrap this in quotes"
+    Identifier(IdentCase),                 // "make it snake case"
+    ListOp(ListOp),                        // "number these lines"
+    Undo(UndoDepth),                       // "undo that"
     Freeform { instruction: String },      // escalates to a local LLM
 }
 ```
 
-The deterministic four are microsecond-cheap and cannot hallucinate. `Freeform`
-is the only intent that involves a model. That asymmetry drives the whole UX:
+Every deterministic intent is microsecond-cheap and cannot hallucinate
+(measured p50 0.92us parse+apply; see
+`docs/investigations/edit-intent-scope.md`). `Freeform` is the only intent
+that involves a model. That asymmetry drives the whole UX:
 **deterministic intents apply instantly with undo; freeform edits preview.**
+
+`Undo` is the one deterministic intent with no text transformation: the undo
+ring owns the previous states, so `apply` returns `None` and delivery routes
+on the variant. That is what makes "undo that" stop being read as a request
+to delete every occurrence of the word "that".
 
 ## Targeting: what does the edit act on?
 
@@ -48,12 +63,56 @@ resolved in priority order:
 
 There is deliberately **no command prefix word**. OutLoud's Edit Mode uses no
 command words; a raw utterance while text is selected is treated as a
-replacement dictation ("just say the corrected version"). We adopt the same
-rule: selection + utterance that parses to no intent = replace the selection
-with the utterance, cleaned. Selection + utterance that *does* parse ("make
-this title case") = the edit. The parser's precedence handles the overlap, and
-the escape hatch for dictating text that sounds like a command is the prefix
-"type: change hello to goodbye".
+replacement dictation ("just say the corrected version"). We adopt that rule
+with one correction, described below. Selection + utterance that *does* parse
+("make this title case") = the edit. The escape hatch for dictating text that
+sounds like a command is the prefix "type: change hello to goodbye".
+
+### The correction: an unparsed utterance is not automatically a replacement
+
+"Selection + no parse = replace the selection with the utterance" is wrong for
+half its traffic, and the wrong half is destructive. Live, in TextEdit:
+
+```text
+before: "The customers might possibly be quite upset about this."
+spoke:  "tighten this up"
+after:  "Tighten this up."      <- the sentence is gone
+```
+
+The user's paragraph was replaced by the words describing what they wanted
+done to it, reported as success. The opposite default is also a real failure:
+text is selected far more often than people realise (a terminal keeps the last
+drag highlighted, editors select the current word, browsers hold a selection
+long after the click), so refusing every unparsed utterance made ordinary
+dictation write nothing, which reads as "the app stopped transcribing".
+
+Both readings are legitimate, so the rule is now a **classification**, in
+`crates/outloud/src/freeform.rs`:
+
+| Utterance, with a selection live | Read as | Behaviour |
+|---|---|---|
+| Parses as a deterministic command | edit | apply it, flash the diff chip |
+| Opens with a rewrite verb aimed at the selection ("tighten this up", "fix the grammar") | instruction | **write nothing**, show the Error overlay naming what was heard |
+| Anything else ("we should tell them soon", "fix the login bug and add tests") | dictation | insert it, replacing the selection as typing would |
+| Prefixed "type: ..." | literal dictation | insert the words verbatim, prefix removed |
+
+One further guard, on scale rather than wording: inserting a dictated phrase
+*replaces* the selection, so a handful of words landing on a very large
+selection is a deletion even when the wording was read correctly. That case is
+refused too, for the same reason this section's table exists. Verified live:
+the same utterance correctly replaced a 55-character sentence and left a
+2239-character document byte-for-byte unchanged.
+
+The classifier is deliberately biased, because **a wrong refusal costs the
+user one retry; a wrong overwrite costs them their paragraph, silently.**
+Measured on an adversarial corpus (`cargo run -p outloud --example
+freeform_stress`): **0/15 destructive misses, 2/19 false refusals.** The
+refusal message names the `type:` retry, so a false refusal is a speed bump
+rather than a dead end.
+
+Until the preview panel below exists, the "instruction" row is where every
+freeform edit lands. When it ships, that row previews instead of refusing;
+the classification that gets it there does not change.
 
 ## Discoverability: the hard problem for voice
 
@@ -151,7 +210,7 @@ The rule: **determinism decides.**
 
 | Intent class | Behavior | Why |
 |---|---|---|
-| `Replace`, `Delete`, `Append`, `Recase` | Apply instantly, flash a diff chip, rely on undo | Outcome is exactly predictable from the command; asking adds latency and zero information |
+| Every deterministic intent | Apply instantly, flash a diff chip, rely on undo | Outcome is exactly predictable from the command; asking adds latency and zero information |
 | `Freeform` (LLM) | Preview before write | A model can produce anything; writing unvetted generated text into the user's document violates trust (principle 3) |
 | Any intent whose blast radius is huge (see above) | Preview | Scale converts a safe edit into a risky one |
 

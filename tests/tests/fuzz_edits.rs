@@ -60,10 +60,34 @@ fn random_string(rng: &mut Rng, max_pieces: usize) -> String {
 
 /// The command heads the parser knows, plus garbage, so both the structured
 /// and freeform paths get fuzzed.
+///
+/// The scope-aware commands are here as well as the literal verbs. They do
+/// far more byte-offset arithmetic (sentence and word segmentation, splicing
+/// around a resolved span) than `Replace`/`Delete` ever did, so they are the
+/// likelier home of the next panic in this class.
 fn random_utterance(rng: &mut Rng) -> String {
     let a = random_string(rng, 4);
     let b = random_string(rng, 4);
-    match rng.below(8) {
+    let scoped = [
+        "delete the last sentence",
+        "remove the first sentence",
+        "delete the third word",
+        "delete the last line",
+        "uppercase the first letter",
+        "capitalize the first word",
+        "make the last sentence title case",
+        "add a period at the end",
+        "wrap this in quotes",
+        "make it snake case",
+        "make it camel case",
+        "turn this into bullet points",
+        "number these lines",
+        "join these lines",
+        "remove the last comma",
+        "undo that",
+        "delete everything",
+    ];
+    match rng.below(12) {
         0 => format!("change {a} to {b}"),
         1 => format!("replace {a} with {b}"),
         2 => format!("delete {a}"),
@@ -71,6 +95,11 @@ fn random_utterance(rng: &mut Rng) -> String {
         4 => format!("make {a} into {b}"),
         5 => "make it all caps".to_string(),
         6 => format!("{a} {b}"), // freeform garbage
+        // An anchor drawn from the hostile alphabet, so the case-insensitive
+        // anchor search gets fuzzed rather than only its ASCII happy path.
+        7 => format!("add a comma after {a}"),
+        8 => format!("in the last sentence change {a} to {b}"),
+        9 | 10 => scoped[rng.below(scoped.len())].to_string(),
         _ => random_string(rng, 8),
     }
 }
@@ -245,5 +274,100 @@ fn known_hostile_inputs_stay_fixed() {
         let intent = parse(utterance);
         let result = std::panic::catch_unwind(|| apply(target, &intent));
         assert!(result.is_ok(), "panicked on {target:?} / {utterance:?}");
+    }
+}
+
+/// A scoped delete must only ever REMOVE content.
+///
+/// Whitespace at the seam is repaired, so the output is not a literal
+/// substring and the invariant has to be checked on non-whitespace
+/// characters, which a delete must never add. This is the over-edit gate
+/// applied to the scope-aware path, where a mis-resolved span would take
+/// the wrong words rather than merely the wrong number of them.
+#[test]
+fn scoped_deletes_never_add_content() {
+    let mut rng = Rng(0x5eed_0006);
+    for utterance in [
+        "delete the last sentence",
+        "remove the first sentence",
+        "delete the last word",
+        "delete the first line",
+        "remove the last comma",
+    ] {
+        let intent = parse(utterance);
+        for _ in 0..4_000 {
+            let target = random_string(&mut rng, 14);
+            let Some(after) = apply(&target, &intent) else {
+                continue;
+            };
+            let count = |s: &str| s.chars().filter(|c| !c.is_whitespace()).count();
+            assert!(
+                count(&after) <= count(&target),
+                "{utterance:?} ADDED content: {target:?} -> {after:?}"
+            );
+        }
+    }
+}
+
+/// Identifier casing must emit only lowercase alphanumerics and its own
+/// separator, or the result is not a usable identifier. `İ` is the trap:
+/// it is alphanumeric but lowercases into a combining mark that is not.
+#[test]
+fn identifier_casing_emits_only_identifier_characters() {
+    let mut rng = Rng(0x5eed_0007);
+    for (utterance, sep) in [("make it snake case", '_'), ("make it kebab case", '-')] {
+        let intent = parse(utterance);
+        for _ in 0..5_000 {
+            let target = random_string(&mut rng, 10);
+            let Some(out) = apply(&target, &intent) else {
+                continue;
+            };
+            assert!(
+                out.chars().all(|c| c.is_alphanumeric() || c == sep),
+                "{utterance:?} produced non-identifier chars: {out:?} from {target:?}"
+            );
+        }
+    }
+}
+
+/// Terminal punctuation must never stack, on any input.
+#[test]
+fn punctuation_never_stacks() {
+    let mut rng = Rng(0x5eed_0008);
+    let intent = parse("add a period at the end");
+    for _ in 0..10_000 {
+        let target = random_string(&mut rng, 12);
+        let Some(out) = apply(&target, &intent) else {
+            continue;
+        };
+        assert!(!out.ends_with(".."), "stacked punctuation: {out:?}");
+    }
+}
+
+/// A scope must never resolve to a span that would edit outside itself.
+///
+/// Checked through the public seam rather than against internal spans: a
+/// scoped recase of the LAST sentence must leave the text before that
+/// sentence byte-identical. A leaking scope is worse than no scope, because
+/// the user believes they narrowed the blast radius.
+#[test]
+fn a_scoped_edit_never_touches_text_before_its_scope() {
+    let mut rng = Rng(0x5eed_0009);
+    let intent = parse("make the last sentence title case");
+    for _ in 0..10_000 {
+        // A fixed, sentence-terminated prefix, so "everything before the
+        // last sentence" is knowable without reimplementing the splitter.
+        // The trailing "z" guarantees the random tail carries real content,
+        // because with an empty tail the prefix genuinely IS the last
+        // sentence and rewriting it would be correct.
+        let prefix = "stable opening words here. ";
+        let target = format!("{prefix}{}z", random_string(&mut rng, 8));
+        let Some(after) = apply(&target, &intent) else {
+            continue;
+        };
+        assert!(
+            after.starts_with(prefix),
+            "scoped edit leaked before its scope: {target:?} -> {after:?}"
+        );
     }
 }

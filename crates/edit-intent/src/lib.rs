@@ -13,8 +13,39 @@
 //! That split is also what keeps the latency budget honest: the common case
 //! costs microseconds, so the end-to-end time is dominated by speech
 //! recognition rather than by generation.
+//!
+//! # Why the grammar is wider than the four original verbs
+//!
+//! `docs/investigations/edit-intent.md` measured a 55-command corpus through
+//! the original grammar: 15 correct, 10 **silently wrong**, and 15 that had an
+//! exact deterministic answer but escalated to a model that is not wired up.
+//! Two failure shapes drove this crate's expansion.
+//!
+//! The first is scope. `uppercase the first letter` matched on the substring
+//! `uppercase` with no regard for what followed and SHOUTED the entire field.
+//! A command that names a unit it does not resolve is now refused outright
+//! rather than applied to everything.
+//!
+//! The second is literalism. `add a period at the end` appended the *words*
+//! "a period at the end", and `delete the last sentence` searched for that
+//! phrase as text. Both now have first-class intents.
+//!
+//! # The rule that governs additions
+//!
+//! **A phrasing that could plausibly mean two different edits must not
+//! parse.** Escalating costs the user a rephrase; guessing costs them their
+//! words, and they may not notice. Several rules in [`parse`] therefore refuse
+//! phrasings they *nearly* understand, and each says why at the refusal site.
+
+mod apply;
+mod parse;
+mod segment;
 
 /// What the user asked for, once their words have been understood.
+///
+/// The first five variants are the original grammar and are unchanged; the
+/// rest were added to absorb commands that previously became
+/// [`EditIntent::Freeform`] or, worse, were mis-read literally.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum EditIntent {
     /// Replace every occurrence of `from` with `to`.
@@ -25,6 +56,29 @@ pub enum EditIntent {
     Append { text: String },
     /// Change the casing of the whole target.
     Recase(Case),
+    /// Remove a whole unit of text ("delete the last sentence").
+    DeleteScope(Scope),
+    /// Apply `intent` to only part of the target ("in the last sentence,
+    /// change its to it's"). The inner intent never sees the rest of the
+    /// text, which is what makes the narrowing real rather than cosmetic.
+    Scoped {
+        scope: Scope,
+        intent: Box<EditIntent>,
+    },
+    /// Place a punctuation mark ("add a period at the end").
+    Punctuate { mark: char, anchor: Anchor },
+    /// Remove a punctuation mark by position ("remove the last comma").
+    DeleteMark { mark: char, which: Which },
+    /// Surround the target ("wrap this in quotes").
+    Wrap { open: String, close: String },
+    /// Rewrite the target as a programming identifier ("make it snake case").
+    Identifier(IdentCase),
+    /// Restructure the target as lines or a list ("number these lines").
+    ListOp(ListOp),
+    /// Revert previous edits. Carries no text transformation: the caller's
+    /// undo ring owns the previous states, so [`apply`] returns `None` and
+    /// delivery routes on the variant instead.
+    Undo(UndoDepth),
     /// An open-ended instruction that only a language model can carry out.
     Freeform { instruction: String },
 }
@@ -38,14 +92,112 @@ pub enum Case {
     Sentence,
 }
 
+/// Which unit of text a spoken scope refers to.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TextUnit {
+    Sentence,
+    Word,
+    Line,
+    Paragraph,
+    /// Only ever reached through "the first letter/character".
+    Character,
+}
+
+/// Which occurrence of a unit a scope names.
+///
+/// There is no `First` variant: "first" is `Nth(0)`, so the ordinal family
+/// ("the second sentence") shares one code path with it and cannot drift.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Which {
+    Nth(usize),
+    Last,
+}
+
+/// The region of the target an intent applies to.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Scope {
+    /// Everything the caller handed us: the selection, or the whole field.
+    Whole,
+    Unit {
+        which: Which,
+        unit: TextUnit,
+    },
+}
+
+/// Where a punctuation mark goes.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Anchor {
+    /// After the last non-whitespace character of the target.
+    End,
+    /// Immediately after the first occurrence of this text.
+    After(String),
+}
+
+/// Identifier conventions, which are what "make it snake case" means.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum IdentCase {
+    Snake,
+    ScreamingSnake,
+    Kebab,
+    Camel,
+    Pascal,
+}
+
+/// Whole-target restructurings.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ListOp {
+    /// Collapse line breaks into spaces.
+    JoinLines,
+    /// One sentence per line.
+    SplitSentences,
+    /// Prefix each unit with "- ".
+    Bullet,
+    /// Prefix each unit with "1. ", "2. ", ...
+    Number,
+}
+
+/// How far back an undo request reaches.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum UndoDepth {
+    /// "undo that": pop one edit.
+    One,
+    /// "go back to the original": rewind this field's whole stack.
+    All,
+}
+
 /// Parse a spoken instruction into an [`EditIntent`].
 ///
 /// Returns a deterministic intent when the phrasing matches a known command
 /// shape, and [`EditIntent::Freeform`] otherwise so the caller can escalate to
 /// a language model.
+///
+/// # Rule order
+///
+/// The extended grammar runs **before** the original literal verbs, because
+/// the literal verbs are greedy: `delete ` followed by anything at all is a
+/// valid `Delete`, so `delete the last sentence` would be claimed as a search
+/// for that phrase before any scope rule could see it. Ordering it this way
+/// makes the extended rules the only ones that need to be conservative, and
+/// the literal verbs keep their existing behaviour on everything the extended
+/// grammar declines.
+///
+/// A rule that recognises an utterance but distrusts it returns
+/// [`parse::Decision::Refuse`], which goes straight to `Freeform` rather than
+/// falling through. Falling through would hand exactly the phrasings we
+/// refused to the greedy literal verbs, which is the failure being fixed.
 pub fn parse(utterance: &str) -> EditIntent {
     let trimmed = utterance.trim();
     let lower = trimmed.to_lowercase();
+
+    match parse::parse(trimmed, &lower) {
+        parse::Decision::Intent(intent) => return intent,
+        parse::Decision::Refuse => {
+            return EditIntent::Freeform {
+                instruction: trimmed.to_string(),
+            }
+        }
+        parse::Decision::Pass => {}
+    }
 
     // "change X to Y" / "replace X with Y" / "make X into Y"
     for (head, joiner) in [
@@ -95,6 +247,8 @@ pub fn parse(utterance: &str) -> EditIntent {
     }
 
     // Casing commands are phrased many ways; match on the salient keywords.
+    // Anything naming a scope was already handled (or deliberately refused)
+    // above, so a match here really does mean the whole target.
     if let Some(case) = parse_case(&lower) {
         return EditIntent::Recase(case);
     }
@@ -149,15 +303,14 @@ fn slice_original(original: &str, start: usize, end: usize) -> String {
 /// Apply a deterministic intent to `target`.
 ///
 /// Returns `None` for [`EditIntent::Freeform`], which by definition needs a
-/// language model, and for edits whose search text is not present, so the
-/// caller can tell the user the command did not match instead of silently
+/// language model, for [`EditIntent::Undo`], which the caller's undo ring
+/// resolves, and for edits that do not apply to this text (search text
+/// absent, scope that does not exist, list operation on a single unit), so
+/// the caller can tell the user the command did not match instead of silently
 /// doing nothing.
 pub fn apply(target: &str, intent: &EditIntent) -> Option<String> {
     match intent {
-        EditIntent::Replace { from, to } => {
-            let replaced = replace_case_insensitive(target, from, to)?;
-            Some(replaced)
-        }
+        EditIntent::Replace { from, to } => replace_case_insensitive(target, from, to),
         EditIntent::Delete { text } => {
             let removed = replace_case_insensitive(target, text, "")?;
             // Deleting a word leaves a double space behind, which no user wants.
@@ -172,8 +325,9 @@ pub fn apply(target: &str, intent: &EditIntent) -> Option<String> {
                 Some(format!("{target} {text}"))
             }
         }
-        EditIntent::Recase(case) => Some(recase(target, *case)),
+        EditIntent::Recase(case) => Some(apply::recase(target, *case)),
         EditIntent::Freeform { .. } => None,
+        other => apply::apply(target, other),
     }
 }
 
@@ -260,167 +414,5 @@ fn collapse_spaces(text: &str) -> String {
     out.replace(" ,", ",").replace(" .", ".").trim().to_string()
 }
 
-fn recase(text: &str, case: Case) -> String {
-    match case {
-        Case::Upper => text.to_uppercase(),
-        Case::Lower => text.to_lowercase(),
-        Case::Title => text
-            .split(' ')
-            .map(|word| {
-                let mut chars = word.chars();
-                match chars.next() {
-                    Some(first) => first.to_uppercase().collect::<String>() + chars.as_str(),
-                    None => String::new(),
-                }
-            })
-            .collect::<Vec<_>>()
-            .join(" "),
-        Case::Sentence => {
-            let lower = text.to_lowercase();
-            let mut chars = lower.chars();
-            match chars.next() {
-                Some(first) => first.to_uppercase().collect::<String>() + chars.as_str(),
-                None => String::new(),
-            }
-        }
-    }
-}
-
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn parses_change_to() {
-        assert_eq!(
-            parse("change hello to goodbye"),
-            EditIntent::Replace {
-                from: "hello".into(),
-                to: "goodbye".into()
-            }
-        );
-    }
-
-    #[test]
-    fn parses_replace_with() {
-        assert_eq!(
-            parse("replace foo with bar"),
-            EditIntent::Replace {
-                from: "foo".into(),
-                to: "bar".into()
-            }
-        );
-    }
-
-    #[test]
-    fn splits_on_last_joiner_so_search_text_survives() {
-        // The word "to" appears inside the search text; a naive first-match
-        // split would produce from="" and lose the command.
-        assert_eq!(
-            parse("change to do to todo"),
-            EditIntent::Replace {
-                from: "to do".into(),
-                to: "todo".into()
-            }
-        );
-    }
-
-    #[test]
-    fn parses_delete_and_append() {
-        assert_eq!(
-            parse("delete the last sentence"),
-            EditIntent::Delete {
-                text: "the last sentence".into()
-            }
-        );
-        assert_eq!(
-            parse("append and thanks"),
-            EditIntent::Append {
-                text: "and thanks".into()
-            }
-        );
-    }
-
-    #[test]
-    fn parses_casing() {
-        assert_eq!(parse("make it all caps"), EditIntent::Recase(Case::Upper));
-        assert_eq!(parse("title case please"), EditIntent::Recase(Case::Title));
-    }
-
-    #[test]
-    fn unknown_phrasing_becomes_freeform() {
-        let intent = parse("tighten this up and make it sound friendlier");
-        assert!(matches!(intent, EditIntent::Freeform { .. }));
-    }
-
-    #[test]
-    fn apply_replaces_ignoring_case() {
-        let intent = EditIntent::Replace {
-            from: "hello".into(),
-            to: "goodbye".into(),
-        };
-        assert_eq!(
-            apply("Hello world, hello again", &intent).unwrap(),
-            "goodbye world, goodbye again"
-        );
-    }
-
-    #[test]
-    fn apply_reports_no_match() {
-        let intent = EditIntent::Replace {
-            from: "absent".into(),
-            to: "x".into(),
-        };
-        assert!(apply("nothing here", &intent).is_none());
-    }
-
-    #[test]
-    fn apply_delete_cleans_up_whitespace() {
-        let intent = EditIntent::Delete {
-            text: "very ".into(),
-        };
-        assert_eq!(apply("a very long day", &intent).unwrap(), "a long day");
-    }
-
-    #[test]
-    fn apply_append_spaces_correctly() {
-        let intent = EditIntent::Append {
-            text: "world".into(),
-        };
-        assert_eq!(apply("hello", &intent).unwrap(), "hello world");
-        assert_eq!(apply("hello ", &intent).unwrap(), "hello world");
-        assert_eq!(apply("", &intent).unwrap(), "world");
-    }
-
-    #[test]
-    fn freeform_has_no_deterministic_application() {
-        let intent = EditIntent::Freeform {
-            instruction: "make it nicer".into(),
-        };
-        assert!(apply("text", &intent).is_none());
-    }
-
-    #[test]
-    fn non_ascii_input_does_not_panic() {
-        // Turkish, German, and Greek all have characters whose lowercase form
-        // differs in byte length, which is exactly where naive byte slicing
-        // panics.
-        for utterance in [
-            "change İstanbul to Istanbul",
-            "replace STRASSE with Straße",
-            "delete ΣΊΣΥΦΟΣ",
-            "change Ǆ to dz",
-        ] {
-            let intent = parse(utterance);
-            let _ = apply("İstanbul STRASSE ΣΊΣΥΦΟΣ Ǆ", &intent);
-        }
-    }
-
-    #[test]
-    fn recase_variants() {
-        assert_eq!(recase("hello world", Case::Upper), "HELLO WORLD");
-        assert_eq!(recase("HELLO WORLD", Case::Lower), "hello world");
-        assert_eq!(recase("hello world", Case::Title), "Hello World");
-        assert_eq!(recase("hELLO WORLD", Case::Sentence), "Hello world");
-    }
-}
+mod tests;

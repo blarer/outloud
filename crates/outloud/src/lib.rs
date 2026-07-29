@@ -35,6 +35,7 @@
 
 pub mod ax_stream;
 pub mod devlatency;
+pub mod freeform;
 pub mod inject;
 pub mod instance;
 pub mod menubar;

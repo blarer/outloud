@@ -22,6 +22,8 @@ use ax_edit::AxError;
 use ax_edit::TextSnapshot;
 use edit_intent::EditIntent;
 
+use crate::freeform::{classify, FreeformDisposition};
+
 /// What the snapshot taken at key-down tells us about the coming utterance.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Mode {
@@ -180,22 +182,33 @@ pub fn deliver(mode: &Mode, transcript: &str) -> Outcome {
             let intent = edit_intent::parse(command);
 
             // A selection means an edit is POSSIBLE, not that one was
-            // intended. Text is selected far more often than people
-            // realise: a terminal keeps the last drag selected, editors
-            // highlight the current word, and browsers hold a selection
-            // long after the click that made it. Treating every one of
-            // those as an edit command turns ordinary dictation into a
-            // refusal, which is what it did here - dictating a plain
-            // sentence with a stale terminal selection reported
-            // "freeform edit needs the local LLM" and wrote nothing.
+            // intended, and the two readings of an unparsed phrase have
+            // opposite correct behaviours. Text is selected far more often
+            // than people realise (a terminal keeps the last drag
+            // selected, editors highlight the current word, browsers hold
+            // a selection long after the click), so refusing every
+            // unparsed phrase turned ordinary dictation into "the app
+            // stopped transcribing". But inserting every unparsed phrase
+            // meant "tighten this up" REPLACED the selected sentence with
+            // the words "Tighten this up.", destroying it silently.
             //
-            // So a phrase that does not parse as one of the deterministic
-            // commands is not a failed edit; it is dictation that happened
-            // to occur while something was selected. Insert it, which is
-            // also the non-destructive reading: replacing the selection
-            // would destroy text the user never asked us to touch.
+            // `freeform::classify` is the rule that separates them, and it
+            // is biased: a wrong refusal costs one retry, a wrong
+            // overwrite costs a paragraph. See that module for the signals
+            // and the escape hatch ("type: ...").
             if let EditIntent::Freeform { .. } = &intent {
-                return insert_with_fallback(text);
+                return match classify(text, selected) {
+                    // Dictation that happened while something was
+                    // selected. Insert it, exactly as before.
+                    FreeformDisposition::Dictate { text } => insert_with_fallback(&text),
+                    // Recognisably an instruction ABOUT the selection that
+                    // nothing here can carry out. Write NOTHING and say so
+                    // through the Error overlay: the user's selected text
+                    // is the one thing that must survive.
+                    FreeformDisposition::RewriteRequest { instruction } => {
+                        Outcome::FreeformUnsupported { instruction }
+                    }
+                };
             }
 
             match edit_intent::apply(selected, &intent) {
@@ -236,10 +249,19 @@ pub fn payload_for(mode: &Mode, text: &str) -> Result<String, Outcome> {
             // must not write "slow.".
             let command = text.trim_end_matches(['.', '!', '?', ',']);
             let intent = edit_intent::parse(command);
-            if let EditIntent::Freeform { instruction } = &intent {
-                return Err(Outcome::FreeformUnsupported {
-                    instruction: instruction.clone(),
-                });
+            if let EditIntent::Freeform { .. } = &intent {
+                // Same split as the macOS path, through the same rule:
+                // an instruction about the selection is refused (nothing
+                // is written), while dictation that merely coincided with
+                // a selection is written verbatim. The caller demotes the
+                // MODE too, so the payload cannot reach a replace-shaped
+                // transport; see `deliver_via_tiers`.
+                return match classify(text, selected) {
+                    FreeformDisposition::Dictate { text } => Ok(text),
+                    FreeformDisposition::RewriteRequest { instruction } => {
+                        Err(Outcome::FreeformUnsupported { instruction })
+                    }
+                };
             }
             match edit_intent::apply(selected, &intent) {
                 Some(rewritten) => Ok(rewritten),
@@ -316,18 +338,24 @@ fn stage_terminal_edit(text: &str) -> Option<Outcome> {
 
 #[cfg(not(target_os = "macos"))]
 fn deliver_via_tiers(mode: &Mode, text: &str) -> Outcome {
-    // Same rule the macOS path applies, for the same shipped-broken reason:
-    // a selection means an edit is POSSIBLE, not INTENDED. A phrase that
-    // does not parse as a deterministic command is ordinary dictation that
-    // happened while something was selected, so it is inserted rather than
-    // refused. Demoting the MODE (not just the payload) also keeps the
-    // sentence away from replace-shaped transports, which would otherwise
+    // Same rule the macOS path applies, for the same shipped-broken
+    // reason: a selection means an edit is POSSIBLE, not INTENDED. An
+    // unparsed phrase that `freeform::classify` reads as ordinary
+    // dictation is demoted to `Mode::Dictate`, which both inserts it and
+    // keeps it away from replace-shaped transports that would otherwise
     // overwrite a selection the user never aimed at.
+    //
+    // A phrase classified as an instruction about the selection is NOT
+    // demoted: it stays in `Mode::Edit` so `payload_for` refuses it and
+    // no transport is touched at all.
     let mode = match mode {
-        Mode::Edit { .. }
+        Mode::Edit { selected }
             if matches!(
                 edit_intent::parse(text.trim_end_matches(['.', '!', '?', ','])),
                 EditIntent::Freeform { .. }
+            ) && matches!(
+                classify(text, selected),
+                FreeformDisposition::Dictate { .. }
             ) =>
         {
             &Mode::Dictate
@@ -491,10 +519,9 @@ fn insert_with_fallback(text: &str) -> Outcome {
                 );
             }
             // A non-empty selection at commit time: typing replaces it, so
-            // dictation does too. replace_focused takes the undo-preserving
-            // AXSelectedText path here.
+            // dictation does too, through the undo-preserving path only.
             if snap.is_selection_edit() {
-                return write_focused(text, typing_strategy(snap.app.as_deref(), false));
+                return write_over_selection(&snap, text);
             }
             match spliced_at_caret(&snap, text) {
                 Some(new_value) => {
@@ -617,14 +644,77 @@ fn write_focused(text: &str, typing: TypingChoice) -> Outcome {
 /// AXSelectedTextRange comparison in ax-edit.
 #[cfg(target_os = "macos")]
 fn replace_selection(rewritten: &str) -> Outcome {
-    // The edit path never targets a terminal (a terminal field is
-    // read-only and dictation-only), but the destination is re-read here
-    // for the same reason as the dictation path: the app name decides
-    // whether a typing fallback may batch.
-    write_focused(
-        rewritten,
-        typing_strategy(ax_edit::frontmost_app().as_deref(), false),
-    )
+    // Re-read the field rather than only asking for the frontmost app.
+    // The app name decides whether a typing fallback may batch, and the
+    // snapshot additionally says whether AXSelectedText is writable, which
+    // is what keeps this off the document-clobbering AXValue path below.
+    match ax_edit::snapshot_focused() {
+        Ok(snap) if snap.is_selection_edit() => write_over_selection(&snap, rewritten),
+        // The selection vanished between key-down and commit (focus moved,
+        // a click landed). Writing the rewritten SELECTION as the whole
+        // field value would replace the user's document with a fragment,
+        // so type it instead: that is what their keyboard would have done.
+        Ok(snap) => deliver_without_ax(
+            rewritten,
+            &AxError::NotSettable,
+            typing_strategy(snap.app.as_deref(), false),
+        ),
+        Err(e) => deliver_without_ax(
+            rewritten,
+            &e,
+            typing_strategy(ax_edit::frontmost_app().as_deref(), false),
+        ),
+    }
+}
+
+/// Replace the live selection with `text`, and ONLY through a transport
+/// that replaces a selection as such.
+///
+/// The trap this defuses, verified by reading `ax_edit::replace_focused`:
+/// that function prefers `AXSelectedText` but, when the element refuses
+/// that attribute, falls through to writing the whole `AXValue`. With a
+/// selection live, `text` is selection-sized, so the fallback would set
+/// the ENTIRE field to it. A one-word selection in a long document would
+/// leave nothing but that one word. The same fallback also destroys the
+/// app's native undo, which is the user's only recovery route.
+///
+/// So the AX write is only attempted when the snapshot says
+/// `AXSelectedText` is settable, which is the path that stays scoped to
+/// the selection. Otherwise delivery drops to synthesized keystrokes /
+/// paste, which replace a selection natively (that is what typing over a
+/// selection does) and remain undoable through the app's own Cmd+Z.
+///
+/// Measured against a live TextEdit window, three consecutive runs
+/// (`cargo run -p ax-edit --example undo_semantics`):
+///
+/// ```text
+/// case 1  set-selected-text, whole doc selected -> doc becomes the payload
+/// case 2  set-value,         no selection       -> doc becomes the payload
+/// case 3  set-selected-text, PARTIAL selection  -> "The customers might possi"
+///                                                 becomes "WORD", and
+///                                                 "bly be quite upset about
+///                                                 this." SURVIVES
+/// ```
+///
+/// Case 3 is the whole argument. `text` is SELECTION-SIZED, so routing it
+/// to the `AXValue` branch does not merely lose formatting: it sets the
+/// entire field to a fragment. A one-word selection in a long document
+/// would leave nothing but that one word.
+///
+/// One claim was NOT confirmed and is deliberately not relied on here.
+/// The brief (and `ax-edit`'s own doc comment) says a full `AXValue`
+/// write destroys the app's undo. In TextEdit it did not: Cmd+Z restored
+/// the original after the `set-value` write on all three runs. Undo may
+/// well be clobbered in other applications, but on the evidence available
+/// the justification for this guard is SCOPE, which was reproduced every
+/// time, not undo, which was not.
+#[cfg(target_os = "macos")]
+fn write_over_selection(snap: &TextSnapshot, text: &str) -> Outcome {
+    let typing = typing_strategy(snap.app.as_deref(), false);
+    if !snap.selected_text_settable {
+        return deliver_without_ax(text, &AxError::NotSettable, typing);
+    }
+    write_focused(text, typing)
 }
 
 /// The typing strategy type as this build knows it: the real enum on a
@@ -833,32 +923,41 @@ mod tests {
         ));
     }
 
-    /// A phrase that is not a recognised command is dictation, even when
-    /// something is selected.
+    /// The two readings of an unparsed phrase, decided by `payload_for`
+    /// because it is pure and therefore assertable without a focused UI
+    /// element (and without `OUTLOUD_NO_INJECT` making the assertion
+    /// vacuous, which is what happened to the `deliver`-based version of
+    /// this test that used to live here).
     ///
-    /// This test previously asserted the opposite, and in doing so encoded a
-    /// real bug: it required `deliver` to refuse any unrecognised phrase
-    /// spoken while text happened to be selected. Since selections linger far
-    /// longer than users notice, that refusal fired during ordinary dictation
-    /// and wrote nothing, which presents as "the app stopped transcribing".
-    ///
-    /// Inserting is also the non-destructive reading. Replacing the selection
-    /// with a sentence the user did not aim at it would destroy text they
-    /// never asked us to touch, which is the one failure this product cannot
-    /// afford.
+    /// Ordinary prose spoken while something happened to be selected is
+    /// still dictated: selections linger far longer than users notice, and
+    /// refusing every unparsed phrase presented as "the app stopped
+    /// transcribing".
     #[test]
-    fn unrecognised_phrase_with_a_selection_is_dictated() {
+    fn unrecognised_prose_with_a_selection_is_dictated() {
         let mode = Mode::Edit {
             selected: "some prose".into(),
         };
-        // Not FreeformUnsupported: that outcome is reserved for a future
-        // where an explicit rewrite request can actually be served.
+        assert_eq!(
+            payload_for(&mode, "we should tell them soon").unwrap(),
+            "we should tell them soon",
+        );
+    }
+
+    /// And its mirror: an instruction ABOUT the selection is refused, so
+    /// the words describing the edit never become the selection's new
+    /// contents. This is the reported corruption.
+    #[test]
+    fn an_instruction_about_the_selection_is_refused_not_written() {
+        let mode = Mode::Edit {
+            selected: "The customers might possibly be quite upset about this.".into(),
+        };
         assert!(
-            !matches!(
-                deliver(&mode, "make this sound more professional"),
-                Outcome::FreeformUnsupported { .. }
+            matches!(
+                payload_for(&mode, "tighten this up"),
+                Err(Outcome::FreeformUnsupported { .. })
             ),
-            "an unrecognised phrase must be dictated, not refused"
+            "a rewrite request must never be written over the user's text"
         );
     }
 
@@ -1023,7 +1122,7 @@ mod tier_tests {
     fn a_freeform_instruction_is_reported_never_guessed_at() {
         // No local LLM: the honest answer is to say so. Guessing would mean
         // a model rewriting text nobody asked it to touch.
-        let out = payload_for(&edit("some text"), "make this sound more professional");
+        let out = payload_for(&edit("some text"), "tighten this up");
         assert!(
             matches!(out, Err(Outcome::FreeformUnsupported { .. })),
             "freeform must not silently fall through to a write"
@@ -1053,20 +1152,13 @@ mod tier_tests {
         }
     }
 
-    /// Regression: dictating an ordinary sentence while something happens to
-    /// be selected must INSERT it, not refuse it.
+    /// Regression, in both directions at once.
     ///
-    /// This shipped broken. Text is selected far more often than people
-    /// realise - a terminal keeps the last drag highlighted, editors select
-    /// the current word, browsers hold a selection long after the click that
-    /// made it - so `mode_at_keydown` reported Edit for a user who was simply
-    /// dictating. The phrase did not parse as a command, so it came back as
-    /// "freeform edit needs the local LLM" and nothing was written at all.
-    /// From the outside that reads as "the app stopped transcribing".
-    ///
-    /// The distinction the code now draws: a selection means an edit is
-    /// POSSIBLE, not that one was INTENDED. Only a phrase that parses as a
-    /// real command is treated as one.
+    /// Dictating an ordinary sentence while something happens to be
+    /// selected must INSERT it, not refuse it: that shipped broken and
+    /// read as "the app stopped transcribing". Speaking an instruction
+    /// ABOUT the selection must refuse, not insert: that also shipped
+    /// broken and silently destroyed the selected text.
     #[test]
     fn freeform_phrase_with_a_selection_is_dictation_not_a_failed_edit() {
         let intent = edit_intent::parse("this is just a normal sentence");
@@ -1074,6 +1166,14 @@ mod tier_tests {
             matches!(intent, EditIntent::Freeform { .. }),
             "the fixture must be a phrase that does not parse as a command"
         );
+        assert_eq!(
+            payload_for(&edit("some prose"), "this is just a normal sentence").unwrap(),
+            "this is just a normal sentence",
+        );
+        assert!(matches!(
+            payload_for(&edit("some prose"), "summarize this"),
+            Err(Outcome::FreeformUnsupported { .. })
+        ));
 
         // A command, by contrast, must still parse as one so the edit path
         // is not accidentally disabled by the fix above.
