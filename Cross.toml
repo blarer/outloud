@@ -24,9 +24,11 @@ default-target = "x86_64-unknown-linux-gnu"
 passthrough = ["SOURCE_DATE_EPOCH", "RUSTFLAGS", "CARGO_INCREMENTAL", "PKG_CONFIG_ALLOW_CROSS", "PKG_CONFIG_PATH"]
 
 [target.aarch64-unknown-linux-gnu]
-# Ubuntu 20.04-based image => glibc 2.31 floor for shipped aarch64 binaries.
-# That covers Debian 11+, Ubuntu 20.04+, RHEL 9+. Raising this floor is a
-# user-visible compatibility change; treat like an MSRV bump.
+# NOTE: the cross 0.2.5 image's aarch64 *sysroot* glibc is pre-2.29 (the
+# link step rejects GLIBC_2.29 math symbols), so the effective floor of the
+# shipped aarch64 binary is at most glibc 2.28, which covers Debian 10+,
+# Ubuntu 18.04+, RHEL 8+. Raising this floor is a user-visible
+# compatibility change; treat like an MSRV bump.
 image = "ghcr.io/cross-rs/aarch64-unknown-linux-gnu:0.2.5"
 # alsa-sys needs the *target-arch* ALSA headers/libs inside the container.
 # The image is x86_64 Ubuntu 20.04; arm64 packages live on ports.ubuntu.com,
@@ -34,19 +36,20 @@ image = "ghcr.io/cross-rs/aarch64-unknown-linux-gnu:0.2.5"
 pre-build = [
     "dpkg --add-architecture arm64",
     "sed -i 's/^deb http/deb [arch=amd64] http/' /etc/apt/sources.list",
-    "echo 'deb [arch=arm64] http://ports.ubuntu.com/ubuntu-ports focal main universe' >> /etc/apt/sources.list",
-    "echo 'deb [arch=arm64] http://ports.ubuntu.com/ubuntu-ports focal-updates main universe' >> /etc/apt/sources.list",
-    # focal-security must be listed too: focal-updates packages routinely
-    # depend on exact versions published through security (the observed
-    # failure was libasound2:arm64 -> libc6:arm64 >= 2.29 "not going to be
-    # installed", because the resolvable libc6 lived in focal-security).
-    "echo 'deb [arch=arm64] http://ports.ubuntu.com/ubuntu-ports focal-security main universe' >> /etc/apt/sources.list",
+    # bionic, NOT focal: the image's aarch64 sysroot glibc is older than
+    # 2.29 (linking focal's libasound fails with "undefined reference to
+    # exp@GLIBC_2.29": glibc 2.29 moved the libm math symbols). bionic's
+    # libasound2 1.1.3 is built against glibc 2.27 and links clean, and
+    # alsa-sys only needs the classic snd_pcm_* surface, present since 1.0.
+    "echo 'deb [arch=arm64] http://ports.ubuntu.com/ubuntu-ports bionic main universe' >> /etc/apt/sources.list",
+    "echo 'deb [arch=arm64] http://ports.ubuntu.com/ubuntu-ports bionic-updates main universe' >> /etc/apt/sources.list",
+    "echo 'deb [arch=arm64] http://ports.ubuntu.com/ubuntu-ports bionic-security main universe' >> /etc/apt/sources.list",
     # Extract, don't install: apt refuses to install any arm64 library into
-    # this 2020-era image because every Multi-Arch: same pair (libc6,
-    # libcrypt1, gcc-10-base, ...) must match the amd64 copy byte-for-byte,
-    # and no amount of upgrade/dist-upgrade converges (tried; each run
-    # failed one library deeper). We do not need a coherent arm64 userland,
-    # only ALSA's headers, .so symlink, and alsa.pc for the LINK step; the
+    # this image because every Multi-Arch: same pair (libc6, libcrypt1,
+    # gcc-10-base, ...) must match the amd64 copy byte-for-byte, and no
+    # amount of upgrade/dist-upgrade converges (tried; each run failed one
+    # library deeper). We do not need a coherent arm64 userland, only
+    # ALSA's headers, .so symlink, and alsa.pc for the LINK step; the
     # aarch64 sysroot glibc that resolves the final link ships with the
     # cross toolchain itself. `apt-get download` + `dpkg -x /` lays the
     # files down with no dependency resolution at all.
