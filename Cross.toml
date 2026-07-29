@@ -45,12 +45,14 @@ pre-build = [
     # package and at the SAME version. apt refuses otherwise:
     #   libasound2-dev:arm64 : Depends: libasound2:arm64 (= 1.2.2-2.1ubuntu2.5)
     #   E: Unable to correct problems, you have held broken packages.
-    # libc6 is named for BOTH arches because it is Multi-Arch: same: the
-    # arm64 copy must match the amd64 version byte-for-byte, and the image
-    # ships a libc6:amd64 older than what the archive now publishes. Without
-    # naming the pair, apt reports "libc6:arm64 (>= 2.29) but it is not
-    # going to be installed" instead of upgrading both to one version.
-    "apt-get update && apt-get install -y libc6 libc6:arm64 libasound2:arm64 libasound2-dev:arm64 pkg-config",
+    # The upgrade first is what makes the arm64 install resolvable at all.
+    # Core libraries (libc6, libcrypt1, ...) are Multi-Arch: same, so their
+    # arm64 copy must match the amd64 copy byte-for-byte, and the pinned
+    # 2020 image ships amd64 versions older than anything the archive still
+    # publishes for arm64. Upgrading amd64 to current first lets apt pick
+    # one version for every pair instead of failing down the dependency
+    # chain one library per CI run (libc6, then libcrypt1, then ...).
+    "apt-get update && apt-get upgrade -y && apt-get install -y libasound2:arm64 libasound2-dev:arm64 pkg-config",
 ]
 
 [target.aarch64-unknown-linux-musl]
