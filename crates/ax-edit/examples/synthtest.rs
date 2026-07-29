@@ -8,6 +8,12 @@
 //!
 //! cargo run -p ax-edit --example synthtest -- "text to type"
 
+// `ax_edit::synth` is macOS-only, so the body cannot even parse a reference
+// to it elsewhere. An example is still built by `cargo clippy --all-targets`
+// on every platform, which is how this failed the Linux job while compiling
+// fine on a Mac. A required-features gate in Cargo.toml would not help:
+// the split here is by target_os, not by feature.
+#[cfg(target_os = "macos")]
 fn main() {
     let text = std::env::args()
         .nth(1)
@@ -29,4 +35,14 @@ fn main() {
         ),
         Err(e) => eprintln!("failed: {e}"),
     }
+}
+
+/// Off macOS there is no synthetic-keys backend to exercise.
+///
+/// Says so rather than silently doing nothing, because someone running this
+/// on Linux deserves to know the harness is a no-op there rather than that
+/// their keystrokes vanished.
+#[cfg(not(target_os = "macos"))]
+fn main() {
+    eprintln!("synthtest is macOS-only: ax_edit::synth has no backend on this platform");
 }

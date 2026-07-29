@@ -36,7 +36,14 @@ pre-build = [
     "sed -i 's/^deb http/deb [arch=amd64] http/' /etc/apt/sources.list",
     "echo 'deb [arch=arm64] http://ports.ubuntu.com/ubuntu-ports focal main universe' >> /etc/apt/sources.list",
     "echo 'deb [arch=arm64] http://ports.ubuntu.com/ubuntu-ports focal-updates main universe' >> /etc/apt/sources.list",
-    "apt-get update && apt-get install -y libasound2-dev:arm64 pkg-config",
+    # libasound2 (the runtime lib) must be installed alongside its -dev
+    # package and at the SAME version. apt refuses otherwise:
+    #   libasound2-dev:arm64 : Depends: libasound2:arm64 (= 1.2.2-2.1ubuntu2.5)
+    #   E: Unable to correct problems, you have held broken packages.
+    # Naming both lets apt resolve one consistent version for the pair
+    # rather than pulling -dev against whatever runtime is already present
+    # for the host arch.
+    "apt-get update && apt-get install -y libasound2:arm64 libasound2-dev:arm64 pkg-config",
 ]
 
 [target.aarch64-unknown-linux-musl]

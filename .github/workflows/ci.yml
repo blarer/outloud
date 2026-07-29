@@ -164,15 +164,27 @@ jobs:
       - name: Build (${{ matrix.target }})
         shell: bash
         run: |
+          FLAGS=(--workspace --locked --target ${{ matrix.target }})
+          # musl targets build the shape we actually ship for them: the
+          # static headless daemon (docs/build-and-release.md#matrix). The
+          # default feature set pulls cpal -> alsa-sys, and there is no musl
+          # ALSA on the runner or in the cross image, so a default-features
+          # musl build can only ever fail in alsa-sys's pkg-config probe.
+          # This mirrors scripts/build-headless.sh, not a weakening: every
+          # crate still compiles for the triple, minus the audio backend
+          # that a static server binary must not link anyway.
+          case "${{ matrix.target }}" in
+            *musl*) FLAGS+=(--no-default-features) ;;
+          esac
           if [ "${{ matrix.use-cross }}" = "true" ]; then
             # alsa-sys uses the pkg-config crate, which refuses to run when
             # host != target unless explicitly allowed. The arm64 .pc files
             # are installed by the Cross.toml pre-build hook.
             export PKG_CONFIG_ALLOW_CROSS=1
             export PKG_CONFIG_PATH=/usr/lib/aarch64-linux-gnu/pkgconfig
-            cross build --workspace --locked --target ${{ matrix.target }}
+            cross build "${FLAGS[@]}"
           else
-            cargo build --workspace --locked --target ${{ matrix.target }}
+            cargo build "${FLAGS[@]}"
           fi
       - name: Attribute failure
         if: failure()
