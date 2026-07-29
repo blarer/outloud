@@ -31,7 +31,7 @@ pub mod validate;
 pub mod vocab;
 pub mod watch;
 
-pub use layers::{Config, Layer, Provenance};
+pub use layers::{Config, Layer, Provenance, ENV_PREFIX, LEGACY_ENV_PREFIX};
 pub use migrate::{migrate, Migration};
 pub use paths::{
     ensure_user_config, system_config_path, user_config_path, vocabulary_dir, APP_DIR,
