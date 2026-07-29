@@ -670,10 +670,13 @@ fn needs_leading_space(preceding: Option<char>) -> bool {
 ///
 /// Returns `None` for an empty field or an unmappable caret, which
 /// [`needs_leading_space`] reads as "do not add a space".
-/// Gated like the other splice helpers: the real caller is macOS-only, but
-/// `test` keeps the rule verified on every platform, because this encodes a
-/// user-visible formatting decision rather than a platform detail.
-#[cfg(any(target_os = "macos", test))]
+/// macOS-only, with no `test` companion, unlike [`needs_leading_space`]
+/// beside it. That asymmetry is deliberate: the spacing RULE is pure and
+/// worth verifying on every platform, whereas reading the caret is
+/// accessibility plumbing whose only callers are the macOS write paths. A
+/// `test` gate here would compile it on Linux with nothing calling it,
+/// which is exactly the dead-code failure this replaces.
+#[cfg(target_os = "macos")]
 fn char_before_caret(snap: &TextSnapshot) -> Option<char> {
     let value = snap.value.as_deref()?;
     let (loc, len) = snap.selection?;
