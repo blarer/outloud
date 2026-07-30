@@ -50,14 +50,24 @@ echo "==> generating CycloneDX SBOM"
 mkdir -p dist/sbom
 # --spec-version 1.5 for broad ingestion support (Dependency-Track, Grype).
 cargo cyclonedx --spec-version 1.5 --format json --override-filename sbom
-# cyclonedx writes one sbom.json per workspace crate next to its Cargo.toml;
-# collect them under dist/sbom/ with stable names for release upload.
-for crate_dir in crates/*/; do
-    name="$(basename "$crate_dir")"
-    if [ -f "$crate_dir/sbom.json" ]; then
-        mv "$crate_dir/sbom.json" "dist/sbom/$name.cdx.json"
-    fi
-done
+# cyclonedx writes one sbom.json next to EVERY workspace member's
+# Cargo.toml; collect them under dist/sbom/ with stable names for release
+# upload.
+#
+# `find` over tracked manifests rather than a crates/*/ glob: the glob
+# missed the `tests/` member, so its sbom.json was left behind in the tree.
+# Being tracked by git, it then re-dirtied the working tree on every
+# compliance run with a fresh random serialNumber and timestamp, and rode
+# along in unrelated commits -- noise that hides exactly the dependency
+# changes an SBOM diff exists to show.
+#
+# Any member added later is picked up automatically, so this cannot go
+# stale the way the hardcoded glob did.
+while IFS= read -r sbom; do
+    name="$(basename "$(dirname "$sbom")")"
+    mv "$sbom" "dist/sbom/$name.cdx.json"
+done < <(find . -name sbom.json -not -path './dist/*' -not -path './target/*')
+
 ls -l dist/sbom/
 
 echo "==> ci-compliance OK"

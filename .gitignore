@@ -1,2 +1,7 @@
 /target
 /dist
+
+# Generated per-crate by cargo-cyclonedx during ci-compliance; the real
+# artifacts are collected into dist/sbom/. Tracking one of them meant every
+# compliance run re-dirtied the tree with a new UUID and timestamp.
+sbom.json
