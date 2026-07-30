@@ -42,7 +42,7 @@
 //! with instant steps and positions snap to their targets — the window
 //! still rolls and stale text still leaves, it just does not animate.
 
-use crate::layout::{split_units, DEAD_OPACITY, LOOKBACK_WORDS, STABILITY};
+use crate::layout::{split_units, BIRTH_STAGGER, DEAD_OPACITY, LOOKBACK_WORDS, STABILITY};
 
 /// Width budget of the text lane, in points — never characters (the lane
 /// is CJK-correct because units are measured, not counted). 400 rather
@@ -84,11 +84,7 @@ pub fn smoothstep(t: f64) -> f64 {
 /// tail: the start of a long token identifies it, the tail disambiguates
 /// (…the common URL case). Called only when a unit is over-wide, so the
 /// repeated measuring never happens in the per-frame path.
-pub fn elide_to_width(
-    unit: &str,
-    max: f64,
-    measure: &mut dyn FnMut(&str) -> f64,
-) -> (String, f64) {
+pub fn elide_to_width(unit: &str, max: f64, measure: &mut dyn FnMut(&str) -> f64) -> (String, f64) {
     let w = measure(unit);
     if w <= max {
         return (unit.to_string(), w);
@@ -139,6 +135,13 @@ pub struct TextSlot {
     /// word's left edge), glided toward the layout target. NaN until the
     /// first step snaps it (a new word is born *at* its target).
     pub x: f64,
+    /// When this word is allowed to start blooming in.
+    ///
+    /// A recognizer emits several words at once, and fading them up
+    /// together reads as a flash rather than as speech arriving. Each
+    /// word in a burst waits [`BIRTH_STAGGER`] longer than the one
+    /// before it, so the line cascades.
+    pub bloom_at: f64,
 }
 
 /// The rolling window of transcribed words.
@@ -194,6 +197,9 @@ impl TextWindow {
         let units = split_units(hypothesis);
         let fresh = units.into_iter().skip(self.dropped);
         let mut j = 0usize;
+        // Words born in THIS hypothesis, so a four-word burst cascades
+        // while a single new word never waits.
+        let mut born = 0usize;
         for unit in fresh {
             match self.slots.get_mut(j) {
                 Some(s) if s.committed => {
@@ -225,7 +231,9 @@ impl TextWindow {
                         stable_updates: 0,
                         opacity: 0.0, // born transparent; blooms in
                         x: f64::NAN,  // snapped to target on first step
+                        bloom_at: now + born as f64 * BIRTH_STAGGER,
                     });
+                    born += 1;
                 }
             }
             j += 1;
@@ -312,6 +320,12 @@ impl TextWindow {
             } else {
                 smoothstep(1.0 - past / FADE_RAMP)
             };
+            // Not yet its turn in the cascade: stay invisible rather
+            // than easing, so the stagger is a delay and not a slower
+            // fade for every word at once.
+            if now < s.bloom_at {
+                continue;
+            }
             let stale = if s.committed { group_stale } else { 1.0 };
             let target = overflow.min(stale);
 
@@ -398,9 +412,43 @@ mod tests {
         s.chars().count() as f64 * 10.0
     }
 
+    /// Run the animation to rest *at* `now`, without advancing past it.
+    ///
+    /// The clock must not move: several properties here are sampled at a
+    /// specific instant on the stale ramp, and a helper that silently
+    /// advanced four seconds walked them off the end of the ramp
+    /// entirely. That is what made `pause_holds_then_fades_committed_
+    /// words_as_a_group` fail against a model that was behaving
+    /// correctly: by the time it looked, the words it wanted to compare
+    /// had already fully faded and been retired.
+    ///
+    /// Stepping with dt but a fixed `now` converges the eases (which are
+    /// per-frame exponential approaches) while leaving every time-based
+    /// target exactly where the caller asked for it.
     fn settle(win: &mut TextWindow, now: f64) {
-        for i in 0..240 {
-            win.step(now + i as f64 / 60.0, 1.0 / 60.0, false);
+        // Birth stagger holds each word invisible until its turn, and its
+        // turn is a wall-clock instant. Stepping a frozen `now` would
+        // therefore settle a burst into "first word only, forever". Walk
+        // the clock across the whole pending stagger window first, then
+        // hold it at `now` so time-based targets land exactly where the
+        // caller asked.
+        //
+        // The span is derived from the slots rather than assumed, because
+        // a twelve-word hypothesis staggers for 660ms and a fixed guess
+        // silently under-settles the tail.
+        let latest = win.slots().iter().map(|s| s.bloom_at).fold(now, f64::max);
+        let mut t = now;
+        while t <= latest {
+            win.step(t, 1.0 / 60.0, false);
+            t += 1.0 / 60.0;
+        }
+        // Hold at whichever is later: the caller's instant, or the end of
+        // the stagger. Pinning to `now` when the burst blooms afterwards
+        // would freeze the tail at zero opacity, which is the state the
+        // caller is trying to settle out of.
+        let hold = latest.max(now);
+        for _ in 0..240 {
+            win.step(hold, 1.0 / 60.0, false);
         }
     }
 
@@ -463,6 +511,84 @@ mod tests {
     }
 
     #[test]
+    fn a_burst_of_words_cascades_instead_of_flashing() {
+        // Ported when the macOS lane adopted this model: the model had no
+        // birth stagger at all, so adopting it would have silently undone
+        // the cascade. A recognizer emits several words at once and fading
+        // them up together reads as a flash, not as speech arriving.
+        let mut w = TextWindow::new();
+        w.ingest("alpha beta gamma delta", 0.0, &mut measure60);
+        // One frame in, only the first word has begun: the rest are still
+        // waiting their turn.
+        w.step(1.0 / 60.0, 1.0 / 60.0, false);
+        let ops: Vec<f64> = w.slots().iter().map(|s| s.opacity).collect();
+        assert!(ops[0] > 0.0, "first word must start immediately: {ops:?}");
+        assert_eq!(ops[3], 0.0, "last word must still be waiting: {ops:?}");
+        // Once every stagger has elapsed, all of them are visible.
+        settle(&mut w, 4.0 * BIRTH_STAGGER + 0.5);
+        assert!(
+            w.slots().iter().all(|s| s.opacity > 0.5),
+            "whole burst must arrive: {:?}",
+            w.slots().iter().map(|s| s.opacity).collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn a_single_new_word_never_waits() {
+        // The stagger is per-burst, not a fixed queue: dictating one word
+        // at a time must not add latency to every word.
+        let mut w = TextWindow::new();
+        w.ingest("alpha", 0.0, &mut measure60);
+        w.step(1.0 / 60.0, 1.0 / 60.0, false);
+        assert!(w.slots()[0].opacity > 0.0);
+        w.ingest("alpha beta", 1.0, &mut measure60);
+        w.step(1.0 + 1.0 / 60.0, 1.0 / 60.0, false);
+        assert!(
+            w.slots()[1].opacity > 0.0,
+            "a lone new word must bloom at once, not wait behind earlier ones"
+        );
+    }
+
+    #[test]
+    fn stability_commits_a_prefix_and_lookback_holds_the_frontier() {
+        // Ported from the superseded layout::RollingWindow when the macOS
+        // lane adopted this model. The commit horizon is the whole point
+        // of the tinted zone (only in-flight text may change), so it must
+        // stay pinned even though no test here covered it directly.
+        let mut w = TextWindow::new();
+        // Three distinct agreeing hypotheses = STABILITY(3) reached.
+        w.ingest("the dog", 0.0, &mut measure60);
+        w.ingest("the dog is", 0.1, &mut measure60);
+        w.ingest("the dog is brown", 0.2, &mut measure60);
+        let committed: Vec<_> = w.slots().iter().map(|x| x.committed).collect();
+        // "the" and "dog" survived 3 hypotheses; "is" only 2; "brown" is
+        // both unstable and inside the lookback frontier.
+        assert_eq!(committed, [true, true, false, false]);
+    }
+
+    #[test]
+    fn committed_words_stale_decay_but_inflight_never_does() {
+        // Also ported. The group-decay test covers the shared clock; this
+        // covers the rule that in-flight text is exempt, because text that
+        // might still change must stay visible until the horizon resolves.
+        let mut w = TextWindow::new();
+        w.ingest("the dog", 0.0, &mut measure60);
+        w.ingest("the dog is", 0.1, &mut measure60);
+        w.ingest("the dog is brown", 0.2, &mut measure60);
+        settle(&mut w, 0.2 + STALE_AFTER + STALE_FADE * 0.5);
+        for s in w.slots() {
+            if s.committed {
+                assert!(s.opacity < 0.9, "committed word must stale-decay: {s:?}");
+            } else {
+                assert!(
+                    s.opacity > 0.9,
+                    "in-flight word must never stale-decay: {s:?}"
+                );
+            }
+        }
+    }
+
+    #[test]
     fn pause_holds_then_fades_committed_words_as_a_group() {
         let mut w = TextWindow::new();
         // Three distinct agreeing hypotheses commit the prefix.
@@ -492,7 +618,10 @@ mod tests {
         let spread = committed_ops
             .iter()
             .fold(0.0f64, |m, &o| m.max((o - committed_ops[0]).abs()));
-        assert!(spread < 0.05, "group fade must move together: {committed_ops:?}");
+        assert!(
+            spread < 0.05,
+            "group fade must move together: {committed_ops:?}"
+        );
         assert!(
             committed_ops.iter().all(|&o| o < 0.9),
             "decay must be underway: {committed_ops:?}"

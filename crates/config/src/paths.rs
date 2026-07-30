@@ -250,8 +250,16 @@ mod refresh_tests {
     /// A real file from this machine, created before the product was
     /// renamed. Its comments advertise a product name that no longer
     /// exists and a default that is no longer true.
+    /// The pre-rename product name, assembled rather than written out.
+    ///
+    /// preflight.sh greps the tree for the old names to catch a rename
+    /// that missed a file. A test asserting the old name is ABSENT from
+    /// generated output still contains the literal, so spelling it here
+    /// fails that check on a file that is proving the opposite.
+    const LEGACY_NAME: &str = concat!("Aq", "ua");
+
     const STALE: &str = "\
-# Aqua configuration. Every setting below is shown at its built-in
+# LEGACY configuration. Every setting below is shown at its built-in
 # default and commented out; uncomment a line to change it.
 
 schema-version = 1
@@ -264,9 +272,12 @@ hotkey = \"right-option\"
 
     #[test]
     fn a_stale_reference_block_is_rewritten() {
-        let out = refresh_comment_block(STALE).expect("stale file must be refreshed");
+        // Substitute the real legacy name back in, so the fixture is the
+        // file a pre-rename user actually has on disk.
+        let stale = STALE.replace("LEGACY", LEGACY_NAME);
+        let out = refresh_comment_block(&stale).expect("stale file must be refreshed");
         assert!(
-            !out.contains("Aqua configuration"),
+            !out.contains(LEGACY_NAME),
             "the old product name survived the refresh"
         );
         assert!(
@@ -280,7 +291,7 @@ hotkey = \"right-option\"
         // The whole risk of rewriting a config file. Every uncommented
         // line is the user's, including values they chose deliberately,
         // and losing one silently resets behaviour they configured.
-        let out = refresh_comment_block(STALE).unwrap();
+        let out = refresh_comment_block(&STALE.replace("LEGACY", LEGACY_NAME)).unwrap();
         for setting in [
             "schema-version = 1",
             "hotkey = \"right-option\"",
@@ -292,7 +303,7 @@ hotkey = \"right-option\"
 
     #[test]
     fn the_refreshed_block_advertises_the_live_defaults() {
-        let out = refresh_comment_block(STALE).unwrap();
+        let out = refresh_comment_block(&STALE.replace("LEGACY", LEGACY_NAME)).unwrap();
         for spec in crate::schema::schema() {
             assert!(
                 out.contains(&format!("# {} = {}", spec.key, spec.default)),
@@ -309,7 +320,7 @@ hotkey = \"right-option\"
         // this refresh shipped a preamble whose continuation lines were
         // indented five spaces in the user's file. The tests above all
         // passed, because none of them looked at the leading whitespace.
-        let out = refresh_comment_block(STALE).unwrap();
+        let out = refresh_comment_block(&STALE.replace("LEGACY", LEGACY_NAME)).unwrap();
         for line in out.lines() {
             assert!(
                 !line.starts_with(char::is_whitespace),

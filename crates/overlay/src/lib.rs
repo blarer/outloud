@@ -42,6 +42,7 @@ pub mod pixel;
 /// its motion properties, and every backend renders the same points.
 pub mod skull;
 pub mod state;
+pub mod text_window;
 /// The visual language (palette, radii, type scale, motion) as pure data.
 /// Platform-neutral on purpose: it must compile in the headless build, and
 /// it is what keeps the macOS and Windows backends from drifting apart.

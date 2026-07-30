@@ -44,7 +44,7 @@
 //! percentiles on stderr every ~4 s — measured, because this project does
 //! not estimate (`docs/latency.md`).
 //!
-//! The rolling-window model itself ([`crate::layout::RollingWindow`]) is
+//! The rolling-window model itself ([`crate::text_window::TextWindow`]) is
 //! pure Rust in `layout.rs`, unit-tested headlessly, and the skull's
 //! geometry and animator are pure Rust in `skull.rs`; this file only
 //! measures text, feeds the models, and paints them.
@@ -67,9 +67,10 @@ use objc2_foundation::{
     NSDictionary, NSPoint, NSRect, NSRunLoop, NSRunLoopCommonModes, NSSize, NSString, NSTimer,
 };
 
-use crate::layout::{self, RollingWindow, Size};
+use crate::layout::{self, Size};
 use crate::skull::{self, SkullAnimator, SkullPose};
 use crate::state::OverlayState;
+use crate::text_window::TextWindow;
 use crate::theme;
 use crate::{Overlay, OverlayFrame};
 
@@ -123,7 +124,7 @@ struct Model {
     /// and the jaw falls back to the broadband level.
     bands: [f32; 4],
     /// The rolling window of words (pure model; see layout.rs).
-    words: RollingWindow,
+    words: TextWindow,
     /// The skull's motion state and its latest pose (pure; see skull.rs).
     animator: SkullAnimator,
     pose: SkullPose,
@@ -148,7 +149,7 @@ impl Default for Model {
             level: 0.0,
             target_level: 0.0,
             bands: [0.0; 4],
-            words: RollingWindow::new(),
+            words: TextWindow::new(),
             animator: SkullAnimator::new(),
             pose: SkullPose::at_rest(),
             detail: String::new(),
@@ -580,8 +581,8 @@ impl OverlayView {
     /// ANCHOR_X (the glance target never moves); older words extend left
     /// into the fade ramp.
     fn draw_words(&self, model: &Model) {
-        let xs = model.words.positions();
-        for (w, &x) in model.words.words().iter().zip(&xs) {
+        for w in model.words.slots() {
+            let x = w.x;
             if w.opacity <= 0.01 {
                 continue;
             }

@@ -44,7 +44,9 @@
 use std::hint::black_box;
 use std::time::{Duration, Instant};
 
-use overlay::layout::RollingWindow;
+// The model the macOS overlay actually drives. Benchmarking the
+// superseded layout::RollingWindow measured a path no user reaches.
+use overlay::text_window::TextWindow;
 
 /// Iterations per measurement. Enough to swamp timer granularity without
 /// making the gate a meaningful part of CI's runtime.
@@ -120,7 +122,7 @@ fn check(name: &str, budget: Duration, failures: &mut Vec<String>, body: impl Fn
 
 /// One animation frame of the rolling text window.
 fn bench_step() -> Duration {
-    let mut w = RollingWindow::new();
+    let mut w = TextWindow::new();
     let mut measure = |s: &str| s.len() as f64 * 8.0;
     w.ingest(HYPOTHESES[HYPOTHESES.len() - 1], 0.0, &mut measure);
 
@@ -139,11 +141,11 @@ fn bench_ingest() -> Duration {
     for i in 0..ITERS {
         // A fresh window each pass: ingest is idempotent per hypothesis, so
         // reusing one would measure the early-return and prove nothing.
-        let mut w = RollingWindow::new();
+        let mut w = TextWindow::new();
         for (n, h) in HYPOTHESES.iter().enumerate() {
             w.ingest(h, (i * HYPOTHESES.len() + n) as f64 * 0.1, &mut measure);
         }
-        black_box(w.words().len());
+        black_box(w.slots().len());
     }
     start.elapsed() / ITERS as u32
 }
