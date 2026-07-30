@@ -99,3 +99,16 @@ windows = { version = "0.62", optional = true, features = [
     "Win32_UI_HiDpi",
     "Win32_UI_WindowsAndMessaging",
 ] }
+
+# A perf gate rather than a criterion benchmark: criterion answers "how
+# fast", this answers "still fast enough" with an exit code CI can act on.
+# `harness = false` because it has its own main and no test harness.
+[[bench]]
+name = "perf_gate"
+harness = false
+
+[dev-dependencies]
+# The gate measures the intent parser alongside the overlay, since both sit
+# between the user's voice and their text and neither is covered by a
+# correctness test getting slower.
+edit-intent = { path = "../edit-intent" }

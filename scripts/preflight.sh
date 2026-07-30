@@ -340,6 +340,7 @@ if [[ $QUICK -eq 1 ]]; then
     record SKIP "ci-compliance"   "--quick"
     record SKIP "headless-build"  "--quick"
     record SKIP "latency-gate"    "--quick"
+    record SKIP "perf-gate"       "--quick"
 else
     run_gate "ci-check" ci-check.log \
         "read the first 'error' line in the log; fmt/clippy/test drift is usually a sibling swarm's in-flight change" \
@@ -363,6 +364,14 @@ else
     run_gate "latency-gate" latency.log \
         "a percentile crossed its budget; compare against docs/latency.md baselines and bisect against the overlay swarm's commits" \
         scripts/bench-gate.sh
+    # The pure counterpart to the gate above. That one measures the real
+    # accessibility path and honestly SKIPs when no text field is focused,
+    # which means a preflight run from the wrong window checks nothing. This
+    # one measures only computation, so it cannot skip and cannot be dodged
+    # by where the cursor happens to be.
+    run_gate "perf-gate" perf.log \
+        "a pure hot path got materially slower; this is invisible to every correctness test, so read crates/overlay/benches/perf_gate.rs for the budget and its reasoning" \
+        cargo bench -p overlay --bench perf_gate
 fi
 
 # ---------------------------------------------------------------------------

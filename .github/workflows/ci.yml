@@ -214,6 +214,33 @@ jobs:
         run: |
           env -u DISPLAY -u WAYLAND_DISPLAY dist/headless/outloud-spiked-x86_64-unknown-linux-musl dry-run "change hello to goodbye"
 
+  # Performance tripwire. Every other job answers "is it correct"; this one
+  # answers "is it still fast", which no correctness test can see: a change
+  # that makes the overlay ten times slower produces exactly the same text
+  # and passes every assertion in the workspace.
+  #
+  # It measures only PURE paths (the rolling-window animation, hypothesis
+  # ingest, command parsing) precisely so it can run here. The richer gate in
+  # crates/ax-edit/benches/gate.rs measures the real accessibility path and
+  # correctly skips without a focused text field, which means on a CI runner
+  # it protects nothing. This one cannot skip.
+  #
+  # Budgets carry ~10x headroom over measured cost, so a shared runner being
+  # slow does not fail the build. See the bench's own comment for numbers.
+  perf:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: perf
+      - name: Perf gate
+        run: cargo bench -p overlay --bench perf_gate
+      - name: Attribute failure
+        if: failure()
+        run: |
+          echo "::error title=perf gate::A hot path got materially slower. This is not a correctness failure: the app still produces the right text, only later. See crates/overlay/benches/perf_gate.rs for the budgets and the reasoning."
+
   # Reproducibility tripwire: double-build on Linux and require identical
   # hashes. Only x86_64-linux (the cheapest runner) because determinism bugs
   # are almost never target-specific; the flags are shared by all targets.

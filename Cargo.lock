@@ -1523,6 +1523,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "block2",
+ "edit-intent",
  "objc2",
  "objc2-app-kit",
  "objc2-foundation",
