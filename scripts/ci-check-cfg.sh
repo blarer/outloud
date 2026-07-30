@@ -58,6 +58,19 @@ echo "==> checking headless build on the host"
 cargo clippy --workspace --all-targets --no-default-features --quiet -- -D warnings
 echo "    headless OK"
 
+# The gap above is real, so close the specific hole it leaves. A
+# macOS-gated *definition* called from ungated code compiles perfectly on
+# this machine and fails on every other target. That just happened:
+# `inject::app_identity` was `#[cfg(target_os = "macos")]` while its call
+# site in pipeline.rs was not, and CI's Linux, Windows and msrv jobs all
+# failed with "cannot find function".
+#
+# Cross-checking outloud would catch it, and cannot run here. Reading the
+# source can: find items gated to macOS, then look for callers of the same
+# name outside any macOS-gated region.
+echo "==> macOS-gated items called from ungated code"
+python3 "$ROOT/scripts/ci-check-gated-calls.py"
+
 echo "==> cfg check OK"
 echo
 echo "NOTE: crates/outloud is not cross-checked here, because ureq -> rustls"

@@ -112,7 +112,13 @@ pub fn snapshot_and_mode_at_keydown() -> (Mode, Option<TextSnapshot>) {
 /// inventing a value for it would make `match.window-class` fire on the
 /// wrong platform. `process_name` carries the accessibility title, which
 /// is the closest honest analogue available without spawning anything.
-#[cfg(target_os = "macos")]
+///
+/// Not gated to macOS. The pipeline calls this unconditionally, and a
+/// macOS-only definition compiled fine here while breaking every other
+/// target -- which is exactly what CI's Linux, Windows and msrv jobs are
+/// for. On platforms with no snapshot the argument is `None` and this
+/// returns `None`, so profiles are simply unresolved rather than absent
+/// at compile time.
 pub fn app_identity(snap: Option<&TextSnapshot>) -> Option<config::AppIdentity> {
     let snap = snap?;
     if snap.bundle_id.is_none() && snap.app.is_none() {
