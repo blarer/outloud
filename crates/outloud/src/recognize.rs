@@ -13,7 +13,8 @@
 //! thing this design forbids (deliverable 1). A gap in the transcript is an
 //! honest failure; a wedged hotkey is a broken product.
 
-use std::sync::mpsc::{Receiver, SyncSender, TrySendError};
+use std::sync::atomic::AtomicUsize;
+use std::sync::mpsc::{Receiver, Sender};
 use std::sync::Arc;
 
 use asr::{Recognizer, Transcript};
@@ -38,30 +39,66 @@ pub enum AsrEvent {
 
 /// Sending half handed to the pipeline. Wraps the bounded channel with the
 /// drop-and-count policy so no call site can accidentally block.
+/// How many audio chunks may sit unconsumed before `push` starts dropping.
+///
+/// ~10s of audio in 30ms frames (333) rounded up. Deep enough that only a
+/// genuinely stuck recognizer drops audio, shallow enough to bound memory.
+/// This was the `sync_channel` capacity until `finalize` needed a queue it
+/// could never be blocked by.
+const QUEUE_DEPTH: usize = 384;
+
 pub struct AudioFeed {
-    tx: SyncSender<AudioMsg>,
+    tx: Sender<AudioMsg>,
+    /// Chunks queued but not yet consumed.
+    ///
+    /// This is the bound that a `sync_channel` capacity used to provide.
+    /// Tracked separately so the channel can stay unbounded for control
+    /// messages while audio still has a ceiling.
+    queued: Arc<AtomicUsize>,
     dropped_chunks: Arc<std::sync::atomic::AtomicU64>,
 }
 
 impl AudioFeed {
     /// Queue utterance audio. Drops (and counts) when the recognizer is
     /// behind; never blocks.
+    ///
+    /// Backpressure is applied here, by counting, rather than by a bounded
+    /// channel. See [`AudioFeed::finalize`] for why the queue itself must
+    /// stay unbounded.
     pub fn push(&self, samples: Vec<f32>) {
-        match self.tx.try_send(AudioMsg::Chunk(samples)) {
-            Ok(()) => {}
-            Err(TrySendError::Full(_)) => {
-                self.dropped_chunks
-                    .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-            }
+        if self.queued.load(std::sync::atomic::Ordering::Acquire) >= QUEUE_DEPTH {
+            self.dropped_chunks
+                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            return;
+        }
+        self.queued
+            .fetch_add(1, std::sync::atomic::Ordering::AcqRel);
+        if self.tx.send(AudioMsg::Chunk(samples)).is_err() {
             // Recognizer thread died; finalize will surface the error.
-            Err(TrySendError::Disconnected(_)) => {}
+            self.queued
+                .fetch_sub(1, std::sync::atomic::Ordering::AcqRel);
         }
     }
 
-    /// Signal end of utterance. Uses a blocking send: `Finalize` must not be
-    /// droppable (a lost finalize means a silently swallowed utterance), and
-    /// by key-release time the audio producer has already stopped, so this
-    /// send is off the capture-critical path.
+    /// Signal end of utterance. Never blocks, never dropped.
+    ///
+    /// Both properties are required and a bounded channel cannot give
+    /// both. `Finalize` must not be droppable, because a lost finalize is
+    /// a silently swallowed utterance. It also must not block, because
+    /// `pipeline::commit` calls this inline on the async event loop.
+    ///
+    /// The original blocking send argued that the audio producer has
+    /// stopped by key-release. True, and not the relevant question: a
+    /// bounded queue drains at the *consumer's* pace, so a recognizer
+    /// wedged inside `feed()` (an Apple helper whose stdin pipe is full,
+    /// a stalled child) leaves the queue full and blocks the daemon. The
+    /// microphone is open at that moment, so the failure mode is a hot
+    /// mic and a frozen UI rather than a slow commit.
+    ///
+    /// So the channel is unbounded and backpressure lives in [`push`],
+    /// which drops *audio* by count. Audio is already droppable and
+    /// already dropped under exactly this pressure; the control message
+    /// is what must always get through.
     pub fn finalize(&self) {
         let _ = self.tx.send(AudioMsg::Finalize);
     }
@@ -91,18 +128,21 @@ pub fn spawn(
     events: UnboundedSender<AsrEvent>,
     ready: tokio::sync::oneshot::Sender<anyhow::Result<&'static str>>,
 ) -> AudioFeed {
-    // ~10s of audio in 30ms frames (333) rounded up. Deep enough that only a
-    // genuinely stuck recognizer drops audio, shallow enough to bound memory.
-    let (tx, rx) = std::sync::mpsc::sync_channel::<AudioMsg>(384);
+    let (tx, rx) = std::sync::mpsc::channel::<AudioMsg>();
+    let queued = Arc::new(AtomicUsize::new(0));
     let dropped = Arc::new(std::sync::atomic::AtomicU64::new(0));
 
     std::thread::Builder::new()
         .name("outloud-asr".into())
-        .spawn(move || worker(make_recognizer, rx, events, ready))
+        .spawn({
+            let queued = Arc::clone(&queued);
+            move || worker(make_recognizer, rx, events, ready, queued)
+        })
         .expect("spawning recognizer thread");
 
     AudioFeed {
         tx,
+        queued,
         dropped_chunks: dropped,
     }
 }
@@ -112,6 +152,7 @@ fn worker(
     rx: Receiver<AudioMsg>,
     events: UnboundedSender<AsrEvent>,
     ready: tokio::sync::oneshot::Sender<anyhow::Result<&'static str>>,
+    queued: Arc<AtomicUsize>,
 ) {
     // First construction doubles as the readiness probe: it exercises the
     // helper spawn / model load path while the UI shows ModelLoading.
@@ -132,6 +173,10 @@ fn worker(
     while let Ok(msg) = rx.recv() {
         match msg {
             AudioMsg::Chunk(samples) => {
+                // Consumed: free a queue slot. Must happen for every
+                // chunk on every path, or `push` eventually believes the
+                // queue is permanently full and drops all audio.
+                queued.fetch_sub(1, std::sync::atomic::Ordering::AcqRel);
                 // Rebuild lazily if the pre-warm after the last utterance
                 // failed; failing again here surfaces at finalize below.
                 if rec.is_none() {
