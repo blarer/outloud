@@ -134,6 +134,68 @@ fn make_recognizer_factory(kind: &str, sensitivity: u8) -> anyhow::Result<Recogn
 }
 
 /// Synthesize `text` to a 16kHz WAV with the OS voice, for --say.
+/// Silence prepended to synthesized speech.
+///
+/// 300ms: comfortably longer than the segmenter's 150ms pre-roll, so the
+/// recognizer has a full window of silence before the first phoneme.
+const LEAD_IN: std::time::Duration = std::time::Duration::from_millis(300);
+
+/// Prepend `lead` of digital silence to a 16-bit mono WAV, in place.
+///
+/// Walks the chunk list rather than assuming a 44-byte header: afconvert
+/// emits a `FLLR` padding chunk before `data`, so a fixed offset splices
+/// silence into the middle of the header and produces a file whose data
+/// chunk cannot be found at all.
+fn prepend_silence(path: &std::path::Path, lead: std::time::Duration) -> anyhow::Result<()> {
+    let bytes = std::fs::read(path)?;
+    anyhow::ensure!(
+        bytes.len() >= 12 && &bytes[..4] == b"RIFF" && &bytes[8..12] == b"WAVE",
+        "{} is not a RIFF/WAVE file",
+        path.display()
+    );
+
+    // Locate `fmt ` for the sample rate and `data` for the splice point.
+    let (mut rate, mut data_at, mut data_len) = (0u64, None, 0usize);
+    let mut pos = 12;
+    while pos + 8 <= bytes.len() {
+        let id = &bytes[pos..pos + 4];
+        let size = u32::from_le_bytes(bytes[pos + 4..pos + 8].try_into().unwrap()) as usize;
+        match id {
+            b"fmt " if size >= 16 => {
+                rate = u32::from_le_bytes(bytes[pos + 12..pos + 16].try_into().unwrap()) as u64;
+            }
+            b"data" => {
+                data_at = Some(pos + 8);
+                data_len = size.min(bytes.len() - pos - 8);
+            }
+            _ => {}
+        }
+        // Chunks are word-aligned; an odd size carries a pad byte.
+        pos = pos + 8 + size + (size & 1);
+    }
+
+    let data_at = data_at.ok_or_else(|| anyhow::anyhow!("{}: no data chunk", path.display()))?;
+    anyhow::ensure!(rate > 0, "{}: no usable sample rate", path.display());
+
+    // 2 bytes per sample, mono: the format afconvert was just asked for.
+    let quiet = vec![0u8; (rate * lead.as_millis() as u64 / 1000) as usize * 2];
+
+    let mut out = Vec::with_capacity(bytes.len() + quiet.len());
+    out.extend_from_slice(&bytes[..data_at]);
+    out.extend_from_slice(&quiet);
+    out.extend_from_slice(&bytes[data_at..]);
+
+    // Both length fields now understate the file, and a reader that trusts
+    // them truncates exactly the audio we added.
+    let new_data = (data_len + quiet.len()) as u32;
+    out[data_at - 4..data_at].copy_from_slice(&new_data.to_le_bytes());
+    let riff_len = (out.len() - 8) as u32;
+    out[4..8].copy_from_slice(&riff_len.to_le_bytes());
+
+    std::fs::write(path, out)?;
+    Ok(())
+}
+
 fn synthesize(text: &str) -> anyhow::Result<std::path::PathBuf> {
     // Per-process directory. `--once` runs are deliberately allowed to run
     // concurrently (benchmarks do), and a shared path made two of them fight
@@ -156,6 +218,19 @@ fn synthesize(text: &str) -> anyhow::Result<std::path::PathBuf> {
             .status()?,
         "say",
     )?;
+    // Lead-in silence before the speech.
+    //
+    // `say` starts the first phoneme at sample zero. A recognizer needs a
+    // moment of silence to lock on, so without this the first word is
+    // unreliable: "add a period at the end" came back as "a period at the
+    // end", "At a period at the end", and "" across three consecutive
+    // runs. That turns a valid edit command into an unparseable one, and
+    // the resulting text then REPLACES the user's selection, so a test
+    // harness artifact looks exactly like a parser bug.
+    //
+    // Real dictation does not have this problem: a human holds the key,
+    // then speaks. This makes --say match that shape rather than testing a
+    // condition the product never encounters.
     ok(
         std::process::Command::new("afconvert")
             .args(["-f", "WAVE", "-d", "LEI16@16000", "-c", "1"])
@@ -164,6 +239,7 @@ fn synthesize(text: &str) -> anyhow::Result<std::path::PathBuf> {
             .status()?,
         "afconvert",
     )?;
+    prepend_silence(&wav, LEAD_IN)?;
     Ok(wav)
 }
 

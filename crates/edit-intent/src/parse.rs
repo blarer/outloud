@@ -404,7 +404,17 @@ fn parse_delete_unit(toks: &[&str]) -> Option<Decision> {
 
 /// "add a period at the end", "put a comma after today".
 fn parse_punctuation(lower: &str, toks: &[&str]) -> Option<Decision> {
-    const HEADS: &[&str] = &["add", "put", "insert", "stick", "append"];
+    // "at" is not a synonym for "add"; it is what the recognizer returns
+    // for it. Measured on this machine, "add a period at the end" comes
+    // back as "At a period at the end." on every run, across two voices.
+    // Rejecting the head word there does not produce a refusal, it
+    // produces a Freeform, and a Freeform with a selection live used to
+    // overwrite the user's text with the words of their own command.
+    //
+    // Safe to accept because the rest of the rule still has to find a
+    // punctuation mark and a placement it can compute; "at the office"
+    // matches no mark and falls through untouched.
+    const HEADS: &[&str] = &["add", "at", "put", "insert", "stick", "append"];
     if !HEADS.contains(toks.first()?) {
         return None;
     }

@@ -581,3 +581,36 @@ fn non_ascii_targets_never_panic() {
         }
     }
 }
+
+/// Recognizer mishearings that must still parse.
+///
+/// A misheard head word does not produce a refusal, it produces a
+/// `Freeform`, and a `Freeform` with a selection live is the case that
+/// used to overwrite the user's text with the words of their own command.
+/// So tolerating the mishearing is a data-safety property, not a nicety.
+#[cfg(test)]
+mod misheard {
+    use super::*;
+
+    #[test]
+    fn at_is_accepted_where_add_was_meant() {
+        // Measured: "add a period at the end" comes back from the Apple
+        // recognizer as "At a period at the end." on every run, across two
+        // voices. See docs/investigations/edit-intent.md.
+        let intent = parse("At a period at the end");
+        assert_eq!(
+            apply("the deploy happens today", &intent).as_deref(),
+            Some("the deploy happens today.")
+        );
+    }
+
+    #[test]
+    fn at_still_dictates_when_it_is_really_a_preposition() {
+        // The tolerance must not swallow ordinary speech beginning with
+        // "at". No punctuation mark is named, so this is dictation.
+        assert!(matches!(
+            parse("at the office tomorrow"),
+            EditIntent::Freeform { .. }
+        ));
+    }
+}
