@@ -41,6 +41,11 @@ pub enum Verdict {
 
 /// Tracks open->first-sample latency per utterance and which devices have
 /// already been warned about.
+///
+/// Also remembers *which* devices measured slow, so the warm-hold can be
+/// applied only to them. A device is judged by what it actually did on
+/// this machine, not by its name or transport: a "Bluetooth" allowlist
+/// would both miss slow USB interfaces and punish fast headsets.
 pub struct StartupWatch {
     opened_at: Option<Instant>,
     /// Devices already warned about, by name. A device that recovers (fast
@@ -50,6 +55,8 @@ pub struct StartupWatch {
     warned: Vec<String>,
     /// The device capture reported most recently (CaptureUp).
     device: Option<String>,
+    /// Devices measured slower than the pre-roll window at least once.
+    slow: Vec<String>,
 }
 
 impl StartupWatch {
@@ -58,6 +65,7 @@ impl StartupWatch {
             opened_at: None,
             warned: Vec::new(),
             device: None,
+            slow: Vec::new(),
         }
     }
 
@@ -90,6 +98,9 @@ impl StartupWatch {
             return Verdict::Fine;
         }
         let device = self.device.clone().unwrap_or_else(|| "microphone".into());
+        if !self.slow.contains(&device) {
+            self.slow.push(device.clone());
+        }
         if self.warned.contains(&device) {
             return Verdict::SlowAgain { latency };
         }
@@ -102,6 +113,18 @@ impl StartupWatch {
                 PRE_ROLL_WINDOW.as_millis()
             ),
         }
+    }
+}
+
+impl StartupWatch {
+    /// Whether the current device has ever delivered its first sample
+    /// later than the pre-roll window can cover.
+    ///
+    /// The warm-hold consults this so a fast device never pays the
+    /// privacy cost: holding the stream open on a built-in microphone
+    /// would light the recording indicator for no benefit at all.
+    pub fn current_device_is_slow(&self) -> bool {
+        self.device.as_ref().is_some_and(|d| self.slow.contains(d))
     }
 }
 

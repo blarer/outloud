@@ -33,7 +33,8 @@ file: choosing a value writes it here, preserving your comments, and editing
 the file by hand is picked up by the menu within a second.
 
 The menu deliberately surfaces only the settings that are implemented today
-(`hotkey`, `enabled`, `microphone.sensitivity`, `silence-timeout-ms`, and hiding the overlay). The rest of the table below is
+(`hotkey`, `enabled`, `microphone.sensitivity`, `microphone.warm-hold-ms`,
+`silence-timeout-ms`, and hiding the overlay). The rest of the table below is
 schema and documentation ahead of the code: the keys validate, migrate, and
 report provenance, but the pipeline does not read them yet. They are listed
 here rather than offered as menu rows because a settings control that writes
@@ -93,12 +94,41 @@ Both spellings work: dotted keys (`insertion.mode = "stream"`) or tables
 | `formatting.trailing-punctuation` | `true` | End utterances with inferred punctuation. |
 | `history.enabled` | `true` | Keep a local plain-text transcription history. |
 | `microphone.sensitivity` | `50` | How quiet a voice still counts as speech (1–100). Raise it if you sit back from the mic; lower it if room noise is transcribed. |
+| `microphone.warm-hold-ms` | `0` | Keep a *slow* microphone open this long after you stop speaking, so the next utterance is not clipped (0–10000). Off by default. |
 | `silence-timeout-ms` | `60000` | Safety net: force-commit and close the microphone after capture has run this long (1000–600000). |
 | `overlay.position` | `"bottom-center"` | `bottom-center`, `bottom-left`, `bottom-right`, `top-center`, or `hidden`. |
 | `vocabulary.sets` | `[]` | Named vocabulary sets active by default; profiles override per app. |
 | `telemetry.enabled` | `false` | Anonymous usage reporting. Off by default, forever. |
 | `launch-at-login` | `false` | Start the daemon when you log in. |
 | `schema-version` | `1` | Written by the daemon; used for automatic migration. |
+
+### Bluetooth headsets and the first word
+
+A Bluetooth headset takes far longer to start capturing than a built-in
+microphone: measured on this machine, AirPods deliver their first sample
+187–210ms after the stream opens, against a 150ms pre-roll. The daemon warns
+you once per device when it sees this.
+
+The audio in that gap is not delayed, it is **never captured**, so no buffer
+can recover it. Widening the pre-roll does nothing. The first word is not
+dropped either, it is *misrecognised*, which reads as "this tool mishears me"
+rather than "my headset is slow".
+
+`microphone.warm-hold-ms` keeps the stream open for a moment after you stop
+speaking, so the device is already warm when you press the key again:
+
+```toml
+microphone.warm-hold-ms = 2000
+```
+
+This is off by default, and deliberately narrow when on. It applies **only** to
+devices this machine has actually measured as slow, never to a built-in
+microphone. It is capped at 10 seconds, and the hold always expires on its own.
+
+The trade is explicit: for that window the system recording indicator stays lit
+while you are not dictating. OutLoud's default is that the orange dot means
+"dictating right now" and nothing else, which is why this is opt-in rather than
+a silent optimisation.
 
 ### Microphone sensitivity
 

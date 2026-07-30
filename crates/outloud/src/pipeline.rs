@@ -54,6 +54,20 @@ pub struct Config {
     /// come. docs/ux/02-core-interaction.md promised this and nothing
     /// implemented it.
     pub hot_mic_timeout_ms: u64,
+    /// Keep the stream open this long after a commit, for devices measured
+    /// slower than the pre-roll window. Zero disables it.
+    ///
+    /// A device that takes 210ms to deliver its first sample loses the
+    /// head of every utterance, and no downstream buffer can recover audio
+    /// the device never captured (docs/input-latency.md option 3 is
+    /// explicit that widening pre-roll does NOT help). The only fix is to
+    /// already be open when the user starts speaking.
+    ///
+    /// This trades the property that the recording indicator means
+    /// "dictating right now", so it is deliberately narrow: opt-in, only
+    /// for devices measured slow on this machine, and bounded so the
+    /// indicator still goes out on its own.
+    pub warm_hold_ms: u64,
 }
 
 impl Default for Config {
@@ -68,6 +82,9 @@ impl Default for Config {
             // The schema default, kept in one place.
             sensitivity: 50,
             hot_mic_timeout_ms: 60_000,
+            // Off unless the user asks: the default must be the honest
+            // indicator, not the faster one.
+            warm_hold_ms: 0,
         }
     }
 }
@@ -175,6 +192,8 @@ pub async fn run(
     let mut startup = StartupWatch::new();
     // When the current capture opened, for the hot-mic safety net below.
     let mut capture_opened_at: Option<Instant> = None;
+    // When a post-commit warm hold expires, if one is running.
+    let mut warm_until: Option<Instant> = None;
 
     loop {
         // Computed each iteration: when the streamer's parked write becomes
@@ -210,6 +229,18 @@ pub async fn run(
                 // data loss for another.
                 commit(&mut engine, &mut segmenter, &feed, &mut in_flight, &mut listening);
                 stop_capture(mic.as_mut(), &mut listening, &mut startup, &mut capture_opened_at);
+            }
+
+            // Warm hold expiring: close the device the user is no longer
+            // dictating into. The hold is a latency optimisation, not a
+            // licence to keep the stream, so it always ends by itself.
+            _ = tokio::time::sleep_until(tokio::time::Instant::from_std(
+                warm_until.unwrap_or_else(Instant::now),
+            )), if warm_until.is_some() => {
+                warm_until = None;
+                if !listening {
+                    stop_capture(mic.as_mut(), &mut listening, &mut startup, &mut capture_opened_at);
+                }
             }
 
             // Flush a parked streamed write once its 80ms interval elapses.
@@ -323,6 +354,10 @@ pub async fn run(
                         // a stream open all session lights the recording
                         // indicator permanently, telling the user they are
                         // being recorded while idle. See mic.rs.
+                        // A warm hold in flight means the stream is
+                        // already up: adopt it rather than closing and
+                        // reopening, which is the entire point.
+                        let adopted_warm_stream = warm_until.take().is_some();
                         if let Some(m) = mic.as_mut() {
                             if let Err(e) = m.open() {
                                 eprintln!("outloud: could not open the microphone: {e}");
@@ -334,7 +369,17 @@ pub async fn run(
                             }
                             // Stamp the open so the first chunk's arrival
                             // measures this device's real startup latency.
-                            startup.on_open(Instant::now());
+                            //
+                            // Skipped when adopting a warm stream: audio is
+                            // already flowing, so the gap to the next chunk
+                            // measures the poll interval rather than the
+                            // device. Recording it would report ~0ms and
+                            // teach the watchdog this device is fast, which
+                            // would then withdraw the very hold that made
+                            // it look fast.
+                            if !adopted_warm_stream {
+                                startup.on_open(Instant::now());
+                            }
                             capture_opened_at = Some(Instant::now());
                         }
                         // Snapshot decides dictate-vs-edit from the selection
@@ -422,10 +467,27 @@ pub async fn run(
                                 }
                             }
                             commit(&mut engine, &mut segmenter, &feed, &mut in_flight, &mut listening);
-                            // Release the device as soon as the user stops
-                            // speaking, so the recording indicator tracks
-                            // dictation rather than uptime.
-                            stop_capture(mic.as_mut(), &mut listening, &mut startup, &mut capture_opened_at);
+                            // Normally: release the device as soon as the
+                            // user stops speaking, so the recording
+                            // indicator tracks dictation rather than
+                            // uptime.
+                            //
+                            // Exception, opt-in and per-device: a device
+                            // measured slower than the pre-roll window
+                            // clips the head of every utterance, and the
+                            // only cure is to already be open next time.
+                            // Stop *listening* either way -- audio is
+                            // discarded from here -- but defer the close.
+                            if cfg.warm_hold_ms > 0 && startup.current_device_is_slow() {
+                                listening = false;
+                                capture_opened_at = None;
+                                warm_until = Some(
+                                    Instant::now()
+                                        + std::time::Duration::from_millis(cfg.warm_hold_ms),
+                                );
+                            } else {
+                                stop_capture(mic.as_mut(), &mut listening, &mut startup, &mut capture_opened_at);
+                            }
                         }
                     }
                     FrontendEvent::Chunk(samples) => {

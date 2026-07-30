@@ -266,6 +266,18 @@ pub fn schema() -> &'static [KeySpec] {
                 wired: true,
             },
             KeySpec {
+                key: "microphone.warm-hold-ms",
+                default: Value::Int(0),
+                constraint: IntRange(0, 10_000),
+                doc: "Keep a SLOW microphone open this long after you stop \
+                      speaking, so the next utterance is not clipped. Only \
+                      applies to devices measured slower than the 150ms \
+                      pre-roll (Bluetooth headsets typically are). The \
+                      recording indicator stays lit for this long, which is \
+                      why it is off by default.",
+                wired: true,
+            },
+            KeySpec {
                 key: "silence-timeout-ms",
                 default: Value::Int(60_000),
                 constraint: IntRange(1_000, 600_000),
@@ -416,6 +428,7 @@ mod tests {
                 "enabled",
                 "insertion.mode",
                 "microphone.sensitivity",
+                "microphone.warm-hold-ms",
                 "silence-timeout-ms",
                 "overlay.position"
             ]
@@ -428,7 +441,7 @@ mod tests {
         // Not asserted as a fixed list on purpose: this number should only
         // ever go DOWN, and pinning it exactly would make wiring a setting
         // fail an unrelated-looking test. What must hold is the invariant.
-        assert_eq!(inert.len(), schema().len() - 6);
+        assert_eq!(inert.len(), schema().len() - 7);
         assert!(
             !inert.contains(&"silence-timeout-ms"),
             "silence-timeout-ms is wired: the pipeline force-closes a hot mic on it"

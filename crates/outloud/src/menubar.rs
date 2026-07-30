@@ -106,6 +106,8 @@ pub struct Settings {
     pub sensitivity: u8,
     /// `silence-timeout-ms`: the hot-mic safety net.
     pub silence_timeout_ms: i64,
+    /// `microphone.warm-hold-ms`: post-commit hold for slow devices.
+    pub warm_hold_ms: i64,
     pub enabled: bool,
     pub launch_at_login: bool,
     pub config_path: Option<PathBuf>,
@@ -155,6 +157,7 @@ impl Default for Settings {
             overlay_position: s("overlay.position"),
             sensitivity: i("microphone.sensitivity", 50).clamp(1, 100) as u8,
             silence_timeout_ms: i("silence-timeout-ms", 60_000),
+            warm_hold_ms: i("microphone.warm-hold-ms", 0),
             enabled: b("enabled"),
             launch_at_login: b("launch-at-login"),
             config_path: None,
@@ -192,6 +195,7 @@ impl Settings {
             sensitivity: i("microphone.sensitivity", 50).clamp(1, 100) as u8,
             // Clamped for the same reason as sensitivity: hand-edited file.
             silence_timeout_ms: i("silence-timeout-ms", 60_000).clamp(1_000, 600_000),
+            warm_hold_ms: i("microphone.warm-hold-ms", 0).clamp(0, 10_000),
             enabled: b("enabled", true),
             launch_at_login: b("launch-at-login", false),
             config_path,

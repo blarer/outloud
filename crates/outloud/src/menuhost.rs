@@ -115,6 +115,11 @@ impl MenuHost {
         self.settings.silence_timeout_ms.max(1_000) as u64
     }
 
+    /// `microphone.warm-hold-ms`: post-commit hold for slow devices.
+    pub fn warm_hold_ms(&self) -> u64 {
+        self.settings.warm_hold_ms.max(0) as u64
+    }
+
     /// Reload if the file changed underneath us. Called every frame by the
     /// render loop; the watcher does the work on its own thread, so this is
     /// a non-blocking channel drain.
