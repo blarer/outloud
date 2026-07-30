@@ -8,6 +8,7 @@
 //! so a hung target application can stall at most one utterance's write,
 //! never the hotkey or the overlay.
 
+use std::sync::Arc;
 use std::time::Instant;
 
 use diag::timing::{Recorder, Stage};
@@ -68,6 +69,37 @@ pub struct Config {
     /// for devices measured slow on this machine, and bounded so the
     /// indicator still goes out on its own.
     pub warm_hold_ms: u64,
+    /// Resolve per-app settings for the app the user was looking at.
+    ///
+    /// A closure rather than a `config::Config` handle so the pipeline
+    /// stays testable headlessly and so config reloads are picked up
+    /// without restarting capture: the menu host owns the live config and
+    /// this reads through it once per utterance.
+    ///
+    /// `None` means no profile support (the `--once` measurement path,
+    /// and any host without a config), in which case the flat values on
+    /// this struct are used unchanged.
+    pub resolve_for_app: Option<AppResolver>,
+}
+
+/// Resolves per-app settings for the app the user was looking at.
+///
+/// Shared and thread-safe because the pipeline runs on the async event
+/// loop while the menu host owns the config it reads through.
+pub type AppResolver = Arc<dyn Fn(&config::AppIdentity) -> AppSettings + Send + Sync>;
+
+/// The subset of settings a profile may change per utterance.
+///
+/// Deliberately small. Every field here has to be read at the moment it is
+/// used rather than once at startup, so growing this set has a real cost;
+/// a key belongs here only when "different in Slack than in Terminal" is
+/// something a user actually wants.
+#[derive(Debug, Clone, PartialEq)]
+pub struct AppSettings {
+    /// `enabled = false` in a profile mutes dictation for that app.
+    pub enabled: bool,
+    /// `insertion.mode = "stream"`.
+    pub prefer_streaming: bool,
 }
 
 impl Default for Config {
@@ -85,6 +117,7 @@ impl Default for Config {
             // Off unless the user asks: the default must be the honest
             // indicator, not the faster one.
             warm_hold_ms: 0,
+            resolve_for_app: None,
         }
     }
 }
@@ -393,10 +426,33 @@ pub async fn run(
                         if let Mode::Edit { selected } = &mode {
                             eprintln!("outloud: edit mode on selection: \"{selected}\"");
                         }
+                        // Per-app profile for the app the user was looking
+                        // at when they pressed the key. Resolved here, not
+                        // at commit: those differ exactly when a slow
+                        // utterance races a window switch, and applying
+                        // another app's rules to this app's text is the
+                        // failure this ordering prevents.
+                        let per_app = crate::inject::app_identity(snap.as_ref())
+                            .and_then(|id| cfg.resolve_for_app.as_ref().map(|f| f(&id)));
+                        if let Some(a) = &per_app {
+                            if !a.enabled {
+                                // A profile muted this app. Say so: silence
+                                // that looks like a crash is what the
+                                // `enabled` key is most likely to cause.
+                                eprintln!(
+                                    "outloud: dictation is disabled for this app by a profile"
+                                );
+                                engine.transition(OverlayState::Idle, None);
+                                continue;
+                            }
+                        }
                         // Streaming, when asked for and the field can take
                         // in-place revisions. Everything else (edits, refused
                         // fields, other platforms) keeps commit-on-release.
-                        let streamer = if crate::streamer::wants_streaming(cfg.prefer_streaming, &mode) {
+                        let wants_stream = per_app
+                            .as_ref()
+                            .map_or(cfg.prefer_streaming, |a| a.prefer_streaming);
+                        let streamer = if crate::streamer::wants_streaming(wants_stream, &mode) {
                             snap.as_ref().and_then(|s| Streamer::begin(s, stream_tx.clone()))
                         } else {
                             None

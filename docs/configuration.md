@@ -170,8 +170,20 @@ message says so.
 
 ## Per-application profiles
 
-A profile is a matcher plus overrides. Any key from the table above can be
-overridden per app.
+A profile is a matcher plus overrides. Any *wired* key from the table above can
+be overridden per app; overriding an inert key does nothing, exactly as setting
+it globally does nothing.
+
+Profiles resolve against the app that was focused **when you pressed the key**,
+not the one focused when the transcript lands. Those differ when a slow
+utterance races a window switch, and applying one app's rules to another app's
+text is the failure that ordering prevents.
+
+To find an app's bundle id, focus it and run:
+
+```
+cargo run --release -p ax-edit --example whoami
+```
 
 ```toml
 [profile.terminal]
@@ -195,9 +207,15 @@ match.process-name = "vim"                    # exe name, for terminal programs
 insertion.paste-fallback = true
 
 [profile.games]
-match.window-class = "steam_app_*"            # X11/Wayland window class
+match.window-class = "steam_app_*"            # X11/Wayland only; inert on macOS
 enabled = false                               # mute entirely
 ```
+
+`match.window-class` is an X11/Wayland concept and never matches on macOS: the
+daemon leaves it empty rather than substituting an app name, so a profile keyed
+on it cannot fire against the wrong thing. Use `match.bundle-id` on macOS, or
+`match.process-name` for a bare executable run from a shell (`nvim` over SSH),
+which has no bundle id at all.
 
 ### Matching rules
 

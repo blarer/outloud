@@ -21,7 +21,7 @@ default = ["display"]
 # socket, and must not link an audio stack (alsa-sys on Linux) it never
 # calls. Keeping capture on a separate feature would let someone build a
 # "headless" daemon that still drags in ALSA, which is the bug this closes.
-display = ["overlay/display", "text-target/display", "audio/capture"]
+display = ["overlay/display", "text-target/display", "audio/capture", "ax-edit/bundle-id"]
 
 [dependencies]
 anyhow.workspace = true

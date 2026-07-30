@@ -371,6 +371,10 @@ fn main() -> anyhow::Result<()> {
             .map(|h| h.silence_timeout_ms())
             .unwrap_or_else(outloud::menuhost::MenuHost::silence_timeout_from_config),
         warm_hold_ms: menu_host.as_ref().map_or(0, |h| h.warm_hold_ms()),
+        // Per-app profiles need a live config; `--once` has no menu host
+        // and therefore no profiles, which keeps its numbers comparable
+        // across runs.
+        resolve_for_app: menu_host.as_ref().map(|h| h.app_resolver()),
     };
 
     // After cfg, so the mock's voiced-window gate can follow the same

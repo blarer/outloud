@@ -46,7 +46,7 @@ impl fmt::Display for AxError {
 impl std::error::Error for AxError {}
 
 /// A snapshot of the focused text field at one instant.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct TextSnapshot {
     /// Accessibility role, e.g. `AXTextArea` or `AXTextField`.
     pub role: String,
@@ -57,6 +57,18 @@ pub struct TextSnapshot {
     /// application's name with another's text is worse than no report at all,
     /// and destination-aware formatting would act on the wrong rules.
     pub app: Option<String>,
+    /// Bundle identifier of the owning application, e.g.
+    /// `com.apple.Terminal`.
+    ///
+    /// Captured in the same snapshot as `app` and the text, for the same
+    /// reason: focus can move between two calls, and a profile resolved
+    /// against one app then applied to another's text is worse than no
+    /// profile at all.
+    ///
+    /// `None` for a process with no bundle (a bare executable run from a
+    /// shell). That is a real state, not a failure: such a process has no
+    /// bundle id, and `match.process-name` is the matcher for it.
+    pub bundle_id: Option<String>,
     /// Full text contents of the field, when the field exposes them.
     pub value: Option<String>,
     /// The currently selected substring, when there is a selection.
@@ -244,6 +256,7 @@ mod tests {
             selection: None,
             value_settable: true,
             selected_text_settable: true,
+            ..Default::default()
         }
     }
 

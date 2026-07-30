@@ -103,6 +103,28 @@ pub fn snapshot_and_mode_at_keydown() -> (Mode, Option<TextSnapshot>) {
     }
 }
 
+/// The profile-matching identity of the app a snapshot came from.
+///
+/// Built from the snapshot rather than looked up separately so the app
+/// that profiles resolve against is the same one whose text was read.
+///
+/// `window_class` stays `None` on macOS: it is an X11/Wayland concept and
+/// inventing a value for it would make `match.window-class` fire on the
+/// wrong platform. `process_name` carries the accessibility title, which
+/// is the closest honest analogue available without spawning anything.
+#[cfg(target_os = "macos")]
+pub fn app_identity(snap: Option<&TextSnapshot>) -> Option<config::AppIdentity> {
+    let snap = snap?;
+    if snap.bundle_id.is_none() && snap.app.is_none() {
+        return None;
+    }
+    Some(config::AppIdentity {
+        bundle_id: snap.bundle_id.clone(),
+        process_name: snap.app.clone(),
+        window_class: None,
+    })
+}
+
 /// How one utterance ended, for the overlay and the log.
 #[derive(Debug)]
 pub enum Outcome {
@@ -988,6 +1010,7 @@ mod tests {
             selection: None,
             value_settable: true,
             selected_text_settable: true,
+            ..Default::default()
         }
     }
 
@@ -1074,6 +1097,7 @@ mod tests {
             selection: caret_utf16.map(|c| (c, 0)),
             value_settable: true,
             selected_text_settable: false,
+            ..Default::default()
         }
     }
 

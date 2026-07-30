@@ -171,15 +171,36 @@ impl Settings {
     /// we still fall back rather than panic, because a daemon must not die
     /// of a settings read.
     pub fn from_config(cfg: &config::Config, config_path: Option<PathBuf>) -> Settings {
-        let s = |key: &str, fallback: &str| match cfg.get(key).map(|p| p.value) {
+        Settings::from_config_for(cfg, config_path, None)
+    }
+
+    /// Read settings as they apply to one application.
+    ///
+    /// `cfg.get(key)` is `get_for(key, None)`, which skips every profile
+    /// layer. Nothing in the daemon passed an app, so every
+    /// `[profile.slack]` block a user wrote was silently ignored --
+    /// including the five worked examples in docs/configuration.md. The
+    /// matching machinery was complete and simply never consulted.
+    ///
+    /// Resolution happens with the app the user was looking at when they
+    /// pressed the key, not the one focused when the transcript lands:
+    /// those differ exactly when a slow utterance races a window switch,
+    /// and applying another app's rules to this app's text is the failure
+    /// this is meant to prevent.
+    pub fn from_config_for(
+        cfg: &config::Config,
+        config_path: Option<PathBuf>,
+        app: Option<&config::AppIdentity>,
+    ) -> Settings {
+        let s = |key: &str, fallback: &str| match cfg.get_for(key, app).map(|p| p.value) {
             Some(Value::Str(v)) => v,
             _ => fallback.to_string(),
         };
-        let i = |key: &str, fallback: i64| match cfg.get(key).map(|p| p.value) {
+        let i = |key: &str, fallback: i64| match cfg.get_for(key, app).map(|p| p.value) {
             Some(Value::Int(v)) => v,
             _ => fallback,
         };
-        let b = |key: &str, fallback: bool| match cfg.get(key).map(|p| p.value) {
+        let b = |key: &str, fallback: bool| match cfg.get_for(key, app).map(|p| p.value) {
             Some(Value::Bool(v)) => v,
             _ => fallback,
         };

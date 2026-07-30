@@ -107,6 +107,8 @@ dependencies = [
  "criterion",
  "diag",
  "libc",
+ "objc2",
+ "objc2-app-kit",
 ]
 
 [[package]]

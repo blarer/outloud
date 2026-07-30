@@ -448,6 +448,7 @@ pub fn snapshot_focused() -> Result<TextSnapshot, Error> {
     // applications at once.
     let app_element = frontmost_app_element().ok_or(Error::NoFocusedElement)?;
     let app = app_title(&app_element);
+    let bundle_id = bundle_id_for_element(app_element.0);
 
     let focused = focused_in(&app_element)?;
     let el = focused.0;
@@ -494,6 +495,7 @@ pub fn snapshot_focused() -> Result<TextSnapshot, Error> {
     Ok(TextSnapshot {
         role,
         app,
+        bundle_id,
         value,
         selected_text,
         selection,
@@ -541,6 +543,48 @@ pub fn frontmost_app() -> Option<String> {
     // captured atomically with the field, whereas this call can race focus.
     let app = frontmost_app_element()?;
     app_title(&app)
+}
+
+/// Bundle identifier of the process owning an accessibility element.
+///
+/// Profiles match on bundle ids (`crates/config/src/profile.rs`) because
+/// they are stable and unique per app. The accessibility title is neither:
+/// it is localized, it changes with the frontmost document in some apps,
+/// and two apps can share one. Matching a bundle-id pattern like
+/// `com.jetbrains.*` against a title such as "IntelliJ IDEA" would simply
+/// never fire, silently, which is worse than not offering the matcher.
+///
+/// Returns `None` for processes with no bundle (a bare executable run from
+/// a shell), which is correct rather than an error: such a process has no
+/// bundle id to match against, and `process-name` is the matcher for it.
+#[cfg(not(feature = "bundle-id"))]
+pub(crate) fn bundle_id_for_pid(_pid: pid_t) -> Option<String> {
+    // Headless build: no AppKit to ask. Profiles fall back to
+    // `match.process-name`, which needs no GUI framework.
+    None
+}
+
+fn bundle_id_for_element(element: AXUIElementRef) -> Option<String> {
+    let mut pid: pid_t = 0;
+    // SAFETY: `element` is a live AXUIElementRef and `pid` is a valid
+    // out-pointer for the duration of the call.
+    let err = unsafe { accessibility_sys::AXUIElementGetPid(element, &mut pid) };
+    if err != accessibility_sys::kAXErrorSuccess || pid <= 0 {
+        return None;
+    }
+    bundle_id_for_pid(pid)
+}
+
+/// Bundle identifier for a process id.
+#[cfg(feature = "bundle-id")]
+pub(crate) fn bundle_id_for_pid(pid: pid_t) -> Option<String> {
+    use objc2_app_kit::NSRunningApplication;
+    // Safe bindings: objc2 models these as returning Option, so a dead or
+    // bundle-less process becomes None rather than a null deref.
+    let app = NSRunningApplication::runningApplicationWithProcessIdentifier(pid)?;
+    let id = app.bundleIdentifier()?;
+    let id = id.to_string();
+    (!id.is_empty()).then_some(id)
 }
 
 /// Accessibility title of an application element, when it has a usable one.

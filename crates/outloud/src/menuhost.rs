@@ -29,6 +29,12 @@ pub struct MenuHost {
     /// let the file and the UI disagree, which is exactly what the "GUI is a
     /// view over the files" design exists to prevent.
     watcher: Option<config::Watcher>,
+    /// The parsed config, kept so per-app profiles can be resolved at
+    /// key-down. Shared with the pipeline through an `Arc<RwLock<_>>` so a
+    /// live reload is picked up without restarting capture, and so
+    /// resolution reads a consistent snapshot rather than a half-swapped
+    /// one.
+    config: std::sync::Arc<std::sync::RwLock<Option<config::Config>>>,
     /// The live switches the running pipeline reads. Settings the process can
     /// adopt without a restart are pushed here on every reload, which is what
     /// makes the menu's Pause row take effect now rather than next launch.
@@ -46,6 +52,7 @@ impl MenuHost {
             actions: Vec::new(),
             model: None,
             watcher: None,
+            config: Default::default(),
             runtime,
         };
         host.reload();
@@ -120,6 +127,38 @@ impl MenuHost {
         self.settings.warm_hold_ms.max(0) as u64
     }
 
+    /// A resolver the pipeline can call at key-down to apply per-app
+    /// profiles.
+    ///
+    /// Returns a closure over the shared config rather than a snapshot of
+    /// it, so an edit to config.toml takes effect on the next utterance
+    /// (docs/ux/05: "every setting change applies live") instead of at the
+    /// next restart.
+    pub fn app_resolver(
+        &self,
+    ) -> std::sync::Arc<dyn Fn(&config::AppIdentity) -> crate::pipeline::AppSettings + Send + Sync>
+    {
+        let cfg = std::sync::Arc::clone(&self.config);
+        std::sync::Arc::new(move |app| {
+            let guard = cfg.read().ok();
+            let resolved = guard
+                .as_ref()
+                .and_then(|g| g.as_ref())
+                .map(|c| Settings::from_config_for(c, None, Some(app)));
+            match resolved {
+                Some(s) => crate::pipeline::AppSettings {
+                    enabled: s.enabled,
+                    prefer_streaming: s.insertion_mode == "stream",
+                },
+                // No config loaded: the caller's flat defaults stand.
+                None => crate::pipeline::AppSettings {
+                    enabled: true,
+                    prefer_streaming: false,
+                },
+            }
+        })
+    }
+
     /// Reload if the file changed underneath us. Called every frame by the
     /// render loop; the watcher does the work on its own thread, so this is
     /// a non-blocking channel drain.
@@ -161,6 +200,9 @@ impl MenuHost {
         );
         match built {
             Ok((cfg, warnings)) => {
+                if let Ok(mut slot) = self.config.write() {
+                    *slot = Some(cfg.clone());
+                }
                 self.problems.extend(warnings.iter().map(|w| w.to_string()));
                 // Settings the user explicitly set that no code reads yet.
                 // Silently ignoring them is the file-level version of the
@@ -395,6 +437,7 @@ mod tests {
             actions: Vec::new(),
             model: None,
             watcher: None,
+            config: Default::default(),
             runtime: RuntimeShared::new(),
         };
         assert!(!host.handle(MenuId(999)));
@@ -434,6 +477,7 @@ mod tests {
             actions: Vec::new(),
             model: None,
             watcher: None,
+            config: Default::default(),
             runtime: RuntimeShared::new(),
         };
         let before = std::fs::read(&path).unwrap();

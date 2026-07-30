@@ -196,6 +196,7 @@ mod tests {
             selection: None, // no caret -> not streamable
             value_settable: true,
             selected_text_settable: true,
+            ..Default::default()
         };
         let (tx, _rx) = tokio::sync::mpsc::unbounded_channel();
         assert!(Streamer::begin(&snap, tx).is_none());
