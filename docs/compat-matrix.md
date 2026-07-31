@@ -221,3 +221,39 @@ for an editor to distinguish.
 
 Not yet attempted, because the fix should be measured the same way this was
 rather than assumed.
+
+## Messages: text lands and stays, but the field is AXValue-only
+
+Measured, and materially different from Discord despite the same reported
+symptom ("dictation does not work here").
+
+The compose field, probed while focused:
+
+```
+role:      AXTextField
+app:       Messages
+writable:  value=true selectedText=false
+strategy:  set-value
+```
+
+`selectedText=false` is the interesting part. TextEdit offers both, so the
+injection layer can use `AXSelectedText`, which goes through the app's own
+text system and preserves its undo. Messages offers only `AXValue`, so a
+write there replaces the entire field and resets the app's undo stack.
+
+A dictation delivered via `synthetic-keys-batched` and the text stayed in the
+field afterwards, unlike Discord, which clears it about a second later. So
+whatever is wrong in Messages is not the transport dropping text.
+
+Also unlike Discord, an unfocused tree scan finds it fine: 7 writable text
+fields, including the message bubbles of the open conversation. That is
+consistent with a native AppKit app building its accessibility tree eagerly,
+where Electron does not.
+
+**Still unexplained.** The original report was that dictation "doesn't work"
+in iMessage, and this measurement shows text arriving and persisting. The
+remaining candidates are that the app was not focused at the time, that the
+failure needs a second consecutive utterance to reproduce, or that the text
+lands but Return does not send it. Worth re-measuring against a specific
+reproduction rather than guessing, and the owner of the machine is the only
+one who can say which case they hit.
