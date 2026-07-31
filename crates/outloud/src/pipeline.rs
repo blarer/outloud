@@ -880,12 +880,20 @@ async fn commit_transcript(
     // prevented: they said the words, and refusing to type them would lose
     // the utterance entirely. Naming the destination is what turns "it does
     // not work in this app" into "it went to that one".
-    if let Some(landed_in) = inject::focus_moved_to(fl.targeted_app.as_deref()) {
-        let msg = format!(
-            "focus moved while you spoke -> this text is going to {landed_in},              not where you started"
-        );
-        eprintln!("outloud: {msg}");
-        engine.live_detail(msg);
+    // OUTLOUD_FAKE_TARGET: pretend the utterance was aimed at this app.
+    //
+    // Exists because the honest end-to-end test is otherwise a race that
+    // cannot be won: raising a window takes longer than the time between
+    // key-up and the write. Overriding the target makes the move certain
+    // while still exercising the real focus lookup, message and overlay
+    // path, which is the difference between "the unit test passes" and
+    // "the user will see this".
+    let targeted = std::env::var("OUTLOUD_FAKE_TARGET")
+        .ok()
+        .or_else(|| fl.targeted_app.clone());
+    let moved_to = inject::focus_moved_to(targeted.as_deref());
+    if let Some(landed_in) = &moved_to {
+        eprintln!("outloud: focus moved while you spoke; this text is going to {landed_in}");
     }
 
     let mode = fl.mode.clone();
@@ -904,9 +912,17 @@ async fn commit_transcript(
         std::time::Duration::from_secs_f64(inject_ms / 1000.0),
     );
 
+    // The focus warning rides the terminal transition rather than being
+    // published on its own. `live_detail` is explicitly cleared by the next
+    // state change, and the next state change is one line below, so a detail
+    // set before the write never survived to be read.
+    let focus_note = moved_to
+        .as_ref()
+        .map(|app| format!("text went to {app}, not where you started"));
+
     let outcome_str = match outcome {
         Outcome::Wrote { via, .. } => {
-            engine.transition(OverlayState::Idle, None);
+            engine.transition(OverlayState::Idle, focus_note.clone());
             via
         }
         Outcome::Suppressed { .. } => {
