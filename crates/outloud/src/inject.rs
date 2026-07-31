@@ -1081,6 +1081,23 @@ fn deliver_without_ax(
     typing: TypingChoice,
     preceding: Option<char>,
 ) -> Outcome {
+    // Last line of defence for apps that throw synthetic keystrokes away.
+    //
+    // The splice path checks this before choosing a transport, but every
+    // fallback below it re-derives a TYPING strategy and loses the fact, so
+    // an app on the discard list still got typed into whenever the AX write
+    // was refused for any reason. Measured live in Discord: three
+    // consecutive dictations were served by clipboard-paste, ax-stream and
+    // synthetic-keys-paced, and only the first survived. Checking here means
+    // every route out of this function respects it, including ones added
+    // later.
+    #[cfg(feature = "display")]
+    if ax_edit::frontmost_app()
+        .as_deref()
+        .is_some_and(text_target::targets::keys::discards_synthetic_typing)
+    {
+        return paste_with_leading_space(text, preceding);
+    }
     // Typing and pasting both append blind: neither can read the field, so
     // the caller has to tell them what the caret is sitting behind. Without
     // this, a second utterance lands hard against the first and reads as

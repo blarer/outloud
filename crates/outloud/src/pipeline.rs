@@ -484,7 +484,11 @@ pub async fn run(
                         let wants_stream = per_app
                             .as_ref()
                             .map_or(cfg.prefer_streaming, |a| a.prefer_streaming);
-                        let streamer = if crate::streamer::wants_streaming(wants_stream, &mode) {
+                        let streamer = if crate::streamer::wants_streaming(
+                            wants_stream,
+                            &mode,
+                            snap.as_ref().and_then(|s| s.app.as_deref()),
+                        ) {
                             snap.as_ref().and_then(|s| Streamer::begin(s, stream_tx.clone()))
                         } else {
                             None

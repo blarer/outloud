@@ -162,9 +162,23 @@ impl Streamer {
 }
 
 /// Whether this key-down should even attempt streaming: the setting asks
-/// for it and the utterance is a dictation (edits rewrite a selection once,
-/// at commit, by design).
-pub fn wants_streaming(prefer: bool, mode: &crate::inject::Mode) -> bool {
+/// for it, the utterance is a dictation (edits rewrite a selection once, at
+/// commit, by design), and the destination does not throw away the writes
+/// streaming depends on.
+///
+/// The app check is the important one and was missing. Streaming revises
+/// text in place, which needs either AXValue writes or synthetic keys to
+/// stick. Discord discards both: it reconciles its DOM against a model that
+/// never saw the events. The commit path already knew this and routed
+/// Discord to clipboard paste, but streaming ran BEFORE that decision and
+/// silently bypassed it, so whether dictation worked depended on which
+/// transport happened to win the race. Observed live: three consecutive
+/// utterances into Discord took clipboard-paste, ax-stream and
+/// synthetic-keys-paced, and only the first survived.
+pub fn wants_streaming(prefer: bool, mode: &crate::inject::Mode, app: Option<&str>) -> bool {
+    if app.is_some_and(text_target::targets::keys::discards_synthetic_typing) {
+        return false;
+    }
     prefer && matches!(mode, crate::inject::Mode::Dictate)
 }
 
@@ -178,10 +192,42 @@ mod tests {
             true,
             &crate::inject::Mode::Edit {
                 selected: "x".into()
-            }
+            },
+            None
         ));
-        assert!(wants_streaming(true, &crate::inject::Mode::Dictate));
-        assert!(!wants_streaming(false, &crate::inject::Mode::Dictate));
+        assert!(wants_streaming(true, &crate::inject::Mode::Dictate, None));
+        assert!(!wants_streaming(false, &crate::inject::Mode::Dictate, None));
+    }
+
+    /// Apps that discard synthetic writes must never stream, however the
+    /// setting is configured.
+    ///
+    /// Regression, caught by watching a real Discord field across three
+    /// dictations: they were served by clipboard-paste, ax-stream and
+    /// synthetic-keys-paced respectively, and only clipboard-paste survived.
+    /// The commit path already routed Discord correctly; streaming ran first
+    /// and bypassed that decision entirely, so "does dictation work" came
+    /// down to which transport won a race the user could not see.
+    #[test]
+    fn apps_that_discard_writes_never_stream() {
+        assert!(
+            !wants_streaming(true, &crate::inject::Mode::Dictate, Some("Discord")),
+            "Discord discards the writes streaming relies on"
+        );
+        // Case-insensitive, because the AX title's exact casing is not ours
+        // to depend on.
+        assert!(!wants_streaming(
+            true,
+            &crate::inject::Mode::Dictate,
+            Some("discord")
+        ));
+        // Apps that accept writes must be unaffected: this is a narrow
+        // exclusion, not a reason to disable streaming broadly.
+        assert!(wants_streaming(
+            true,
+            &crate::inject::Mode::Dictate,
+            Some("TextEdit")
+        ));
     }
 
     /// Off-macOS (and in CI with no focused field) `begin` must decline,

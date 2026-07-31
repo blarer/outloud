@@ -241,11 +241,11 @@ fn streaming_partials_can_never_engage_over_a_selection() {
             selected: SELECTED.into(),
         };
         assert!(
-            !wants_streaming(true, &mode),
+            !wants_streaming(true, &mode, None),
             "{cmd:?} would stream partials over the selection before \
              classification could refuse it"
         );
     }
     // And dictation still streams, so this guard is not just "off".
-    assert!(wants_streaming(true, &Mode::Dictate));
+    assert!(wants_streaming(true, &Mode::Dictate, None));
 }
