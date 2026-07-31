@@ -863,6 +863,63 @@ type TypingChoice = NoTypingStrategy;
 /// WHICH typing path ran: "synthetic-keys-batched" is expected to be ~1ms,
 /// "synthetic-keys-paced" is the deliberate slow path for ttys, and seeing
 /// the wrong one against a given app is the diagnosis.
+/// Whether focus is still on the app that was targeted at key-down.
+///
+/// Dictation aims at whatever holds focus when the key goes down, and the
+/// write lands a few hundred milliseconds later. Anything that raises a
+/// window in between silently redirects the text: chat apps do this on a new
+/// message, and so does any app with a notification that steals focus.
+///
+/// This was observed rather than imagined. While testing Messages, Discord
+/// repeatedly raised itself mid-utterance, and dictations aimed at Messages
+/// landed in Discord. From the user's side that is indistinguishable from
+/// "dictation does not work in this app", which is exactly how it was first
+/// reported.
+///
+/// Returns the name of the app that has focus NOW when it differs from the
+/// one targeted, so the caller can say where the text actually went. `None`
+/// means focus is unchanged, or that neither app could be identified, in
+/// which case claiming a move would be a guess.
+pub fn focus_moved_to(targeted: Option<&str>) -> Option<String> {
+    // Only macOS can answer "what has focus right now". Elsewhere the honest
+    // answer is "cannot tell", which `focus_changed` renders as no warning:
+    // claiming a move on missing information would send users hunting for a
+    // window that never held their text.
+    #[cfg(target_os = "macos")]
+    {
+        let now = ax_edit::snapshot_focused().ok().and_then(|s| s.app);
+        focus_changed(targeted, now.as_deref())
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        focus_changed(targeted, None)
+    }
+}
+
+/// The pure half of [`focus_moved_to`]: given the app targeted at key-down
+/// and the app focused now, did the target move?
+///
+/// Split out because the comparison is the part with rules worth pinning,
+/// while "what has focus right now" is an OS lookup no test can fake. It is
+/// also the part that must not guess: an unknown on either side means the
+/// answer is "cannot tell", and reporting a move on missing information
+/// would send users chasing a window that never had their text.
+fn focus_changed(targeted: Option<&str>, current: Option<&str>) -> Option<String> {
+    let was = targeted?;
+    let now = current?;
+    if now == was {
+        return None;
+    }
+    Some(now.to_string())
+}
+
+/// Non-macOS builds have no accessibility layer to ask, so they cannot tell
+/// whether focus moved and must not pretend otherwise.
+#[cfg(not(target_os = "macos"))]
+pub fn focus_moved_to(_targeted: Option<&str>) -> Option<String> {
+    None
+}
+
 /// Paste `text` at the caret, adding the separating space the join needs.
 ///
 /// For destinations that accept neither an AXValue write nor synthetic
@@ -1531,5 +1588,32 @@ mod tier_tests {
             !retry_is_safe(&TargetError::Transport("event creation failed".into())),
             "a partial write must never be retyped"
         );
+    }
+
+    /// Focus moving mid-utterance sends the text somewhere the user is not
+    /// looking, and they cannot tell that from the app being broken.
+    ///
+    /// Observed while testing Messages: Discord raised itself and dictations
+    /// aimed at Messages landed in Discord. That is almost certainly what
+    /// "dictation does not work in iMessage" was.
+    #[test]
+    fn a_moved_target_names_where_the_text_went() {
+        assert_eq!(
+            focus_changed(Some("Messages"), Some("Discord")),
+            Some("Discord".to_string())
+        );
+    }
+
+    /// Silence is correct when nothing moved, and when the answer is unknown.
+    ///
+    /// The unknown cases matter more than they look: warning on missing
+    /// information would send users hunting for a window that never held
+    /// their text, which is worse than saying nothing.
+    #[test]
+    fn an_unknown_target_never_claims_a_move() {
+        assert_eq!(focus_changed(Some("Messages"), Some("Messages")), None);
+        assert_eq!(focus_changed(None, Some("Discord")), None);
+        assert_eq!(focus_changed(Some("Messages"), None), None);
+        assert_eq!(focus_changed(None, None), None);
     }
 }

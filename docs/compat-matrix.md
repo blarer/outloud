@@ -250,10 +250,28 @@ fields, including the message bubbles of the open conversation. That is
 consistent with a native AppKit app building its accessibility tree eagerly,
 where Electron does not.
 
-**Still unexplained.** The original report was that dictation "doesn't work"
-in iMessage, and this measurement shows text arriving and persisting. The
-remaining candidates are that the app was not focused at the time, that the
-failure needs a second consecutive utterance to reproduce, or that the text
-lands but Return does not send it. Worth re-measuring against a specific
-reproduction rather than guessing, and the owner of the machine is the only
-one who can say which case they hit.
+**Still unexplained, and one hypothesis is now ruled out.** The original
+report was that dictation "doesn't work" in iMessage. Measurement shows text
+arriving via `set-value` and persisting, so the transport is not dropping it.
+
+Attempting to test the "second consecutive utterance fails" hypothesis
+produced a useful negative result of a different kind: Discord repeatedly
+took focus back mid-test, so two dictations aimed at Messages landed in
+Discord instead. That is worth recording, because it is also the likeliest
+explanation of the original report. A dictation goes wherever focus is at
+key-down, and on a machine where a chat app can raise itself, "it did not
+appear in iMessage" and "it appeared somewhere else" are the same event.
+
+Remaining candidates, narrowest first:
+
+1. Focus moved between key-down and commit, so the text went elsewhere.
+   Consistent with what was observed here, and invisible to the user unless
+   they happen to look at the other app.
+2. Text lands but Return does not send it, so it looks like nothing
+   happened. Untested.
+3. Something specific to a second consecutive utterance. Untested, because
+   the focus problem above prevented a clean run.
+
+Diagnosing this needs a reproduction from someone who can keep the app
+focused, and the first thing worth checking is whether the missing sentence
+turned up in a different window.

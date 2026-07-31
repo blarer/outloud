@@ -161,6 +161,15 @@ impl UtteranceReport {
 /// Per-utterance bookkeeping while an utterance is in flight.
 struct InFlight {
     mode: Mode,
+    /// The app that held focus at key-down.
+    ///
+    /// Kept so the commit path can notice focus moving mid-utterance. The
+    /// write lands a few hundred milliseconds after the key is released, and
+    /// anything that raises a window in between silently redirects the text.
+    /// Observed while testing: Discord raised itself and dictations aimed at
+    /// Messages landed in Discord, which is indistinguishable from "it does
+    /// not work in this app" unless someone says where the text went.
+    targeted_app: Option<String>,
     released_at: Instant,
     /// Live streaming session, when the field accepted one. `None` is the
     /// buffered commit-on-release path, which is also every error path's
@@ -470,7 +479,14 @@ pub async fn run(
                             None
                         };
                         segmenter = new_segmenter(cfg.sensitivity);
-                        in_flight = Some(InFlight { mode, released_at: Instant::now(), streamer });
+                        in_flight = Some(InFlight {
+                            mode,
+                            // From the key-down snapshot, so the commit path
+                            // can tell whether focus moved under it.
+                            targeted_app: snap.as_ref().and_then(|s| s.app.clone()),
+                            released_at: Instant::now(),
+                            streamer,
+                        });
                         if recognizer_ready {
                             listening = true;
                             engine.transition(OverlayState::Listening, None);
@@ -813,6 +829,10 @@ async fn settle_streamed(
             eprintln!("outloud: streamed settle failed on an untouched field ({e}); using the buffered path");
             let fl = InFlight {
                 mode: Mode::Dictate,
+                // The streamed attempt already established the target; this
+                // retry writes wherever focus is now, and saying "unknown"
+                // is honest rather than asserting a stale app name.
+                targeted_app: None,
                 released_at: pf.released_at,
                 streamer: None,
             };
@@ -853,6 +873,20 @@ async fn commit_transcript(
         return None;
     }
     engine.transition(OverlayState::Injecting, None);
+
+    // Did focus move while the user was speaking? The write goes wherever
+    // focus is NOW, so if a window raised itself mid-utterance the text is
+    // about to land somewhere the user was not looking. Reported rather than
+    // prevented: they said the words, and refusing to type them would lose
+    // the utterance entirely. Naming the destination is what turns "it does
+    // not work in this app" into "it went to that one".
+    if let Some(landed_in) = inject::focus_moved_to(fl.targeted_app.as_deref()) {
+        let msg = format!(
+            "focus moved while you spoke -> this text is going to {landed_in},              not where you started"
+        );
+        eprintln!("outloud: {msg}");
+        engine.live_detail(msg);
+    }
 
     let mode = fl.mode.clone();
     let owned = text.to_string();
