@@ -1602,7 +1602,12 @@ mod tier_tests {
     /// looking, and they cannot tell that from the app being broken.
     ///
     /// Observed while testing Messages: Discord raised itself and dictations
-    /// aimed at Messages landed in Discord. That is almost certainly what
+    /// aimed at Messages landed in Discord. Measured afterwards, Messages
+    /// resolves the same way Discord does, frontmost_app=Some("Messages")
+    /// with snapshot.app=None, so before the frontmost_app fallback the
+    /// warning could not fire there at all. A focus theft out of Messages
+    /// was therefore silently invisible, which fits the original report of
+    /// text that simply vanished. That is almost certainly what
     /// "dictation does not work in iMessage" was.
     #[test]
     fn a_moved_target_names_where_the_text_went() {
