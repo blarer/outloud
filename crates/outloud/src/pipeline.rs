@@ -261,7 +261,19 @@ pub async fn run(
                 // their words away to fix a stuck mic trades one silent
                 // data loss for another.
                 commit(&mut engine, &mut segmenter, &feed, &mut in_flight, &mut listening);
-                stop_capture(mic.as_mut(), &mut listening, &mut startup, &mut capture_opened_at);
+                if let Some(msg) = stop_capture(
+                    mic.as_mut(),
+                    &mut listening,
+                    &mut startup,
+                    &mut capture_opened_at,
+                ) {
+                    // The whole utterance was digital silence. Say so, with
+                    // the likely cause: without this the key appears to do
+                    // nothing at all, which reads as a broken app rather
+                    // than a headset that belongs to a phone right now.
+                    eprintln!("outloud: {msg}");
+                    engine.transition(OverlayState::Error, Some(msg));
+                }
             }
 
             // Warm hold expiring: close the device the user is no longer
@@ -569,7 +581,17 @@ pub async fn run(
                                 // moment the advice applies.
                                 engine.live_detail(message);
                             }
+                            // Only `on_utterance_end` produces this, and it
+                            // is matched where that is called. Listed rather
+                            // than swept into a catch-all so that routing it
+                            // to the wrong place stays a compile error.
+                            Verdict::SilentCapture { .. } => {}
                         }
+                        // Watch for a stream that opens, reports success and
+                        // delivers nothing: a Bluetooth headset claimed by
+                        // another device looks identical to a working one
+                        // until you inspect the samples.
+                        startup.on_audio(&samples);
                         engine.live_audio(&samples);
                         let mut endpoint = false;
                         for ev in segmenter.push(&samples) {
@@ -712,13 +734,22 @@ fn stop_capture(
     listening: &mut bool,
     startup: &mut StartupWatch,
     opened_at: &mut Option<Instant>,
-) {
+) -> Option<String> {
     *listening = false;
     *opened_at = None;
     if let Some(m) = mic {
         m.close();
     }
     startup.on_close();
+
+    // Every route out of listening passes through here, which is why the
+    // silence check lives in this function rather than at each of the three
+    // commit sites: a fault that only some exits detect is a fault users
+    // will hit through the exit nobody instrumented.
+    match startup.on_utterance_end() {
+        Verdict::SilentCapture { message } => Some(message),
+        _ => None,
+    }
 }
 
 fn commit(

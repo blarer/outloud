@@ -845,6 +845,17 @@ type TypingChoice = NoTypingStrategy;
 /// WHICH typing path ran: "synthetic-keys-batched" is expected to be ~1ms,
 /// "synthetic-keys-paced" is the deliberate slow path for ttys, and seeing
 /// the wrong one against a given app is the diagnosis.
+/// Whether a failed typing attempt is known to have delivered NOTHING.
+///
+/// Retrying is only safe when the answer is yes. See the call site for the
+/// corruption that results otherwise.
+#[cfg(all(target_os = "macos", feature = "display"))]
+fn retry_is_safe(e: &text_target::TargetError) -> bool {
+    // Unsupported is produced before any event is posted; every other
+    // variant can follow a partially delivered sequence.
+    matches!(e, text_target::TargetError::Unsupported(_))
+}
+
 #[cfg(all(target_os = "macos", feature = "display"))]
 fn type_with_strategy(text: &str, typing: TypingChoice) -> Result<String, String> {
     use text_target::targets::keys::{CgEventTarget, TypingStrategy};
@@ -852,12 +863,35 @@ fn type_with_strategy(text: &str, typing: TypingChoice) -> Result<String, String
     match typing {
         TypingStrategy::Batched => match CgEventTarget.insert(text) {
             Ok(()) => Ok("synthetic-keys-batched".into()),
-            // A refused batch (no trust, event creation failed) still has
-            // the paced path to try before giving up on typing entirely.
-            Err(e) => match ax_edit::synth::type_text(text) {
+            // Retry ONLY when the batched attempt is known to have delivered
+            // nothing. Anything else and the paced path types the whole
+            // string on top of a partial one.
+            //
+            // This shipped broken and was caught in live use: dictating into
+            // Discord a second time produced
+            //   "  tthhee  qquuiicckk  bbrroowwnn the quick brown"
+            // which is the text with every character doubled, then a clean
+            // copy. Discord's editor was left in a state where the batched
+            // post failed partway, the fallback retyped everything, and the
+            // field ended up unusable until the app was restarted.
+            //
+            // `Unsupported` is the safe case: `CgEventTarget::insert` returns
+            // it before posting anything (empty text, or no Accessibility
+            // trust), so nothing reached the field. `Transport` is not safe:
+            // it means event creation failed mid-sequence, after earlier
+            // chunks were already posted.
+            Err(e) if retry_is_safe(&e) => match ax_edit::synth::type_text(text) {
                 Ok(()) => Ok(format!("synthetic-keys-paced (batched refused: {e})")),
                 Err(e2) => Err(format!("batched: {e}; paced: {e2}")),
             },
+            // Partial delivery. Report it rather than retrying: half a
+            // sentence the user can see and fix beats a doubled one they
+            // have to decipher, and silently making it worse is the failure
+            // mode that cost a Discord restart per utterance.
+            Err(e) => Err(format!(
+                "batched typing failed after posting some text ({e}); \
+                 not retyping, because that would duplicate what landed"
+            )),
         },
         TypingStrategy::PerCharPaced => match ax_edit::synth::type_text(text) {
             Ok(()) => Ok("synthetic-keys-paced".into()),
@@ -1396,5 +1430,39 @@ mod tier_tests {
         // every single utterance, while a missing one only shows when
         // appending, and the caller passes the character whenever it has it.
         assert!(!needs_leading_space(None));
+    }
+
+    /// A failed write may only be retried when it delivered nothing.
+    ///
+    /// The live failure this encodes, probed straight out of Discord:
+    ///
+    ///   "  tthhee  qquuiicckk  bbrroowwnn the quick brown"
+    ///
+    /// which is " the quick brown" with every character doubled, followed by
+    /// a clean copy. The batched CGEvent path had posted some chunks before
+    /// failing, the caller treated the whole attempt as failed, and the
+    /// paced path retyped the entire string on top.
+    ///
+    /// The rule is about what the error PROVES, not which error it is:
+    /// `Unsupported` is returned before anything is posted, so a retry is
+    /// safe. `Transport` means the sequence broke partway, so it is not.
+    #[test]
+    #[cfg(all(target_os = "macos", feature = "display"))]
+    fn only_a_provably_empty_failure_may_be_retried() {
+        use text_target::TargetError;
+
+        // Returned before a single event is posted (empty text, or missing
+        // Accessibility trust), so nothing reached the field.
+        assert!(
+            retry_is_safe(&TargetError::Unsupported("no trust")),
+            "a refusal that posted nothing is safe to retry"
+        );
+
+        // Returned when event creation failed mid-sequence, which says
+        // nothing about how many earlier chunks already landed.
+        assert!(
+            !retry_is_safe(&TargetError::Transport("event creation failed".into())),
+            "a partial write must never be retyped"
+        );
     }
 }
