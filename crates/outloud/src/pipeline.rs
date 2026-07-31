@@ -720,6 +720,7 @@ pub async fn run(
                             }
                         }
                         if cfg.once {
+                            hold_for_inspection();
                             return Ok(reports);
                         }
                     }
@@ -859,6 +860,25 @@ async fn settle_streamed(
 
 /// The back half: transcript -> (parse -> apply ->) write -> state updates.
 /// Returns `None` for the quiet empty-transcript path.
+/// Keep the process alive after a `--once` run so its final overlay state can
+/// be seen.
+///
+/// A visible state is only actually visible if something renders it, and a
+/// run that exits on commit tears the overlay down before that can be
+/// checked. Reading the log proves a value was computed; it does not prove a
+/// user could ever read it. This closes that gap for anyone verifying by eye
+/// or by screenshot.
+fn hold_for_inspection() {
+    let Some(ms) = std::env::var("OUTLOUD_HOLD_MS")
+        .ok()
+        .and_then(|v| v.parse::<u64>().ok())
+    else {
+        return;
+    };
+    eprintln!("outloud: holding {ms}ms so the final overlay state can be inspected");
+    std::thread::sleep(std::time::Duration::from_millis(ms));
+}
+
 async fn commit_transcript(
     engine: &mut Engine,
     fl: &InFlight,
@@ -916,17 +936,36 @@ async fn commit_transcript(
     // published on its own. `live_detail` is explicitly cleared by the next
     // state change, and the next state change is one line below, so a detail
     // set before the write never survived to be read.
-    let focus_note = moved_to
-        .as_ref()
-        .map(|app| format!("text went to {app}, not where you started"));
+    // Where a successful utterance comes to rest. Normally Idle, but Error
+    // when focus moved, because the text landed somewhere the user was not
+    // looking, which is a failure from their side even though every
+    // mechanical step reported success.
+    //
+    // Decided BEFORE transitioning, not corrected afterwards: Idle -> Error
+    // is illegal by design (Idle is a resting state, not a route into an
+    // error), so setting Idle first and fixing it up was silently dropped
+    // and the warning never rendered. Error is reachable from Transcribing
+    // and Injecting, which is where we actually are.
+    //
+    // Error rather than a detail on Idle because Idle renders nothing at all
+    // (OverlayState::overlay_visible), so a note attached to it cannot be read.
+    let settled = |engine: &mut Engine| match &moved_to {
+        Some(app) => engine.transition(
+            OverlayState::Error,
+            Some(format!(
+                "focus moved while you spoke -> your text went to {app}"
+            )),
+        ),
+        None => engine.transition(OverlayState::Idle, None),
+    };
 
     let outcome_str = match outcome {
         Outcome::Wrote { via, .. } => {
-            engine.transition(OverlayState::Idle, focus_note.clone());
+            settled(engine);
             via
         }
         Outcome::Suppressed { .. } => {
-            engine.transition(OverlayState::Idle, None);
+            settled(engine);
             "suppressed (OUTLOUD_NO_INJECT)".into()
         }
         Outcome::EmptyTranscript => {

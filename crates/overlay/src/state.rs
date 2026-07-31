@@ -183,4 +183,43 @@ mod tests {
         assert_eq!(ModelLoading.to_string(), "model-loading");
         assert_eq!(DegradedOffline.to_string(), "degraded-offline");
     }
+
+    #[test]
+    fn focus_warning_route_is_reachable_and_idle_is_not_a_detour() {
+        // Regression, found by running the app rather than reading it: the
+        // focus-moved warning was implemented by transitioning to Idle and
+        // then "correcting" to Error. That correction is illegal, so it was
+        // dropped and the warning never rendered, three separate times.
+        //
+        // Both halves matter, so both are pinned:
+        // 1. Idle -> Error stays ILLEGAL. Idle is where a finished utterance
+        //    rests; letting it back into Error would make the broken
+        //    post-hoc-correction shape silently start working, which is
+        //    worse than failing, because it hides the design mistake.
+        assert!(
+            !Idle.can_transition_to(Error),
+            "Idle must not route into Error; decide the terminal state before \
+             transitioning instead of correcting afterwards"
+        );
+
+        // 2. The states a write actually finishes from CAN reach Error, so
+        //    picking the terminal state up front has somewhere to go.
+        for from in [Transcribing, Injecting] {
+            assert!(
+                from.can_transition_to(Error),
+                "{from} must reach Error so a focus move can be reported"
+            );
+        }
+
+        // And Error must render, or the warning is computed but unreadable,
+        // which is the failure mode that hid this for so long.
+        assert!(
+            Error.overlay_visible(),
+            "Error must be visible or the warning cannot be read"
+        );
+        assert!(
+            !Idle.overlay_visible(),
+            "Idle renders nothing, which is why the warning cannot live there"
+        );
+    }
 }
