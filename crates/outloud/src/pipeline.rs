@@ -484,14 +484,26 @@ pub async fn run(
                             // From the key-down snapshot, so the commit path
                             // can tell whether focus moved under it.
                             //
-                            // Falls back to `frontmost_app()` because the
-                            // snapshot fails outright when no TEXT element is
-                            // focused, which is exactly the case in AX-hostile
-                            // apps: measured live, Discord gives
-                            // frontmost_app=Some("Discord") while
-                            // snapshot.app=None. Naming the app needs only the
-                            // application, not a readable field, so the weaker
-                            // lookup is the right source for this one fact.
+                            // Falls back to `frontmost_app()` only when the
+                            // snapshot has no name at all, which happens
+                            // whenever no text element is focused at key-down.
+                            //
+                            // The snapshot stays FIRST on purpose: it is
+                            // captured atomically with the field, while
+                            // `frontmost_app` races focus. Measured while
+                            // checking this, the two genuinely disagree,
+                            // frontmost_app said "Discord" when the snapshot
+                            // said "Finder". So this is a last resort for
+                            // "some name beats no name", not a preferred
+                            // source.
+                            //
+                            // Correcting an earlier claim: I believed apps
+                            // like Discord and Messages structurally hide
+                            // their name here. They do not. Probed with their
+                            // text fields actually focused, both report their
+                            // own name. The Nones came from moments with no
+                            // focused field, which is common at key-down but
+                            // is not a property of the app.
                             targeted_app: snap
                                 .as_ref()
                                 .and_then(|s| s.app.clone())

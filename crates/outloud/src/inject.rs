@@ -887,11 +887,12 @@ pub fn focus_moved_to(targeted: Option<&str>) -> Option<String> {
     // window that never held their text.
     #[cfg(target_os = "macos")]
     {
-        // Same fallback as the key-down side: the snapshot fails when no
-        // text element is focused, and an app that stole focus may well not
-        // have one. Comparing a real name against None reads as "cannot
-        // tell", which silently disabled the warning in precisely the
-        // AX-hostile apps most likely to steal focus.
+        // Same fallback as the key-down side, and for the same reason: an
+        // app that just stole focus may not have a focused text element yet,
+        // and comparing a real name against None reads as "cannot tell",
+        // which suppresses the warning exactly when it is most wanted.
+        //
+        // Snapshot first, since it cannot race focus the way this can.
         let now = ax_edit::snapshot_focused()
             .ok()
             .and_then(|s| s.app)
@@ -1602,13 +1603,22 @@ mod tier_tests {
     /// looking, and they cannot tell that from the app being broken.
     ///
     /// Observed while testing Messages: Discord raised itself and dictations
-    /// aimed at Messages landed in Discord. Measured afterwards, Messages
-    /// resolves the same way Discord does, frontmost_app=Some("Messages")
-    /// with snapshot.app=None, so before the frontmost_app fallback the
-    /// warning could not fire there at all. A focus theft out of Messages
-    /// was therefore silently invisible, which fits the original report of
-    /// text that simply vanished. That is almost certainly what
-    /// "dictation does not work in iMessage" was.
+    /// aimed at Messages landed in Discord. That is almost certainly what
+    /// "dictation does not work in iMessage" was: the text was never lost,
+    /// it was delivered to whichever window had grabbed focus.
+    ///
+    /// Reproduced end to end after the fix: with Messages targeted and
+    /// Discord raising itself mid-utterance, the overlay names Discord.
+    ///
+    /// A note on a wrong turn, kept because it was nearly believed: an
+    /// earlier probe read snapshot.app=None for Messages, and I concluded
+    /// the warning had been structurally dead there. Reverting the
+    /// frontmost_app fallback disproved it, the warning still fired, and a
+    /// direct probe with Messages frontmost showed app=Some("Messages") on
+    /// an AXTextField. The None was simply a moment with no focused field,
+    /// not a property of the app. The fallback is still right, because
+    /// Discord genuinely does return None, but Messages was never the case
+    /// that needed it.
     #[test]
     fn a_moved_target_names_where_the_text_went() {
         assert_eq!(
