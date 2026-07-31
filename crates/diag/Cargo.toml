@@ -14,6 +14,8 @@ description = "Environmental diagnostics: turn confusing failures into named nex
 anyhow.workspace = true
 # Only for the accessibility trust probe; diag never edits text itself.
 ax-edit = { path = "../ax-edit" }
+# Only for the Input Monitoring probe; diag never binds a hotkey itself.
+hotkey = { path = "../hotkey" }
 
 [[bin]]
 name = "doctor"

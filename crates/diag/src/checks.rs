@@ -901,6 +901,40 @@ pub fn macos_major(version: &str) -> Option<u32> {
     version.split('.').next()?.parse().ok()
 }
 
+/// Input Monitoring, the permission whose only symptom is silence.
+///
+/// Without it the hotkey never fires, so the app looks completely dead:
+/// no overlay, no text, no error. It is a SEPARATE grant from
+/// Accessibility and lives in a different System Settings pane, which is
+/// why "I granted permission and it still does nothing" is such a common
+/// report. The doctor did not check it at all, so its most likely cause
+/// was the one thing the diagnostics could not name.
+pub struct InputMonitoringPermission;
+
+impl Check for InputMonitoringPermission {
+    fn name(&self) -> &'static str {
+        "input-monitoring-permission"
+    }
+
+    fn run(&self, _env: &Env) -> CheckOutcome {
+        if !cfg!(target_os = "macos") {
+            return CheckOutcome::pass("not macOS: no Input Monitoring grant exists here");
+        }
+        if hotkey::has_input_monitoring() {
+            CheckOutcome::pass("hotkey can read key events")
+        } else {
+            CheckOutcome::fail(
+                "no Input Monitoring access: the hotkey will never fire, so the app \
+                 will appear to do nothing at all",
+                ErrorClass::Permission,
+                "System Settings > Privacy & Security > Input Monitoring: enable the \
+                 toggle for this app. This is a DIFFERENT grant from Accessibility; \
+                 both are needed, and ad-hoc rebuilds silently void both",
+            )
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -209,6 +209,10 @@ pub struct Report {
 pub fn registry() -> Vec<Box<dyn Check>> {
     vec![
         Box::new(checks::AccessibilityPermission),
+        // Directly after Accessibility: they are adjacent in the user's mind,
+        // both are required, and missing this one is indistinguishable from a
+        // crash.
+        Box::new(checks::InputMonitoringPermission),
         Box::new(checks::MicrophonePermission),
         Box::new(checks::CodeSignature),
         Box::new(checks::BundleLaunch),
