@@ -65,6 +65,7 @@ fn main() {
     let command = args.first().map(String::as_str).unwrap_or("probe");
 
     let exit = match command {
+        "probe" if wants_trust_only(&args) => cmd_probe_trust_only(),
         "probe" => cmd_probe(),
         "watch" => cmd_watch(args.get(1).and_then(|s| s.parse().ok()).unwrap_or(1000)),
         "replace" => cmd_replace(&args[1..].join(" ")),
@@ -178,6 +179,32 @@ fn require_trust() -> bool {
     );
     ax_edit::is_trusted(true);
     true
+}
+
+/// True when `probe` was asked only about accessibility trust.
+///
+/// Extracted from the dispatch match so it can be tested: scripts branch on
+/// this, and getting it wrong silently turns "trusted" into "not trusted",
+/// which reads as a permissions problem nobody can reproduce.
+fn wants_trust_only(args: &[String]) -> bool {
+    args.iter().any(|a| a == "--trust-only")
+}
+
+/// `probe --trust-only`: answer ONLY "is this binary trusted for
+/// accessibility", with no dependence on what happens to be focused.
+///
+/// Scripts need to branch on trust, and plain `probe` conflates two very
+/// different failures behind the same exit code: a permanent permissions
+/// problem, and the transient "no text field is focused right now". The
+/// real-app harness reported the second as the first, sending readers to
+/// System Settings to fix something that was not broken.
+fn cmd_probe_trust_only() -> i32 {
+    if require_trust() {
+        println!("accessibility: trusted");
+        0
+    } else {
+        1
+    }
 }
 
 fn cmd_probe() -> i32 {
@@ -663,7 +690,7 @@ fn truncate(text: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::truncate;
+    use super::{truncate, wants_trust_only};
 
     #[test]
     fn take_flag_value_extracts_and_strips() {
@@ -705,5 +732,31 @@ mod tests {
         let long = "é".repeat(200);
         let out = truncate(&long);
         assert!(out.starts_with(&"é".repeat(120)));
+    }
+
+    /// `probe --trust-only` must be recognised, because the real-app harness
+    /// branches on it to decide whether the pipeline can run at all.
+    ///
+    /// Regression: the harness previously used plain `probe`, which exits
+    /// nonzero for TWO unrelated reasons, untrusted OR nothing focused. A
+    /// trusted binary with no focused text field was therefore reported as a
+    /// permissions failure, and every pipeline test skipped while pointing
+    /// the reader at System Settings to fix something that worked.
+    #[test]
+    fn trust_only_flag_is_recognised_anywhere_in_the_args() {
+        let a = |v: &[&str]| -> Vec<String> { v.iter().map(|s| s.to_string()).collect() };
+
+        assert!(wants_trust_only(&a(&["probe", "--trust-only"])));
+        // Position must not matter: callers append flags in any order.
+        assert!(wants_trust_only(&a(&["--trust-only", "probe"])));
+
+        // And plain probe must keep its full behaviour, or every existing
+        // caller silently starts getting the trust-only answer instead.
+        assert!(!wants_trust_only(&a(&["probe"])));
+        assert!(!wants_trust_only(&a(&[])));
+        // Near-misses must not count: a typo silently answering "trusted"
+        // would be worse than failing.
+        assert!(!wants_trust_only(&a(&["probe", "--trust"])));
+        assert!(!wants_trust_only(&a(&["probe", "trust-only"])));
     }
 }

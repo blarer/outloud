@@ -23,12 +23,26 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
 # Prefer the bundled binary: TCC pins accessibility grants to the bundle's
 # identity, and a bare target/release binary is judged against the terminal.
+#
+# Existence is not enough, so this picks the first candidate that is actually
+# TRUSTED rather than the first that is present. Preferring a present-but-
+# untrusted bundle skipped every pipeline test while a usable binary sat
+# right behind it in the list, which reads as "the harness cannot run here"
+# when the truth is "it looked at the wrong binary".
 BIN=""
+BIN_UNTRUSTED=""
 for candidate in \
     "$ROOT/dist/OutLoud.app/Contents/MacOS/OutLoud" \
     "$ROOT/target/release/spike-cli"; do
-    [[ -x "$candidate" ]] && BIN="$candidate" && break
+    [[ -x "$candidate" ]] || continue
+    [[ -z "$BIN_UNTRUSTED" ]] && BIN_UNTRUSTED="$candidate"
+    if "$candidate" probe --trust-only >/dev/null 2>&1; then
+        BIN="$candidate"
+        break
+    fi
 done
+# Nothing trusted: keep one for the diagnostic message below.
+[[ -z "$BIN" ]] && BIN="$BIN_UNTRUSTED"
 
 PASS=0; SKIP=0; FAIL=0
 pass() { printf 'PASS  %s\n' "$1"; PASS=$((PASS+1)); }
@@ -71,14 +85,22 @@ if [[ -z "$BIN" ]]; then
     PIPELINE=no
 else
     # AX trust decides whether we can run the real pipeline or only the
-    # AppleScript-level scaffolding checks. `probe` exits nonzero untrusted.
-    if "$BIN" probe >/dev/null 2>&1; then
+    # AppleScript-level scaffolding checks.
+    #
+    # Uses `probe --trust-only`, which asks ONLY about trust. Plain `probe`
+    # also exits nonzero when no text field happens to be focused, so the
+    # harness used to report a transient "click somewhere first" condition as
+    # a permanent permissions failure and send the reader to System Settings
+    # to fix something that was not broken.
+    if "$BIN" probe --trust-only >/dev/null 2>&1; then
         PIPELINE=yes
     else
         PIPELINE=no
         echo "note: $BIN lacks accessibility trust (TCC judges the responsible"
         echo "      process; see docs/macos-permissions.md). Pipeline tests will skip;"
         echo "      AppleScript-level assertions still run."
+        echo "      If this build was just rebuilt, the ad-hoc signature changed and"
+        echo "      silently voided the grant: tccutil reset Accessibility dev.outloud.outloud"
     fi
 fi
 
