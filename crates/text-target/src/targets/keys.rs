@@ -137,6 +137,55 @@ const AX_VALUE_IGNORED_APPS: &[&str] = &[
 /// user's clipboard for a moment, so it should be earned by measurement.
 const TYPING_DISCARDED_APPS: &[&str] = &["discord"];
 
+/// What a destination will actually accept, as one answer instead of two
+/// booleans every caller has to remember to combine.
+///
+/// Five separate bypasses of these lists shipped, each a path that consulted
+/// one list, the wrong list, or neither: streaming twice, the
+/// `deliver_without_ax` fallbacks, the edit path, and the AX-ignored branch.
+/// Every one had the facts available and simply did not ask. Two exported
+/// predicates make "did not ask" the easy default, so the shape of the API
+/// was the bug.
+///
+/// Call [`accepts`] once per destination and match on the answer. A new
+/// transport cannot silently inherit the wrong default, because there is no
+/// default: the match must name every case.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Acceptance {
+    /// Ordinary destination: accessibility writes stick and typing works.
+    /// Both the AX tier and streaming are available.
+    AxAndTyping,
+    /// The editor accepts an `AXValue` write and ignores it, but takes
+    /// keystrokes normally (Slack, Notion, and the rest of
+    /// [`AX_VALUE_IGNORED_APPS`]). Typing is the transport; streaming must
+    /// decline, because streaming's revisions ARE accessibility writes.
+    TypingOnly,
+    /// The app discards synthetic keystrokes shortly after they land AND
+    /// ignores accessibility writes (see [`TYPING_DISCARDED_APPS`]).
+    /// Clipboard paste is the only transport that reaches it.
+    ClipboardOnly,
+}
+
+/// What transports `app` will actually accept.
+///
+/// `None` means the destination is unknown, which is treated as an ordinary
+/// one: assuming the worst would push every unrecognised app onto the
+/// clipboard and clobber the user's pasteboard on ordinary dictation.
+pub fn accepts(app: Option<&str>) -> Acceptance {
+    let Some(app) = app else {
+        return Acceptance::AxAndTyping;
+    };
+    // Narrowest fact first: the discard list is a strict subset of the
+    // AX-ignored list, so checking it second would never fire.
+    if discards_synthetic_typing(app) {
+        Acceptance::ClipboardOnly
+    } else if ignores_ax_value_writes(app) {
+        Acceptance::TypingOnly
+    } else {
+        Acceptance::AxAndTyping
+    }
+}
+
 /// Whether `app` throws away synthetic keystrokes after accepting them (see
 /// [`TYPING_DISCARDED_APPS`]).
 pub fn discards_synthetic_typing(app: &str) -> bool {
@@ -894,5 +943,42 @@ mod sendinput_tests {
             typing_strategy_for(None, false),
             TypingStrategy::PerCharPaced
         );
+    }
+
+    /// One answer per destination, so a new transport cannot inherit a wrong
+    /// default by forgetting to consult a list.
+    ///
+    /// Five bypasses shipped before this existed, each a path that asked one
+    /// list, the wrong list, or neither.
+    #[test]
+    fn acceptance_names_the_transport_for_every_destination() {
+        // Discord is on BOTH lists, and the clipboard answer must win: it is
+        // the narrower fact and the only transport that reaches it.
+        assert_eq!(accepts(Some("Discord")), Acceptance::ClipboardOnly);
+
+        // AX-ignored but types fine. Streaming must decline for these (its
+        // revisions are AX writes) while typing still works.
+        for app in ["Slack", "Notion", "Linear", "Figma", "Signal", "Teams"] {
+            assert_eq!(
+                accepts(Some(app)),
+                Acceptance::TypingOnly,
+                "{app} ignores AX writes but accepts keystrokes"
+            );
+        }
+
+        // Ordinary apps keep the fast path.
+        for app in ["TextEdit", "Xcode", "Safari"] {
+            assert_eq!(accepts(Some(app)), Acceptance::AxAndTyping, "{app}");
+        }
+
+        // Unknown destination is treated as ordinary ON PURPOSE: assuming the
+        // worst would clobber the pasteboard on every unrecognised app.
+        assert_eq!(accepts(None), Acceptance::AxAndTyping);
+
+        // Every app on the discard list must resolve to ClipboardOnly, or a
+        // future addition would silently get typed into.
+        for app in TYPING_DISCARDED_APPS {
+            assert_eq!(accepts(Some(app)), Acceptance::ClipboardOnly, "{app}");
+        }
     }
 }

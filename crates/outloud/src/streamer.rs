@@ -190,13 +190,15 @@ pub fn wants_streaming(prefer: bool, mode: &crate::inject::Mode, app: Option<&st
     // costs those apps live partials and leaves commit-on-release working,
     // which is the correct trade: no in-place preview beats a preview that
     // silently does not exist.
-    if app.is_some_and(|a| {
-        text_target::targets::keys::discards_synthetic_typing(a)
-            || text_target::targets::keys::ignores_ax_value_writes(a)
-    }) {
-        return false;
+    use text_target::targets::keys::{accepts, Acceptance};
+    match accepts(app) {
+        // Streaming's revisions are accessibility writes, so it needs a
+        // destination that honours them. Matching exhaustively means a new
+        // Acceptance variant is a compile error here rather than a silent
+        // "keep streaming".
+        Acceptance::AxAndTyping => prefer && matches!(mode, crate::inject::Mode::Dictate),
+        Acceptance::TypingOnly | Acceptance::ClipboardOnly => false,
     }
-    prefer && matches!(mode, crate::inject::Mode::Dictate)
 }
 
 #[cfg(test)]

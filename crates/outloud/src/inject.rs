@@ -563,19 +563,17 @@ fn insert_with_fallback(text: &str) -> Outcome {
             // as the user's own Cmd-V, which an editor cannot easily tell
             // apart from a human.
             #[cfg(feature = "display")]
-            if snap
-                .app
-                .as_deref()
-                .is_some_and(text_target::targets::keys::discards_synthetic_typing)
-            {
+            if matches!(
+                text_target::targets::keys::accepts(snap.app.as_deref()),
+                text_target::targets::keys::Acceptance::ClipboardOnly
+            ) {
                 return paste_with_leading_space(text, char_before_caret(&snap));
             }
 
-            if snap
-                .app
-                .as_deref()
-                .is_some_and(text_target::targets::keys::ignores_ax_value_writes)
-            {
+            if matches!(
+                text_target::targets::keys::accepts(snap.app.as_deref()),
+                text_target::targets::keys::Acceptance::TypingOnly
+            ) {
                 return deliver_without_ax(
                     text,
                     &AxError::NotSettable,
@@ -806,23 +804,19 @@ fn write_focused(text: &str, typing: TypingChoice) -> Outcome {
     //     clobbering the clipboard.
     #[cfg(feature = "display")]
     {
-        let app = ax_edit::frontmost_app();
-        if app
-            .as_deref()
-            .is_some_and(text_target::targets::keys::discards_synthetic_typing)
-        {
-            // No leading space: callers pass either a spliced whole-field
-            // value or a selection replacement, both already spaced upstream.
-            return paste_with_leading_space(text, None);
-        }
-        if app
-            .as_deref()
-            .is_some_and(text_target::targets::keys::ignores_ax_value_writes)
-        {
-            // Type instead. NotSettable is the honest reason: the element
-            // accepts the write and does not honour it, which is what the
-            // AX tier being unusable means from here.
-            return deliver_without_ax(text, &AxError::NotSettable, typing, None);
+        use text_target::targets::keys::{accepts, Acceptance};
+        match accepts(ax_edit::frontmost_app().as_deref()) {
+            // No leading space on either fallback: callers pass a spliced
+            // whole-field value or a selection replacement, both already
+            // spaced upstream.
+            Acceptance::ClipboardOnly => return paste_with_leading_space(text, None),
+            // NotSettable is the honest reason: the element accepts the write
+            // and does not honour it, which is what "the AX tier is unusable"
+            // means from here.
+            Acceptance::TypingOnly => {
+                return deliver_without_ax(text, &AxError::NotSettable, typing, None)
+            }
+            Acceptance::AxAndTyping => {}
         }
     }
     match ax_edit::replace_focused(text) {
@@ -1179,10 +1173,10 @@ fn deliver_without_ax(
     // every route out of this function respects it, including ones added
     // later.
     #[cfg(feature = "display")]
-    if ax_edit::frontmost_app()
-        .as_deref()
-        .is_some_and(text_target::targets::keys::discards_synthetic_typing)
-    {
+    if matches!(
+        text_target::targets::keys::accepts(ax_edit::frontmost_app().as_deref()),
+        text_target::targets::keys::Acceptance::ClipboardOnly
+    ) {
         return paste_with_leading_space(text, preceding);
     }
     // Typing and pasting both append blind: neither can read the field, so
