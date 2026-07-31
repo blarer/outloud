@@ -570,6 +570,10 @@ fn insert_with_fallback(text: &str) -> Outcome {
                 return paste_with_leading_space(text, char_before_caret(&snap));
             }
 
+            // Same feature gate as the clipboard branch above: the per-app
+            // lists live behind `display` because they describe GUI
+            // destinations, and a headless build has none to exclude.
+            #[cfg(feature = "display")]
             if matches!(
                 text_target::targets::keys::accepts(snap.app.as_deref()),
                 text_target::targets::keys::Acceptance::TypingOnly

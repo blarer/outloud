@@ -190,14 +190,26 @@ pub fn wants_streaming(prefer: bool, mode: &crate::inject::Mode, app: Option<&st
     // costs those apps live partials and leaves commit-on-release working,
     // which is the correct trade: no in-place preview beats a preview that
     // silently does not exist.
-    use text_target::targets::keys::{accepts, Acceptance};
-    match accepts(app) {
-        // Streaming's revisions are accessibility writes, so it needs a
-        // destination that honours them. Matching exhaustively means a new
-        // Acceptance variant is a compile error here rather than a silent
-        // "keep streaming".
-        Acceptance::AxAndTyping => prefer && matches!(mode, crate::inject::Mode::Dictate),
-        Acceptance::TypingOnly | Acceptance::ClipboardOnly => false,
+    //
+    // `keys` lives behind the `display` feature, because the per-app lists
+    // describe GUI destinations. A headless build has no such destination, so
+    // there is nothing to exclude and the plain rule applies.
+    #[cfg(feature = "display")]
+    {
+        use text_target::targets::keys::{accepts, Acceptance};
+        match accepts(app) {
+            // Streaming's revisions are accessibility writes, so it needs a
+            // destination that honours them. Matching exhaustively means a new
+            // Acceptance variant is a compile error here rather than a silent
+            // "keep streaming".
+            Acceptance::AxAndTyping => prefer && matches!(mode, crate::inject::Mode::Dictate),
+            Acceptance::TypingOnly | Acceptance::ClipboardOnly => false,
+        }
+    }
+    #[cfg(not(feature = "display"))]
+    {
+        let _ = app;
+        prefer && matches!(mode, crate::inject::Mode::Dictate)
     }
 }
 
