@@ -285,4 +285,52 @@ mod tests {
         // Kept so the user sees what is being committed.
         assert_eq!(f.partial_text, "hello world");
     }
+
+    /// The full focus-moved sequence, end to end, in the order the pipeline
+    /// actually walks it.
+    ///
+    /// The unit tests above each covered one link: transitions are legal,
+    /// Error auto-dismisses, details are published. All of them passed while
+    /// the warning was invisible in the real app for three attempts, because
+    /// none of them walked the whole path a real utterance takes.
+    #[test]
+    fn focus_moved_warning_survives_the_whole_utterance_path() {
+        let (mut e, shared) = Engine::new();
+        e.transition(Idle, None);
+        e.transition(Listening, None);
+        e.transition(Transcribing, None);
+
+        // The terminal state is CHOSEN here, not corrected afterwards. The
+        // bug was transitioning to Idle first and then trying to reach Error,
+        // which is illegal, so the warning was silently dropped.
+        e.transition(
+            Error,
+            Some("focus moved while you spoke -> your text went to Discord".into()),
+        );
+
+        assert!(
+            !e.saw_illegal_transition(),
+            "the focus route must not rely on an illegal transition"
+        );
+
+        // Computed is not the same as readable: assert the user-facing text
+        // is actually in the published frame, which is what the overlay draws.
+        let f = shared.snapshot();
+        assert_eq!(f.state, Error);
+        let detail = f.detail.expect("the warning must reach the overlay frame");
+        assert!(
+            detail.contains("Discord"),
+            "the warning must name where the text went, got {detail:?}"
+        );
+        assert!(
+            overlay::OverlayState::Error.overlay_visible(),
+            "and Error must be a state the overlay actually draws"
+        );
+
+        // And it must clear on its own, or the daemon looks wedged after a
+        // problem that cost the user nothing.
+        e.dismiss_stale_error(std::time::Duration::ZERO);
+        assert_eq!(e.state(), Idle);
+        assert!(!e.saw_illegal_transition());
+    }
 }
