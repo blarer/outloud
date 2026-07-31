@@ -176,7 +176,24 @@ impl Streamer {
 /// utterances into Discord took clipboard-paste, ax-stream and
 /// synthetic-keys-paced, and only the first survived.
 pub fn wants_streaming(prefer: bool, mode: &crate::inject::Mode, app: Option<&str>) -> bool {
-    if app.is_some_and(text_target::targets::keys::discards_synthetic_typing) {
+    // BOTH lists, because streaming's transport is an accessibility write.
+    //
+    // `AxRegion::apply` writes AXSelectedTextRange and AXSelectedText
+    // directly (crates/outloud/src/ax_stream.rs), so an app that ignores
+    // accessibility writes ignores these too: the revision lands nowhere and
+    // the user watches nothing appear while speaking.
+    //
+    // The narrower `discards_synthetic_typing` list alone was not enough. It
+    // holds Discord only, while AX_VALUE_IGNORED_APPS also holds Slack,
+    // Notion, Linear, Figma, Signal, Element, Teams, Obsidian and Spotify,
+    // every one of which would have streamed into a void. Declining here
+    // costs those apps live partials and leaves commit-on-release working,
+    // which is the correct trade: no in-place preview beats a preview that
+    // silently does not exist.
+    if app.is_some_and(|a| {
+        text_target::targets::keys::discards_synthetic_typing(a)
+            || text_target::targets::keys::ignores_ax_value_writes(a)
+    }) {
         return false;
     }
     prefer && matches!(mode, crate::inject::Mode::Dictate)
@@ -228,6 +245,17 @@ mod tests {
             &crate::inject::Mode::Dictate,
             Some("TextEdit")
         ));
+
+        // Streaming writes AXSelectedText, so EVERY app that ignores
+        // accessibility writes must decline, not just the one that also
+        // discards typing. Otherwise the user speaks and watches nothing
+        // appear, because the revisions land nowhere.
+        for app in ["Slack", "Notion", "Linear", "Figma", "Signal", "Teams"] {
+            assert!(
+                !wants_streaming(true, &crate::inject::Mode::Dictate, Some(app)),
+                "{app} ignores AX writes, so streaming would show nothing"
+            );
+        }
     }
 
     /// Off-macOS (and in CI with no focused field) `begin` must decline,

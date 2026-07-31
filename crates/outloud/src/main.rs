@@ -385,7 +385,14 @@ fn main() -> anyhow::Result<()> {
         // `insertion.mode = "stream"` in config.toml. `--once` keeps the
         // buffered path: it is a measurement mode and its numbers must stay
         // comparable across runs.
-        prefer_streaming: !args.once && menu_host.as_ref().is_some_and(|h| h.prefer_streaming()),
+        // OUTLOUD_FORCE_STREAM=1 makes the streaming path reachable under
+        // `--once`, which otherwise disables it outright (no menu host to
+        // read the setting from). Without this the streaming transport
+        // decision could not be exercised offline at all, so a guard added
+        // to `wants_streaming` was verifiable only by unit test and never in
+        // a real app. That gap is how the Discord streaming bypass survived.
+        prefer_streaming: std::env::var_os("OUTLOUD_FORCE_STREAM").is_some_and(|v| v == "1")
+            || (!args.once && menu_host.as_ref().is_some_and(|h| h.prefer_streaming())),
         // Falls back to the schema default when there is no menu host, which
         // is the `--once` measurement path: same threshold as a real run, so
         // the numbers stay comparable.
