@@ -1003,13 +1003,6 @@ fn focus_changed(targeted: Option<&str>, current: Option<&str>) -> Option<String
     Some(now.to_string())
 }
 
-/// Non-macOS builds have no accessibility layer to ask, so they cannot tell
-/// whether focus moved and must not pretend otherwise.
-#[cfg(not(target_os = "macos"))]
-pub fn focus_moved_to(_targeted: Option<&str>) -> Option<String> {
-    None
-}
-
 /// Paste `text` at the caret, adding the separating space the join needs.
 ///
 /// For destinations that accept neither an AXValue write nor synthetic
