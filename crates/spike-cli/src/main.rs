@@ -495,8 +495,15 @@ fn cmd_inspect(app_name: &str) -> i32 {
                 "{app_name}: {} window(s), no text fields exposed",
                 scan.windows
             );
+            // Deliberately not "cannot be written to". Electron builds
+            // accessibility nodes lazily for the focused subtree, so an
+            // unfocused Discord reports zero fields while a focused probe
+            // finds a writable AXTextArea. Concluding "unsupported" from
+            // this scan would be wrong in exactly the apps people use most.
             println!(
-                "this application needs the {} fallback",
+                "this may mean the app builds its tree lazily (Electron does); \
+                 focus its text field and run `probe` before concluding it \
+                 needs the {} fallback",
                 RewriteStrategy::ClipboardPaste
             );
             0

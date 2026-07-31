@@ -13,21 +13,37 @@
 #
 # This reports which one, without dictating anything.
 #
-# Usage: scripts/probe-app.sh
-#   Click into the app's message box first, then run it.
+# Usage: scripts/probe-app.sh [AppName] [delay-seconds]
+#
+#   scripts/probe-app.sh Discord     scan Discord, then probe whatever is
+#                                    focused after the delay
+#   scripts/probe-app.sh             probe only
+#
+# The scan pass works on a running app that is not focused; the probe pass
+# needs the caret in the field you care about.
 
 set -uo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
 
-DELAY="${1:-5}"
+APP="${1:-}"
+DELAY="${2:-5}"
 
 cargo build --release -p spike-cli >/dev/null 2>&1 || cargo build --release -p spike-cli
 
-echo "Click into the target app's text field now. Probing in ${DELAY}s..."
-echo
+# Pass 1: what does this app expose at all? Needs the app running, but NOT
+# focused, so it works when nobody is at the keyboard.
+if [ -n "$APP" ]; then
+    echo "==> scanning $APP (no focus needed)"
+    ./target/release/spike-cli inspect "$APP"
+    echo
+fi
 
+# Pass 2: what would the pipeline actually act on? This one reads the focused
+# element, so it needs a human to put the caret somewhere first.
+echo "==> click into the target app's text field now; probing in ${DELAY}s"
+echo
 ./target/release/spike-cli probe --after "$DELAY"
 
 echo

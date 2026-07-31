@@ -151,3 +151,35 @@ per-row:
 - **AVX2 static-initializer crash class.** Already covered in
   docs/build-and-release.md: Windows builds must respect the baseline
   policy or pre-Haswell machines crash before main.
+
+## Electron apps expose their editor only while it is focused
+
+Measured on Discord, and it changes how these apps must be diagnosed.
+
+Two probes of the same running app, seconds apart:
+
+```
+$ spike-cli probe          # reads the FOCUSED element
+role:      AXTextArea
+app:       Discord
+writable:  value=true selectedText=true
+
+$ spike-cli inspect Discord   # walks the app's whole tree
+Discord: 1 window(s), no text fields exposed
+```
+
+The tree walk already sets `AXManualAccessibility` and waits 400ms for the
+tree to build, so this is not the Chromium opt-in being missed. The message
+box simply is not in the tree until it holds focus, which is consistent with
+Electron building accessibility nodes lazily for the focused subtree.
+
+**Consequence for diagnosis.** "No text fields exposed" from `inspect` is not
+evidence that an app cannot be written to. For Electron destinations it is the
+expected answer, and only a focused `probe` says anything real. A conclusion
+drawn from the scan alone would be wrong in exactly the apps people use most.
+
+**Consequence for the product.** None directly: injection always runs against
+the focused element, which is the case that works. It matters because it makes
+these apps hard to diagnose without a human at the keyboard, and because the
+same lazy-tree behaviour is the likeliest reason a write that succeeds once
+can fail afterwards.
