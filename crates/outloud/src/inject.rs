@@ -522,6 +522,24 @@ fn insert_with_fallback(text: &str) -> Outcome {
             // model", so the destination's identity is the only honest
             // signal. Treat it as a refusal and type instead, which enters
             // through the same path a human's keyboard does.
+            // Checked BEFORE the AXValue rule, because an app can fail both
+            // tiers and this is the narrower fact. Discord ignores AXValue
+            // writes AND discards synthetic keystrokes about a second after
+            // they land (measured; see docs/compat-matrix.md), so typing was
+            // reporting success into a field that then emptied itself.
+            //
+            // A real paste is the remaining option: it travels the same path
+            // as the user's own Cmd-V, which an editor cannot easily tell
+            // apart from a human.
+            #[cfg(feature = "display")]
+            if snap
+                .app
+                .as_deref()
+                .is_some_and(text_target::targets::keys::discards_synthetic_typing)
+            {
+                return paste_with_leading_space(text, char_before_caret(&snap));
+            }
+
             if snap
                 .app
                 .as_deref()
@@ -845,6 +863,55 @@ type TypingChoice = NoTypingStrategy;
 /// WHICH typing path ran: "synthetic-keys-batched" is expected to be ~1ms,
 /// "synthetic-keys-paced" is the deliberate slow path for ttys, and seeing
 /// the wrong one against a given app is the diagnosis.
+/// Paste `text` at the caret, adding the separating space the join needs.
+///
+/// For destinations that accept neither an AXValue write nor synthetic
+/// typing. Skips both tiers rather than falling through them: trying a
+/// transport already known to fail costs a visible second of wrong text in
+/// the user's message box before it is discarded.
+///
+/// The clipboard is saved and restored around the paste, so a dictation does
+/// not silently eat whatever the user had copied.
+#[cfg(all(target_os = "macos", feature = "display"))]
+fn paste_with_leading_space(text: &str, preceding: Option<char>) -> Outcome {
+    use text_target::targets::clipboard::ClipboardTarget;
+    use text_target::TextTarget;
+
+    let owned;
+    let payload = if needs_leading_space(preceding) {
+        owned = format!(" {text}");
+        &owned
+    } else {
+        text
+    };
+
+    match ClipboardTarget::new() {
+        Ok(mut clip) => match clip.insert(payload) {
+            Ok(()) => {
+                // Let the target consume the paste before handing the user's
+                // own clipboard back; restoring too early races the app and
+                // pastes the wrong thing.
+                std::thread::sleep(std::time::Duration::from_millis(150));
+                let _ = clip.restore();
+                Outcome::Wrote {
+                    text: payload.to_string(),
+                    via: "clipboard-paste".into(),
+                }
+            }
+            Err(e) => Outcome::Failed {
+                situation_action: format!(
+                    "clipboard paste refused ({e}) -> check Accessibility permission"
+                ),
+            },
+        },
+        Err(e) => Outcome::Failed {
+            situation_action: format!(
+                "clipboard unavailable ({e}) -> check Accessibility permission"
+            ),
+        },
+    }
+}
+
 /// Whether a failed typing attempt is known to have delivered NOTHING.
 ///
 /// Retrying is only safe when the answer is yes. See the call site for the

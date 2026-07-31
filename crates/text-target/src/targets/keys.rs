@@ -112,6 +112,38 @@ const AX_VALUE_IGNORED_APPS: &[&str] = &[
     "teams",
 ];
 
+/// Destinations that also discard synthetic keystrokes shortly after they
+/// land, leaving clipboard paste as the only transport that reaches them.
+///
+/// Measured on Discord (docs/compat-matrix.md). Polling the focused field
+/// once a second during one dictation:
+///
+/// ```text
+/// t+1s   " The dog is brown and has a lot of fun running through the yard..."
+/// t+2s   "\u{feff}\n"
+/// ```
+///
+/// The text arrives complete and correct, then the field returns to the
+/// app's empty state about a second later. Nothing in the injection path
+/// sends Return, so this is the app discarding the content, not an
+/// accidental submit: its editor reconciles against a model that never
+/// recorded the synthetic events and rewrites the DOM back to it.
+///
+/// This is a STRICT SUBSET of [`AX_VALUE_IGNORED_APPS`] and deliberately
+/// not merged with it. The two lists state different facts, and most apps
+/// that ignore AXValue writes accept typing perfectly well: Slack, Notion
+/// and the rest are on that list and are not known to discard keystrokes.
+/// Promoting an app here costs it the undo-preserving path and clobbers the
+/// user's clipboard for a moment, so it should be earned by measurement.
+const TYPING_DISCARDED_APPS: &[&str] = &["discord"];
+
+/// Whether `app` throws away synthetic keystrokes after accepting them (see
+/// [`TYPING_DISCARDED_APPS`]).
+pub fn discards_synthetic_typing(app: &str) -> bool {
+    let app = app.to_ascii_lowercase();
+    TYPING_DISCARDED_APPS.iter().any(|a| app.contains(a))
+}
+
 /// Whether `app`'s editor ignores an `AXValue` write (see
 /// [`AX_VALUE_IGNORED_APPS`]).
 ///
@@ -774,5 +806,47 @@ mod sendinput_tests {
                 "{app} handles AXValue correctly and must keep the AX tier"
             );
         }
+    }
+
+    /// Discord fails BOTH earlier tiers, so it must be on both lists, and the
+    /// narrower one has to be checked first.
+    ///
+    /// Measured: an AXValue write is accepted and ignored, and synthetic
+    /// keystrokes land and are then discarded about a second later. Only a
+    /// real paste survives.
+    #[test]
+    fn discord_is_on_both_lists() {
+        assert!(ignores_ax_value_writes("Discord"));
+        assert!(discards_synthetic_typing("Discord"));
+        // Same substring matching as the other list, so the beta channels
+        // are covered without being enumerated.
+        assert!(discards_synthetic_typing("Discord Canary"));
+        assert!(discards_synthetic_typing("Discord PTB"));
+    }
+
+    /// The typing-discard list is a STRICT subset, and keeping it that way
+    /// is the point.
+    ///
+    /// Everything on it loses the undo-preserving path and briefly clobbers
+    /// the user's clipboard, so an app belongs here only once measured. The
+    /// other Electron apps ignore AXValue writes but are not known to throw
+    /// away keystrokes, and assuming they do would degrade all of them on
+    /// one app's evidence.
+    #[test]
+    fn typing_discard_is_measured_not_assumed() {
+        for app in ["Slack", "Notion", "Obsidian", "Linear", "Figma", "Teams"] {
+            assert!(
+                ignores_ax_value_writes(app),
+                "{app} should still skip the AXValue tier"
+            );
+            assert!(
+                !discards_synthetic_typing(app),
+                "{app} has not been measured as discarding typing; do not \
+                 promote it without the measurement"
+            );
+        }
+        // A native app is on neither list.
+        assert!(!ignores_ax_value_writes("TextEdit"));
+        assert!(!discards_synthetic_typing("TextEdit"));
     }
 }
