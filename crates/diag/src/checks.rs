@@ -935,6 +935,74 @@ impl Check for InputMonitoringPermission {
     }
 }
 
+/// Whether the installed bundle is older than the built binary.
+///
+/// A stale bundle wasted a long stretch of a debugging session: fixes were
+/// verified against `target/release/outloud` while the user ran a
+/// `dist/OutLoud.app` built ninety minutes earlier, so working code looked
+/// broken and the disagreement was invisible from either side.
+///
+/// Only meaningful in a checkout, where both paths exist. An installed copy
+/// has no build tree to compare against, and says so rather than warning
+/// about a condition the user cannot act on.
+pub struct BundleFreshness;
+
+impl Check for BundleFreshness {
+    fn name(&self) -> &'static str {
+        "bundle-freshness"
+    }
+
+    fn run(&self, _env: &Env) -> CheckOutcome {
+        use std::time::SystemTime;
+
+        // Walk up from the running binary to find a checkout. The doctor may
+        // run from target/debug, target/release, or its own bundle, so the
+        // repo root is wherever both dist/ and target/ sit together.
+        let Ok(exe) = std::env::current_exe() else {
+            return CheckOutcome::pass("cannot locate the running binary");
+        };
+        let root = exe
+            .ancestors()
+            .find(|a| a.join("dist/OutLoud.app").exists() && a.join("target/release").exists());
+        let Some(root) = root else {
+            return CheckOutcome::pass(
+                "not a build checkout (no dist/ and target/ pair to compare)",
+            );
+        };
+        let bundle = root.join("dist/OutLoud.app/Contents/MacOS/OutLoud");
+        let built = root.join("target/release/outloud");
+
+        let mtime = |p: &std::path::Path| -> Option<SystemTime> {
+            std::fs::metadata(p).ok()?.modified().ok()
+        };
+        let (Some(b), Some(t)) = (mtime(&bundle), mtime(&built)) else {
+            return CheckOutcome::pass(
+                "not a build checkout (no dist/ and target/ pair to compare)",
+            );
+        };
+
+        match t.duration_since(b) {
+            // The binary is newer: the bundle does not contain it.
+            // Five minutes, not one: a rebuild takes a while and touching a
+            // source file is not a stale bundle. The failure this catches is
+            // "I fixed that an hour ago", so the threshold only needs to be
+            // well under an hour to be useful, and a false warning teaches
+            // people to ignore the check.
+            Ok(gap) if gap.as_secs() > 300 => CheckOutcome::warn(
+                format!(
+                    "the installed bundle is {} minutes older than the built \
+                     binary, so it does not contain your latest changes",
+                    gap.as_secs() / 60
+                ),
+                ErrorClass::Configuration,
+                "run ./scripts/bundle-outloud-macos.sh, then re-grant \
+                 Accessibility and Input Monitoring (an ad-hoc rebuild voids both)",
+            ),
+            _ => CheckOutcome::pass("bundle is at least as new as the built binary"),
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

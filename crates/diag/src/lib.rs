@@ -216,6 +216,9 @@ pub fn registry() -> Vec<Box<dyn Check>> {
         Box::new(checks::MicrophonePermission),
         Box::new(checks::CodeSignature),
         Box::new(checks::BundleLaunch),
+        // Directly after BundleLaunch: both answer "is the thing you are
+        // running the thing you think you are running".
+        Box::new(checks::BundleFreshness),
         Box::new(checks::WindowVisibility),
         Box::new(checks::ChromiumOptIn),
         Box::new(checks::DisplayServer),
