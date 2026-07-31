@@ -293,7 +293,18 @@ pub async fn run(
             )), if warm_until.is_some() => {
                 warm_until = None;
                 if !listening {
-                    stop_capture(mic.as_mut(), &mut listening, &mut startup, &mut capture_opened_at);
+                    // Warm-hold expiry: the user is not dictating, so this
+                    // must not raise an overlay error out of nowhere. It is
+                    // still logged, because a device that delivered nothing
+                    // for a whole hold is worth a line in the diagnostics.
+                    if let Some(msg) = stop_capture(
+                        mic.as_mut(),
+                        &mut listening,
+                        &mut startup,
+                        &mut capture_opened_at,
+                    ) {
+                        eprintln!("outloud: {msg}");
+                    }
                 }
             }
 
@@ -593,8 +604,19 @@ pub async fn run(
                                     Instant::now()
                                         + std::time::Duration::from_millis(cfg.warm_hold_ms),
                                 );
-                            } else {
-                                stop_capture(mic.as_mut(), &mut listening, &mut startup, &mut capture_opened_at);
+                            } else if let Some(msg) = stop_capture(
+                                mic.as_mut(),
+                                &mut listening,
+                                &mut startup,
+                                &mut capture_opened_at,
+                            ) {
+                                // The ordinary end of an utterance, and the
+                                // one a user actually reaches after speaking
+                                // into a mic that delivered nothing. Dropping
+                                // the verdict here made the key look inert:
+                                // no text, no error, no reason.
+                                eprintln!("outloud: {msg}");
+                                engine.transition(OverlayState::Error, Some(msg));
                             }
                         }
                     }
@@ -770,6 +792,11 @@ pub async fn run(
 ///
 /// Routing every stop through here makes the class impossible rather than
 /// fixing the one path that was found.
+/// `#[must_use]` because ignoring the return value is exactly the bug this
+/// function existed to prevent: two of three callers silently dropped the
+/// silence verdict, so a mic that delivered nothing produced no text and no
+/// error. Discipline did not catch that; the compiler will.
+#[must_use = "the silence verdict must be shown to the user, not dropped"]
 fn stop_capture(
     mic: Option<&mut crate::mic::Mic>,
     listening: &mut bool,
@@ -787,6 +814,11 @@ fn stop_capture(
     // silence check lives in this function rather than at each of the three
     // commit sites: a fault that only some exits detect is a fault users
     // will hit through the exit nobody instrumented.
+    //
+    // Detecting it here is only half the job: the RETURNED message has to be
+    // surfaced by each caller. Two of the three used to discard it, including
+    // the ordinary key-release path, so the check ran on every exit and the
+    // user still saw nothing. Callers must handle the Some.
     match startup.on_utterance_end() {
         Verdict::SilentCapture { message } => Some(message),
         _ => None,

@@ -371,4 +371,48 @@ mod tests {
             "the next utterance is judged on its own audio"
         );
     }
+
+    /// The verdict has to be SHOWN, not merely produced.
+    ///
+    /// Regression: `stop_capture` computed this correctly on every exit, and
+    /// two of its three callers threw the result away, including the ordinary
+    /// key-release path. Every test here passed while a user with a silent
+    /// microphone got no text, no error and no reason: the key looked inert.
+    ///
+    /// The call sites are now guarded by `#[must_use]`, which turns the
+    /// mistake into a compiler warning. This pins the other half: the
+    /// message must be worth showing, and the state it is shown in must
+    /// actually render.
+    #[test]
+    fn a_silent_capture_produces_a_message_fit_to_display() {
+        let mut w = StartupWatch::default();
+        w.on_open(t());
+        // A whole utterance of digital silence: opened, no audio, closed.
+        w.on_close();
+
+        let Verdict::SilentCapture { message } = w.on_utterance_end() else {
+            panic!("pure silence must produce a verdict, or nothing can show it");
+        };
+
+        // It must name the device, or the user cannot tell WHICH input is
+        // the problem when several are connected.
+        assert!(
+            message.contains("microphone"),
+            "the message must name the input, got {message:?}"
+        );
+        // And it must say what to DO. A bare "no audio" restates the symptom
+        // the user already noticed.
+        assert!(
+            message.contains("System Settings") || message.contains("disconnect"),
+            "the message must offer an action, got {message:?}"
+        );
+
+        // Error is the state the pipeline routes this to, and it must be one
+        // the overlay actually draws, or the message is unreadable however
+        // correct it is.
+        assert!(
+            overlay::OverlayState::Error.overlay_visible(),
+            "the state carrying this message must be visible"
+        );
+    }
 }
