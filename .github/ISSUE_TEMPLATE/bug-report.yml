@@ -11,25 +11,39 @@ body:
         via LaunchServices, and rebuilding without re-granting Accessibility,
         are the two most common false bugs.
 
-        The two commands this form asks for:
+        **If you installed the app:** open the OutLoud menu at the right end
+        of your menu bar and choose **Run Diagnostics…**. It writes a report
+        and opens it in your editor; select all and paste it below. The
+        report is redacted before it is written, so it contains no
+        transcribed text, no window titles, and no username.
+
+        **If you are working from a clone**, the same thing from a terminal:
 
         ```bash
         ./scripts/doctor.sh                             # diagnoses, and says which failures are bugs
         ./dist/OutLoud.app/Contents/MacOS/OutLoud --version   # or `outloud --version`
         ```
 
-        The doctor classifies every check as permission, configuration,
-        environment, or bug, and ends with a verdict naming how many are
-        bug-class. If it reports zero, it has almost certainly also told you
-        the fix.
+        Either way, the doctor classifies every check as permission,
+        configuration, environment, or bug, and ends with a verdict naming
+        how many are bug-class. If it reports zero, it has almost certainly
+        also told you the fix.
   - type: textarea
     id: doctor
     attributes:
       label: Doctor output
       description: >-
-        Paste the full output of `./scripts/doctor.sh`. Reports without this
-        will be sent back for it: permission bugs are undiagnosable without
-        knowing which process macOS is actually checking.
+        Paste the report from **Run Diagnostics…** in the menu bar. That file
+        is redacted in full and safe to post as-is.
+
+        From a clone, run `./scripts/doctor.sh --report` and paste only what
+        follows the `----- pasteable redacted report -----` line. The
+        diagnosis printed above that line is for reading on your own machine
+        and contains absolute paths, which include your username.
+
+        Reports without this will be sent back for it: permission bugs are
+        undiagnosable without knowing which process macOS is actually
+        checking.
       render: text
     validations:
       required: true
