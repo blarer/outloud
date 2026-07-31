@@ -183,3 +183,41 @@ the focused element, which is the case that works. It matters because it makes
 these apps hard to diagnose without a human at the keyboard, and because the
 same lazy-tree behaviour is the likeliest reason a write that succeeds once
 can fail afterwards.
+
+## Discord discards typed text about a second after it lands
+
+Measured, and it is not the doubling bug fixed in `inject.rs`.
+
+Polling the focused field once a second while one utterance is dictated:
+
+```
+t+1s   " The dog is brown and has a lot of fun running through the yard..."
+t+2s   "\u{feff}\n"
+t+3s   "\u{feff}\n"
+```
+
+The text arrives complete and correct, then the field returns to Discord's
+empty state (a zero-width no-break space and a newline) roughly a second
+later. Four consecutive dictations all reported `synthetic-keys-paced`
+success and all ended with an empty field.
+
+**We do not send Return.** There is no Enter synthesis anywhere in the
+injection path, so this is not an accidental submit. Discord is discarding
+the content on its own.
+
+The likeliest reading, consistent with why this app is on
+`AX_VALUE_IGNORED_APPS` in the first place, is that its React editor
+reconciles against its own model shortly after the synthetic events land,
+finds a model that never recorded the keystrokes, and rewrites the DOM back
+to that model. Synthetic CGEvents reach the field but apparently not the
+state the component trusts.
+
+**What this changes.** Discord was moved off the AXValue tier onto synthetic
+typing precisely because AXValue writes were ignored. This measurement says
+typing is *also* not sufficient there, so the app needs a different transport
+again, and the clipboard-paste path is the obvious candidate: a real paste is
+delivered through the same event stream as a human's Cmd-V and is far harder
+for an editor to distinguish.
+
+Not yet attempted, because the fix should be measured the same way this was
+rather than assumed.
