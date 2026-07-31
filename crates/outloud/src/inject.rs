@@ -495,6 +495,37 @@ fn deliver_via_tiers(mode: &Mode, text: &str) -> Outcome {
 /// selection in UTF-16 units), then writes the spliced whole value. When the
 /// field cannot be read or the caret cannot be mapped, we fall back to
 /// clipboard paste, which inserts natively and cannot destroy anything.
+/// Why the AX tier was abandoned, which decides how the typing fallback runs.
+///
+/// Extracted because a unit test over `typing_strategy_for` passes happily
+/// while a CALLER hands it the wrong flag, and that is exactly what happened:
+/// the AX-ignored branch passed `true`, forcing ~73ms per sentence onto the
+/// paced path in nine apps that are not terminals. Naming the reason makes
+/// the two cases impossible to conflate, and makes the choice testable
+/// without a live accessibility tree.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[cfg(any(target_os = "macos", test))]
+pub enum AxRefusal {
+    /// The app accepts an `AXValue` write and ignores it (Slack, Notion, and
+    /// the rest of `AX_VALUE_IGNORED_APPS`). Says nothing about typing speed:
+    /// these are GUI apps that take keystrokes as fast as anything else.
+    WriteIgnored,
+    /// The field reads back and refuses every write. This IS the
+    /// accessibility signature of a terminal scrollback, including from
+    /// emulators whose names we do not know, so pacing is forced on it
+    /// regardless of the app.
+    ReadOnlyField,
+}
+
+/// Whether `reason` forces the paced per-character path on its own.
+#[cfg(any(target_os = "macos", test))]
+pub fn must_pace_typing(reason: AxRefusal) -> bool {
+    match reason {
+        AxRefusal::WriteIgnored => false,
+        AxRefusal::ReadOnlyField => true,
+    }
+}
+
 #[cfg(target_os = "macos")]
 fn insert_with_fallback(text: &str) -> Outcome {
     match ax_edit::snapshot_focused() {
@@ -560,7 +591,10 @@ fn insert_with_fallback(text: &str) -> Outcome {
                     // The read-only branch below is where `true` belongs: a
                     // readable-but-unwritable field IS the accessibility
                     // signature of a terminal scrollback.
-                    typing_strategy(snap.app.as_deref(), false),
+                    typing_strategy(
+                        snap.app.as_deref(),
+                        must_pace_typing(AxRefusal::WriteIgnored),
+                    ),
                     char_before_caret(&snap),
                 );
             }
@@ -574,7 +608,10 @@ fn insert_with_fallback(text: &str) -> Outcome {
                 return deliver_without_ax(
                     text,
                     &AxError::NotSettable,
-                    typing_strategy(snap.app.as_deref(), true),
+                    typing_strategy(
+                        snap.app.as_deref(),
+                        must_pace_typing(AxRefusal::ReadOnlyField),
+                    ),
                     char_before_caret(&snap),
                 );
             }
@@ -1732,5 +1769,50 @@ mod tier_tests {
             "with both names known the move must be named"
         );
         assert_eq!(focus_changed(Some("Discord"), Some("Discord")), None);
+    }
+
+    /// The two reasons the AX tier gets abandoned must not be conflated.
+    ///
+    /// Regression: the AX-ignored branch passed the read-only flag, which
+    /// short-circuits typing_strategy_for to PerCharPaced before it looks at
+    /// the app. At 700us/char that is a ~73ms floor on a 104-character
+    /// sentence, paid by Slack, Notion, Linear, Figma, Signal, Element,
+    /// Teams, Obsidian and Spotify, none of which are terminals.
+    ///
+    /// Honest limit, verified rather than assumed: this test does NOT catch
+    /// the original bug either. Swapping the two constants back at the call
+    /// site leaves the whole suite green, because choosing between them
+    /// depends on a live accessibility snapshot no unit test can produce.
+    ///
+    /// What the named enum buys is that the mistake is now READABLE. The old
+    /// call passed a bare `true` whose meaning lived in another crate's
+    /// parameter name; the call now says `AxRefusal::ReadOnlyField` in a
+    /// branch that has just finished proving the field is writable, which
+    /// contradicts itself in front of the reader. That is a weaker guarantee
+    /// than a failing test and is worth naming as such.
+    #[test]
+    fn the_two_ax_refusals_choose_different_typing_paths() {
+        assert!(
+            !must_pace_typing(AxRefusal::WriteIgnored),
+            "an ignored AXValue write says nothing about keystroke speed"
+        );
+        assert!(
+            must_pace_typing(AxRefusal::ReadOnlyField),
+            "a field refusing every write is the terminal signature"
+        );
+
+        // End to end through the real strategy chooser, so the assertion is
+        // about the path a user's text actually takes.
+        use text_target::targets::keys::{typing_strategy_for, TypingStrategy};
+        assert_eq!(
+            typing_strategy_for(Some("Slack"), must_pace_typing(AxRefusal::WriteIgnored)),
+            TypingStrategy::Batched,
+            "Slack ignores AX writes but types at full speed"
+        );
+        assert_eq!(
+            typing_strategy_for(Some("Slack"), must_pace_typing(AxRefusal::ReadOnlyField)),
+            TypingStrategy::PerCharPaced,
+            "the same app pinned to a read-only field must still be paced"
+        );
     }
 }

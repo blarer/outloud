@@ -849,4 +849,50 @@ mod sendinput_tests {
         assert!(!ignores_ax_value_writes("TextEdit"));
         assert!(!discards_synthetic_typing("TextEdit"));
     }
+
+    /// Ignoring an AXValue write must NOT drag an app onto the slow typing
+    /// path. They are different facts about different mechanisms.
+    ///
+    /// Regression: the `ignores_ax_value_writes` branch in inject.rs passed
+    /// `true` for `field_reads_but_refuses_writes`, which short-circuits this
+    /// function to PerCharPaced before it ever looks at the app. At
+    /// 700us/char (ax_edit::synth::KEY_INTERVAL) that is a ~73ms floor on a
+    /// 104-character sentence, paid by nine apps that are not terminals.
+    ///
+    /// `field_reads_but_refuses_writes` means "the field reads back but
+    /// refuses every write", which is the accessibility signature of a
+    /// terminal scrollback. That is the only thing that should force pacing
+    /// regardless of app name.
+    #[test]
+    fn ax_ignoring_apps_still_get_the_fast_typing_path() {
+        // Every app on the AX-ignored list is a GUI app that accepts
+        // keystrokes normally. None is tty-backed.
+        for app in AX_VALUE_IGNORED_APPS {
+            assert_eq!(
+                typing_strategy_for(Some(app), false),
+                TypingStrategy::Batched,
+                "{app} ignores AXValue writes but is not a terminal, so it \
+                 must not be forced onto the paced path"
+            );
+        }
+
+        // The flag still forces pacing when it is genuinely set, which is
+        // what protects an unknown terminal emulator.
+        assert_eq!(
+            typing_strategy_for(Some("Slack"), true),
+            TypingStrategy::PerCharPaced,
+            "a field that refuses every write is the terminal signature"
+        );
+
+        // And real terminals stay paced on name alone.
+        assert_eq!(
+            typing_strategy_for(Some("Terminal"), false),
+            TypingStrategy::PerCharPaced
+        );
+        // Unknown destination keeps the safe slow path.
+        assert_eq!(
+            typing_strategy_for(None, false),
+            TypingStrategy::PerCharPaced
+        );
+    }
 }
