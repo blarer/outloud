@@ -84,6 +84,38 @@ fn parse_args() -> anyhow::Result<Args> {
             }
             "--no-overlay" => args.no_overlay = true,
             "--realtime" => args.realtime = true,
+            // `--permissions`: report THIS bundle's grants and exit.
+            //
+            // The doctor runs as a separate bundle (OutLoudDoctor.app) and
+            // TCC grants are per-bundle, so it reports its own permissions,
+            // not the app's. That sent me chasing a missing grant the app
+            // actually had. The only authority on whether OutLoud can see
+            // the hotkey is OutLoud.
+            "--permissions" => {
+                println!(
+                    "input-monitoring: {}",
+                    if hotkey::has_input_monitoring() {
+                        "granted"
+                    } else {
+                        "MISSING (hotkey cannot fire)"
+                    }
+                );
+                println!(
+                    "accessibility:    {}",
+                    if ax_edit::is_trusted(false) {
+                        "granted"
+                    } else {
+                        "MISSING (text will paste, not insert)"
+                    }
+                );
+                println!(
+                    "bundle:           {}",
+                    std::env::current_exe()
+                        .map(|p| p.display().to_string())
+                        .unwrap_or_else(|_| "?".into())
+                );
+                std::process::exit(0);
+            }
             "--version" | "-V" => {
                 // Beta support: "what version are you on?" must be
                 // answerable by a user who has no idea where the bundle's
@@ -423,7 +455,31 @@ fn main() -> anyhow::Result<()> {
                             ftx.clone(),
                             runtime_for_pipeline.clone(),
                         ) {
-                            Ok(display) => eprintln!("outloud: hold {display} to dictate"),
+                            Ok(display) => {
+                                // Binding SUCCEEDING is not the same as the
+                                // hotkey working. Without Input Monitoring the
+                                // event tap installs cleanly and then simply
+                                // never receives a key, so the old message
+                                // promised a hotkey that could not fire and
+                                // the app looked dead or, worse, looked like
+                                // the target app was broken.
+                                if hotkey::has_input_monitoring() {
+                                    eprintln!("outloud: hold {display} to dictate");
+                                } else {
+                                    eprintln!(
+                                        "outloud: WARNING: no Input Monitoring access, so \
+                                         {display} will do NOTHING"
+                                    );
+                                    eprintln!(
+                                        "outloud: grant it in System Settings > Privacy & \
+                                         Security > Input Monitoring, then restart OutLoud"
+                                    );
+                                    eprintln!(
+                                        "outloud: (this is a different permission from \
+                                         Accessibility, and ad-hoc rebuilds void both)"
+                                    );
+                                }
+                            }
                             Err(e) => {
                                 // A dead hotkey is a dead product: fail loudly
                                 // with the permission fix named, do not run a
