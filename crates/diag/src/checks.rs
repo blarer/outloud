@@ -24,6 +24,20 @@ use crate::{Check, CheckOutcome, Env, ErrorClass};
 /// run from a shell is judged against the terminal, so the app's own toggle
 /// can read "on" while every call fails. We therefore report not just the
 /// trust bit but *who* is being judged, by looking at how we were launched.
+/// Whether the running process is the doctor's own bundle rather than the
+/// app being diagnosed.
+///
+/// TCC grants are pinned per bundle, so OutLoudDoctor.app answering "am I
+/// trusted" describes itself, not OutLoud.app. Presenting that as the app's
+/// permission state produces a confident wrong answer, which is worse than
+/// no answer: I acted on one today and spent an hour chasing a permission
+/// that was already granted.
+fn is_separate_doctor_bundle() -> bool {
+    std::env::current_exe()
+        .map(|p| p.to_string_lossy().contains("OutLoudDoctor.app"))
+        .unwrap_or(false)
+}
+
 pub struct AccessibilityPermission;
 
 impl Check for AccessibilityPermission {
@@ -67,6 +81,19 @@ impl Check for AccessibilityPermission {
                 );
             }
             return CheckOutcome::pass("process is trusted for accessibility");
+        }
+        // TCC grants are per-bundle, and the doctor is its own bundle
+        // (OutLoudDoctor.app). A FAIL here says nothing about whether
+        // OutLoud.app is trusted, and reading it as if it did cost a long
+        // detour today: the doctor reported both permissions missing while
+        // the app had both.
+        if !launched_from_shell && is_separate_doctor_bundle() {
+            return CheckOutcome::warn(
+                "this is the DOCTOR's own grant, not the app's: TCC pins \
+                 permissions per bundle and these are different bundles",
+                ErrorClass::Configuration,
+                "ask the app itself: dist/OutLoud.app/Contents/MacOS/OutLoud --permissions",
+            );
         }
         if launched_from_shell {
             return CheckOutcome::fail(
@@ -919,6 +946,16 @@ impl Check for InputMonitoringPermission {
     fn run(&self, _env: &Env) -> CheckOutcome {
         if !cfg!(target_os = "macos") {
             return CheckOutcome::pass("not macOS: no Input Monitoring grant exists here");
+        }
+        // Same per-bundle caveat as the accessibility check: this answers
+        // for OutLoudDoctor.app, not for the app whose hotkey matters.
+        if is_separate_doctor_bundle() {
+            return CheckOutcome::warn(
+                "this is the DOCTOR's own grant, not the app's: TCC pins \
+                 permissions per bundle and these are different bundles",
+                ErrorClass::Configuration,
+                "ask the app itself: dist/OutLoud.app/Contents/MacOS/OutLoud --permissions",
+            );
         }
         if hotkey::has_input_monitoring() {
             CheckOutcome::pass("hotkey can read key events")
