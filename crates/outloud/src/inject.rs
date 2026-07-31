@@ -887,7 +887,15 @@ pub fn focus_moved_to(targeted: Option<&str>) -> Option<String> {
     // window that never held their text.
     #[cfg(target_os = "macos")]
     {
-        let now = ax_edit::snapshot_focused().ok().and_then(|s| s.app);
+        // Same fallback as the key-down side: the snapshot fails when no
+        // text element is focused, and an app that stole focus may well not
+        // have one. Comparing a real name against None reads as "cannot
+        // tell", which silently disabled the warning in precisely the
+        // AX-hostile apps most likely to steal focus.
+        let now = ax_edit::snapshot_focused()
+            .ok()
+            .and_then(|s| s.app)
+            .or_else(ax_edit::frontmost_app);
         focus_changed(targeted, now.as_deref())
     }
     #[cfg(not(target_os = "macos"))]
@@ -1615,5 +1623,32 @@ mod tier_tests {
         assert_eq!(focus_changed(None, Some("Discord")), None);
         assert_eq!(focus_changed(Some("Messages"), None), None);
         assert_eq!(focus_changed(None, None), None);
+    }
+
+    /// Why both sides of the focus comparison need a `frontmost_app`
+    /// fallback, pinned as a rule rather than as a live AX call.
+    ///
+    /// `snapshot_focused()` fails outright when no TEXT element is focused,
+    /// and returns None for the app name with it. Measured live: Discord
+    /// gives frontmost_app=Some("Discord") but snapshot.app=None. Feeding
+    /// that None into the comparison reads as "cannot tell", so the warning
+    /// was silently dead in exactly the AX-hostile apps most likely to steal
+    /// focus, while every unit test and the FAKE_TARGET path still passed.
+    #[test]
+    fn a_missing_app_name_disables_the_warning_which_is_why_the_fallback_exists() {
+        // A None on either side must stay silent: claiming a move on missing
+        // information sends users hunting for a window that never held their
+        // text. This is correct, and it is also the failure mode.
+        assert_eq!(focus_changed(None, Some("Discord")), None);
+        assert_eq!(focus_changed(Some("TextEdit"), None), None);
+
+        // So when both names ARE available, the move must be reported. The
+        // fallback's whole job is to keep us in this case.
+        assert_eq!(
+            focus_changed(Some("TextEdit"), Some("Discord")),
+            Some("Discord".to_string()),
+            "with both names known the move must be named"
+        );
+        assert_eq!(focus_changed(Some("Discord"), Some("Discord")), None);
     }
 }

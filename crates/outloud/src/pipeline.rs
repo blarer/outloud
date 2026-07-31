@@ -483,7 +483,19 @@ pub async fn run(
                             mode,
                             // From the key-down snapshot, so the commit path
                             // can tell whether focus moved under it.
-                            targeted_app: snap.as_ref().and_then(|s| s.app.clone()),
+                            //
+                            // Falls back to `frontmost_app()` because the
+                            // snapshot fails outright when no TEXT element is
+                            // focused, which is exactly the case in AX-hostile
+                            // apps: measured live, Discord gives
+                            // frontmost_app=Some("Discord") while
+                            // snapshot.app=None. Naming the app needs only the
+                            // application, not a readable field, so the weaker
+                            // lookup is the right source for this one fact.
+                            targeted_app: snap
+                                .as_ref()
+                                .and_then(|s| s.app.clone())
+                                .or_else(ax_edit::frontmost_app),
                             released_at: Instant::now(),
                             streamer,
                         });
@@ -911,6 +923,23 @@ async fn commit_transcript(
     let targeted = std::env::var("OUTLOUD_FAKE_TARGET")
         .ok()
         .or_else(|| fl.targeted_app.clone());
+
+    // OUTLOUD_PRECOMMIT_DELAY_MS: widen the key-up-to-write window so a real
+    // focus move can be performed inside it.
+    //
+    // FAKE_TARGET fakes the key-down half, which means it cannot catch a bug
+    // in that half. One did hide there: `targeted_app` came only from
+    // `snapshot_focused()`, which fails outright when no text element is
+    // focused, so the warning was dead in exactly the AX-hostile apps most
+    // likely to steal focus. Slowing the race down instead exercises both
+    // halves for real.
+    if let Ok(ms) = std::env::var("OUTLOUD_PRECOMMIT_DELAY_MS") {
+        if let Ok(ms) = ms.parse::<u64>() {
+            eprintln!("outloud: delaying {ms}ms before the focus check (test knob)");
+            tokio::time::sleep(std::time::Duration::from_millis(ms)).await;
+        }
+    }
+
     let moved_to = inject::focus_moved_to(targeted.as_deref());
     if let Some(landed_in) = &moved_to {
         eprintln!("outloud: focus moved while you spoke; this text is going to {landed_in}");
