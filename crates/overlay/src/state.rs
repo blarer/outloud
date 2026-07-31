@@ -84,7 +84,25 @@ impl OverlayState {
         use OverlayState::*;
         match self {
             ModelLoading => &[Idle, NoPermission, Error],
-            Idle => &[Listening, NoPermission, ModelLoading, DegradedOffline],
+            // Error IS reachable from Idle: a failure can happen before
+            // anything starts. Key-down deliberately clears an error-shaped
+            // state to Idle first, and the very next step opens the
+            // microphone, so "could not open the microphone" is raised from
+            // Idle every time. Forbidding this edge silently dropped that
+            // message and the user's mic failure showed nothing at all.
+            //
+            // This does NOT license the pattern that made the focus warning
+            // invisible: settling into Idle and then "correcting" to Error.
+            // Decide the terminal state before transitioning. The
+            // distinction is enforced by the callers, not by this table,
+            // because the table cannot see intent.
+            Idle => &[
+                Listening,
+                NoPermission,
+                ModelLoading,
+                DegradedOffline,
+                Error,
+            ],
             Listening => &[Transcribing, Idle, Error],
             Transcribing => &[Injecting, Idle, Error],
             Injecting => &[Idle, Error],
@@ -191,19 +209,25 @@ mod tests {
         // then "correcting" to Error. That correction is illegal, so it was
         // dropped and the warning never rendered, three separate times.
         //
-        // Both halves matter, so both are pinned:
-        // 1. Idle -> Error stays ILLEGAL. Idle is where a finished utterance
-        //    rests; letting it back into Error would make the broken
-        //    post-hoc-correction shape silently start working, which is
-        //    worse than failing, because it hides the design mistake.
+        // A correction to this test as first written: it asserted Idle ->
+        // Error must be ILLEGAL, generalising one caller's mistake into a
+        // rule about the machine. That was wrong and it cost a real bug:
+        // key-down clears an error-shaped state to Idle and then opens the
+        // microphone, so "could not open the microphone" is raised FROM
+        // Idle, and forbidding the edge silently swallowed it.
+        //
+        // The rule being pinned is about ORDER, not reachability: decide the
+        // terminal state before transitioning, rather than settling into
+        // Idle and correcting afterwards. Only callers can honour that, so
+        // only callers are checked for it.
         assert!(
-            !Idle.can_transition_to(Error),
-            "Idle must not route into Error; decide the terminal state before \
-             transitioning instead of correcting afterwards"
+            Idle.can_transition_to(Error),
+            "a failure can occur before anything starts (mic open), so Idle \
+             must be able to report one"
         );
 
-        // 2. The states a write actually finishes from CAN reach Error, so
-        //    picking the terminal state up front has somewhere to go.
+        // The states a write actually finishes from CAN reach Error, so
+        // picking the terminal state up front has somewhere to go.
         for from in [Transcribing, Injecting] {
             assert!(
                 from.can_transition_to(Error),

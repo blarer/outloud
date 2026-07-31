@@ -333,4 +333,49 @@ mod tests {
         assert_eq!(e.state(), Idle);
         assert!(!e.saw_illegal_transition());
     }
+
+    /// The three failures that are raised from Idle must actually display.
+    ///
+    /// Found by a read-only audit, and the sharpest of them is unambiguous:
+    /// the CaptureIssue handler checks `state() == Idle` and THEN transitions
+    /// to Error, so while that edge was forbidden "no microphone" could never
+    /// appear, 100% of the time, by construction.
+    ///
+    /// The other two are the mic-open failure on key-down (key-down clears
+    /// error-shaped states to Idle one step earlier, then opens the device)
+    /// and any pre-utterance fault. All three share one cause: a failure can
+    /// happen before anything starts, and Idle is where "nothing is
+    /// happening" lives.
+    #[test]
+    fn failures_raised_before_an_utterance_starts_are_visible() {
+        for (label, detail) in [
+            ("no input device", "no microphone -> connect one"),
+            (
+                "mic open failed",
+                "could not open the microphone -> check Privacy settings",
+            ),
+        ] {
+            let (mut e, shared) = Engine::new();
+            e.transition(Idle, None);
+            assert_eq!(e.state(), Idle, "{label}: precondition");
+
+            e.transition(Error, Some(detail.into()));
+
+            assert_eq!(
+                e.state(),
+                Error,
+                "{label}: raised from Idle and must not be swallowed"
+            );
+            assert!(
+                !e.saw_illegal_transition(),
+                "{label}: must not rely on an illegal transition"
+            );
+            let f = shared.snapshot();
+            assert_eq!(
+                f.detail.as_deref(),
+                Some(detail),
+                "{label}: the reason must reach the overlay frame"
+            );
+        }
+    }
 }
