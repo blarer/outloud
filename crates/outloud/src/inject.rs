@@ -548,7 +548,19 @@ fn insert_with_fallback(text: &str) -> Outcome {
                 return deliver_without_ax(
                     text,
                     &AxError::NotSettable,
-                    typing_strategy(snap.app.as_deref(), true),
+                    // `false`: these apps ignore an AXValue WRITE, which says
+                    // nothing about how fast they accept keystrokes. Passing
+                    // `true` short-circuits typing_strategy_for straight to
+                    // PerCharPaced, which exists for tty-backed destinations
+                    // that drop batched events. At 700us/char that spent an
+                    // extra ~70ms on a 100-character sentence in Slack,
+                    // Notion, Linear, Figma, Signal, Element, Teams,
+                    // Obsidian and Spotify, none of which are terminals.
+                    //
+                    // The read-only branch below is where `true` belongs: a
+                    // readable-but-unwritable field IS the accessibility
+                    // signature of a terminal scrollback.
+                    typing_strategy(snap.app.as_deref(), false),
                     char_before_caret(&snap),
                 );
             }

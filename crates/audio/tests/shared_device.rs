@@ -54,6 +54,14 @@ fn two_concurrent_captures_both_receive_audio() {
         eprintln!("SKIP: no input device on this machine");
         return;
     }
+    if !can_actually_capture() {
+        eprintln!(
+            "SKIP: an input device exists but this process receives no audio \
+             from it (microphone permission is the usual cause); that is an \
+             environment fact, not a sharing regression"
+        );
+        return;
+    }
 
     let first = Capture::start();
     let second = Capture::start();
@@ -129,6 +137,33 @@ fn capture_does_not_reconfigure_the_device() {
 fn has_input_device() -> bool {
     use cpal::traits::HostTrait;
     cpal::default_host().default_input_device().is_some()
+}
+
+/// Whether this process can actually READ the microphone, not merely see one.
+///
+/// `has_input_device` answers a weaker question. macOS lists the built-in
+/// microphone to every process, and a capture stream without TCC permission
+/// starts successfully and then delivers nothing: no error, just silence. So
+/// an unpermitted machine failed here with "got 0 and 0 samples" and an
+/// exclusive-access diagnosis, which is the one thing it was not.
+///
+/// The file's stated policy is to SKIP when the machine cannot capture, since
+/// that is the normal state of a CI runner and not a regression. Honouring it
+/// needs this stronger check.
+fn can_actually_capture() -> bool {
+    let (tx, rx) = ring(4096);
+    let handle = start_capture(tx, |_| {});
+    // Long enough for a working device to deliver several buffers, short
+    // enough not to add a visible pause to the suite.
+    let deadline = Instant::now() + Duration::from_millis(1200);
+    let mut buf = [0f32; 1024];
+    let mut seen = 0usize;
+    while Instant::now() < deadline && seen == 0 {
+        seen += rx.pop(&mut buf);
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    handle.stop();
+    seen > 0
 }
 
 /// A running capture, with a thread draining its ring so the producer never
