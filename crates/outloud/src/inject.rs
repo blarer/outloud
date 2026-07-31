@@ -738,6 +738,23 @@ fn char_before_caret(snap: &TextSnapshot) -> Option<char> {
 /// destination app; recomputing it here would race a focus change.
 #[cfg(target_os = "macos")]
 fn write_focused(text: &str, typing: TypingChoice) -> Outcome {
+    // Apps that discard synthetic writes discard AX writes too, and this
+    // function is reachable from the EDIT path (replace_selection ->
+    // write_over_selection) which never consults the destination.
+    //
+    // `replace_focused` REPORTS SUCCESS in those apps, which is worse than
+    // a refusal: the fallback never runs, so the outcome says "wrote" while
+    // the app quietly reverts. Checking here covers every caller, present
+    // and future, rather than adding a fourth place to remember it.
+    #[cfg(feature = "display")]
+    if ax_edit::frontmost_app()
+        .as_deref()
+        .is_some_and(text_target::targets::keys::discards_synthetic_typing)
+    {
+        // No leading space: callers pass either a spliced whole-field value
+        // or a selection replacement, both already spaced upstream.
+        return paste_with_leading_space(text, None);
+    }
     match ax_edit::replace_focused(text) {
         Ok(strategy) => Outcome::Wrote {
             text: text.to_string(),
