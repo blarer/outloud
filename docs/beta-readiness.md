@@ -123,7 +123,7 @@ the Swift speech helper, so the recognizer is absent.
 Reproduction, from a genuinely fresh clone:
 
 ```
-$ git clone /Users/blare/outloud-spike /tmp/lobster-fresh && cd /tmp/lobster-fresh
+$ git clone $HOME/outloud-spike /tmp/lobster-fresh && cd /tmp/lobster-fresh
 $ cargo build --release
     Finished `release` profile [optimized] target(s) in 39.86s
 
@@ -497,10 +497,10 @@ uninstall verb.
 
 ```
 $ ./target/release/shell-bridge install
-installed into /Users/blare/.zshrc
+installed into $HOME/.zshrc
 $ grep -A1 'outloud shell-bridge' ~/.zshrc
 # outloud shell-bridge
-[ -f "/Users/blare/outloud-spike/shell/outloud.zsh" ] && source "/Users/blare/outloud-spike/shell/outloud.zsh"
+[ -f "$HOME/outloud-spike/shell/outloud.zsh" ] && source "$HOME/outloud-spike/shell/outloud.zsh"
 
 $ ./target/release/shell-bridge uninstall
 usage: shell-bridge <serve|intent|status|peek|install|print-plugin-path> [flags]
