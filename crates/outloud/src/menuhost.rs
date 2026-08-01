@@ -96,6 +96,44 @@ impl MenuHost {
     /// test is a safety net nobody has seen work. Goes through the same
     /// layering as the daemon so a test cannot pass against different
     /// precedence rules than production uses.
+    /// Read `microphone.sensitivity` from config without constructing a host.
+    ///
+    /// `--once` builds no menu host, so the value fell back to the schema
+    /// default and the config file was ignored entirely on that path. That
+    /// made the measurement mode segment differently from the daemon while
+    /// claiming to be comparable, and it is why an end-to-end check of a
+    /// sensitivity change reported the same number for every setting.
+    ///
+    /// Same layering as the daemon, for the reason given on
+    /// `silence_timeout_from_config`: a test must not pass against different
+    /// precedence rules than production uses.
+    pub fn sensitivity_from_config() -> u8 {
+        Self::settings_from_config().map_or(50, |s| s.sensitivity)
+    }
+
+    /// The config-derived settings, or `None` when config cannot be read.
+    ///
+    /// Extracted so the two `*_from_config` helpers cannot drift apart in how
+    /// they layer system, user and environment.
+    fn settings_from_config() -> Option<crate::menubar::Settings> {
+        let user = config::ensure_user_config().ok();
+        let system = std::fs::read_to_string(config::system_config_path())
+            .ok()
+            .map(|t| (config::system_config_path(), t));
+        let env: std::collections::BTreeMap<String, String> = std::env::vars()
+            .filter(|(k, _)| {
+                k.starts_with(config::ENV_PREFIX) || k.starts_with(config::LEGACY_ENV_PREFIX)
+            })
+            .collect();
+        config::Config::build(
+            system.as_ref().map(|(p, t)| (p, t.as_str())),
+            user.as_ref().map(|(p, t)| (p, t.as_str())),
+            &env,
+        )
+        .ok()
+        .map(|(cfg, _)| crate::menubar::Settings::from_config(&cfg, None))
+    }
+
     pub fn silence_timeout_from_config() -> u64 {
         let user = config::ensure_user_config().ok();
         let system = std::fs::read_to_string(config::system_config_path())
@@ -519,5 +557,37 @@ mod tests {
         );
 
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// `--once` must read sensitivity from config, not from the schema
+    /// default.
+    ///
+    /// Found by driving the real binary rather than by unit test: with the
+    /// config file set to 20, 50 and 83 in turn, every `--once` run segmented
+    /// with 50. The menu host is not built on that path, so the value fell
+    /// through to a hardcoded default and the file was ignored entirely.
+    ///
+    /// That made the measurement mode segment differently from the daemon
+    /// while its whole purpose is to be comparable to one.
+    #[test]
+    fn sensitivity_from_config_matches_the_host_and_never_returns_the_bare_default() {
+        let from_config = MenuHost::sensitivity_from_config();
+
+        // Whatever the machine's config says, it must be a value the schema
+        // considers valid, not a sentinel.
+        assert!(
+            (1..=100).contains(&from_config),
+            "sensitivity must be in the documented range, got {from_config}"
+        );
+
+        // And it must agree with what a constructed host reports, or the two
+        // paths have drifted and `--once` is measuring a different product.
+        let runtime = crate::runtime::RuntimeShared::new();
+        let host = MenuHost::new(runtime);
+        assert_eq!(
+            from_config,
+            host.sensitivity(),
+            "the no-host path must resolve sensitivity exactly as the daemon does"
+        );
     }
 }

@@ -401,7 +401,11 @@ fn main() -> anyhow::Result<()> {
         sensitivity: args
             .sensitivity
             .or_else(|| menu_host.as_ref().map(|h| h.sensitivity()))
-            .unwrap_or(50),
+            // Read from config even without a menu host, for the same reason
+            // as the silence timeout: `--once` is a measurement mode, and it
+            // must segment the way a real run does or its numbers describe a
+            // configuration nobody uses.
+            .unwrap_or_else(outloud::menuhost::MenuHost::sensitivity_from_config),
         // A live view of the same setting, so editing config.toml takes
         // effect at the next key-down instead of the next launch.
         //

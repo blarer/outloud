@@ -1139,10 +1139,20 @@ type Segmenter = audio::segment::SpeechSegmenter<audio::vad::EnergyVad>;
 /// key-down rather than the next launch, and falls back to the startup
 /// snapshot for hosts that have no live config.
 fn current_sensitivity(cfg: &Config) -> u8 {
-    cfg.live_sensitivity
+    let v = cfg
+        .live_sensitivity
         .as_ref()
         .map(|f| f())
-        .unwrap_or(cfg.sensitivity)
+        .unwrap_or(cfg.sensitivity);
+    // OUTLOUD_LOG_SENSITIVITY=1: report the value each utterance was actually
+    // segmented with. The setting has no visible output of its own, so
+    // without this the only way to check a reload arrived is to speak at the
+    // threshold and judge by ear, which cannot distinguish "the reload did
+    // not arrive" from "the new value was not what I expected".
+    if std::env::var_os("OUTLOUD_LOG_SENSITIVITY").is_some_and(|x| x == "1") {
+        eprintln!("outloud: segmenting with sensitivity {v}");
+    }
+    v
 }
 
 fn new_segmenter(sensitivity: u8) -> Segmenter {
