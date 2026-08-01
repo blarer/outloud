@@ -117,6 +117,45 @@ useful model, and Apple's recognizer streams partials that whisper cannot
 produce. Larger whisper models trade latency for accuracy (small.en roughly
 150-300ms on this hardware, large-v3-turbo 8-15x realtime).
 
+### Windows
+
+Verified on Windows 11, Ryzen 9 9950X3D, RTX 5090. Four prerequisites, three
+of which fail in ways that do not name themselves:
+
+| Need | Why | Failure if missing |
+|---|---|---|
+| cmake | builds whisper.cpp | `is cmake not installed?` |
+| LLVM | bindgen parses the C headers | `Unable to find libclang` |
+| MSVC Build Tools | cmake needs `cl.exe` | `CMakeTestCCompiler` failure |
+| CUDA Toolkit | GPU acceleration | builds fine, then runs 25x slower |
+
+```powershell
+winget install LLVM.LLVM
+winget install Nvidia.CUDA          # NVIDIA; see below for other GPUs
+
+# cl.exe is not on PATH by default, and cmake needs it.
+cmd /c 'call "C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\Common7\Tools\VsDevCmd.bat" -arch=amd64 && ^
+  set "LIBCLANG_PATH=C:\Program Files\LLVM\bin" && ^
+  cargo build --release -p outloud --features whisper-cuda'
+```
+
+Quote the `set`: `LIBCLANG_PATH` contains a space, and an unquoted assignment
+truncates it at `Program`, after which bindgen reports libclang as missing
+even though it is installed.
+
+**Do not skip the GPU feature.** whisper-rs enables Metal automatically on
+macOS and nothing anywhere else, so a plain `--features whisper` build is
+CPU-only. The same 4.96s utterance on the same machine:
+
+| Build | release->text |
+|---|---|
+| `--features whisper` (CPU) | **8970ms** |
+| `--features whisper-cuda` | **346-364ms** |
+
+Nine seconds is unusable regardless of transcript quality, and nothing in the
+output says the GPU is idle. `whisper-vulkan` exists for AMD and Intel; it did
+not build here, and CUDA is the better choice on NVIDIA anyway.
+
 Whisper's encoder takes a fixed 30-second window. Longer utterances are
 truncated at the START of the audio, with a line on stderr saying so, because
 a transcript that begins mid-thought reads as a recognition failure rather
