@@ -378,4 +378,35 @@ mod tests {
             );
         }
     }
+
+    /// A mid-utterance device change must be READABLE, not just logged.
+    ///
+    /// F-6 in docs/investigations/robustness.md. `DeviceChanged` became a
+    /// `CaptureIssue` that the pipeline only printed to stderr, which a
+    /// Finder-launched app does not have, so the user lost the rest of a
+    /// sentence with no indication why.
+    ///
+    /// `live_detail` rather than a transition, because the utterance is still
+    /// in flight: Listening is the honest state, and Listening IS drawn, so
+    /// the message can actually be read.
+    #[test]
+    fn a_device_change_mid_utterance_is_visible_while_still_listening() {
+        let (mut e, shared) = Engine::new();
+        e.transition(Idle, None);
+        e.transition(Listening, None);
+
+        e.live_detail("microphone changed mid-sentence -> some audio may be lost".into());
+
+        let f = shared.snapshot();
+        assert_eq!(f.state, Listening, "the utterance is still in flight");
+        assert!(
+            f.detail.is_some_and(|d| d.contains("microphone changed")),
+            "the reason must reach the overlay frame, not only stderr"
+        );
+        assert!(
+            overlay::OverlayState::Listening.overlay_visible(),
+            "Listening must be drawn or the message cannot be read"
+        );
+        assert!(!e.saw_illegal_transition());
+    }
 }

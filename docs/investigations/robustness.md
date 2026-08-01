@@ -21,16 +21,21 @@ selected for that same shape rather than for being merely untidy.
 > | Finding | Status |
 > |---|---|
 > | F-1 sub-threshold tap leaves the mic open | **Fixed** — `hot_mic_timeout_ms`, 60s cap |
-> | F-2 `finalize()` blocks the event loop | Open, not reproduced since |
+> | F-2 `finalize()` blocks the event loop | **Fixed** — the audio channel is unbounded now, with `QUEUE_DEPTH` as a separate counter, so `finalize` cannot be blocked by queued audio |
 > | F-3 headless build does not compile | **Fixed** — `scripts/build-headless.sh` passes, and CI gates it |
 > | F-4 `ignores_ax_value_writes` is unfalsifiable | **Fixed** — replaced by `accepts()`, one exhaustive decision |
 > | F-5 focus changes mid-utterance, text lands elsewhere | **Fixed** — the overlay now names the app that took it |
-> | F-6 device disconnect mid-utterance is silent | Open |
+> | F-6 device disconnect mid-utterance is silent | **Fixed 2026-08-01.** It was worse than described: the `CaptureIssue` went only to stderr, which a Finder-launched app does not have. Now published as `live_detail` on Listening, which is drawn |
 > | F-7 rapid key presses drop the second utterance | **Fixed** — key-down is refused while a commit is in flight, with a reason |
-> | F-8 config reload mid-utterance is partly applied | Open |
+> | F-8 config reload mid-utterance is partly applied | **Partly fixed.** The half-swapped read is gone (config is an `Arc<RwLock<_>>` snapshot), but `sensitivity` is still read once into the segmenter at startup, so changing it needs a restart |
 >
 > F-5 is worth reading if you touch text injection: it took four attempts to
 > fix, and three of those were believed done while the warning was invisible.
+>
+> Statuses above were re-derived from the code, not from memory or from an
+> earlier pass of this same table. The first pass of it got F-2 wrong, listing
+> a fixed bug as open, which is the exact failure this header exists to
+> prevent.
 
 ---
 

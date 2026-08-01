@@ -586,6 +586,19 @@ pub async fn run(
                                     }
                                     FrontendEvent::CaptureIssue(msg) => {
                                         eprintln!("outloud: capture: {msg}");
+                                        // F-6: this arm runs while the user is
+                                        // still speaking, and a device change
+                                        // here loses the rest of the sentence.
+                                        // stderr alone is invisible to anyone
+                                        // who launched the app from Finder, so
+                                        // say it where they are already
+                                        // looking. `live_detail` rather than a
+                                        // transition because the utterance is
+                                        // still in flight and Listening is the
+                                        // honest state.
+                                        engine.live_detail(format!(
+                                            "microphone changed mid-sentence -> some audio may be lost ({msg})"
+                                        ));
                                     }
                                 }
                             }
