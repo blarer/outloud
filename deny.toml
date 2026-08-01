@@ -49,6 +49,15 @@ allow = [
     "ISC",
     "Zlib",
     "Unicode-3.0",  # unicode-ident, pulled in by virtually every proc-macro
+    # whisper-rs and whisper-rs-sys, the bindings to whisper.cpp. The
+    # Unlicense is a public-domain dedication: OSI-approved, FSF-approved,
+    # and strictly more permissive than MIT, since it imposes no attribution
+    # requirement at all. Allowed knowingly rather than worked around,
+    # because the alternative is no recognizer on Windows or Linux.
+    #
+    # Note the whisper.cpp C library itself, and the ggml model weights, are
+    # MIT; only the Rust binding crates carry this licence.
+    "Unlicense",
     # The Mozilla CA certificate bundle (webpki-roots) ships under a data
     # licence rather than a code one. CDLA-Permissive-2.0 imposes no
     # obligations on software that merely reads the list, and the alternative
