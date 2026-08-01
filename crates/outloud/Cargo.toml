@@ -20,6 +20,9 @@ default = ["display"]
 # whisper.cpp from source and needs cmake plus a C++ toolchain, which not
 # every contributor has and no typecheck-only CI job should require.
 whisper = ["asr/whisper"]
+# Forwarded GPU backends; see crates/asr/Cargo.toml for why these matter.
+whisper-cuda = ["whisper", "asr/whisper-cuda"]
+whisper-vulkan = ["whisper", "asr/whisper-vulkan"]
 # `audio/capture` rides on `display` because they answer the same question:
 # is there a human at this machine? A desktop build needs a microphone and a
 # window; a headless build has neither, takes its audio from --wav or a

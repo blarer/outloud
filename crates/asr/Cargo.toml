@@ -15,6 +15,16 @@ description = "Streaming speech recognition: trait, backends, two-stage pipeline
 # plus a C++ toolchain. A default-on native build would break `cargo build`
 # for anyone without those, including CI jobs that only want to typecheck.
 whisper = ["dep:whisper-rs"]
+# GPU acceleration for whisper. Pick the one your machine has; none is a
+# valid choice and falls back to CPU.
+#
+# Why this matters: whisper-rs enables Metal automatically on macOS but
+# nothing on Windows or Linux, so an unaccelerated build is CPU-only. Measured
+# on a Ryzen 9 9950X3D with base.en, a 5s utterance took 8970ms on CPU against
+# 255ms on an M4 Pro with Metal. That is not a slow machine, it is an idle
+# GPU, and 9s of latency makes dictation unusable.
+whisper-cuda = ["whisper-rs/cuda"]      # NVIDIA
+whisper-vulkan = ["whisper-rs/vulkan"]  # AMD, Intel, and NVIDIA without CUDA
 
 [dependencies]
 anyhow = { workspace = true }
