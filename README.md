@@ -456,6 +456,10 @@ configuration, or bug, and only the last belongs in an issue.
 | [`docs/streaming.md`](docs/streaming.md) | You are touching partial text commitment |
 | [`docs/configuration.md`](docs/configuration.md) | You are adding or changing a setting |
 | [`docs/signing-runbook.md`](docs/signing-runbook.md) | Certificates, or why grants keep dying |
+| [`docs/testing.md`](docs/testing.md) | You want to know what is tested and what cannot be |
+| [`docs/neural-engine.md`](docs/neural-engine.md) | You are wondering whether the ANE is actually used |
+| [`docs/overlay-performance.md`](docs/overlay-performance.md) | You are changing anything that draws |
+| [`docs/investigations/robustness.md`](docs/investigations/robustness.md) | You want the ranked failure list, with reproductions |
 | [`docs/ux/`](docs/ux/) | You are designing user-facing behaviour |
 | [`docs/planning/`](docs/planning/) | You are picking up work or planning a milestone |
 | [`CONTRIBUTING.md`](CONTRIBUTING.md) | You are about to write code here |
