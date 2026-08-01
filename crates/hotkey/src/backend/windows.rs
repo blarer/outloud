@@ -391,12 +391,39 @@ fn pump_with_watchdog(mut hook: ffi::HHOOK) {
             );
         }
 
-        // The liveness question: is our HHOOK still in the chain? There is
-        // no "is it installed" API, so we use the one observable side
-        // effect: unhooking a hook the OS already removed fails.
-        // Unhook-then-reinstall unconditionally would drop events during
-        // the gap on every tick, so we only act when the unhook fails.
-        if unsafe { ffi::UnhookWindowsHookEx(hook) } == 0 {
+        // The liveness question: is our HHOOK still in the chain?
+        //
+        // There is no "is it installed" API. The obvious probe, unhooking
+        // and looking at the result, is destructive: on the healthy path it
+        // removes a working hook and reinstalls it, so every tick opens a
+        // gap in which a key transition is invisible. Losing a key-DOWN is
+        // self-correcting, but losing the matching key-UP leaves capture
+        // running with no event that can stop it, and because the reinstall
+        // succeeded cleanly the recovery reset never fires. A liveness check
+        // that can silently wedge the microphone is worse than no check.
+        //
+        // Install a SECOND hook instead and immediately remove it. Both
+        // calls are cheap, neither touches the live hook, and the answer is
+        // just as good: SetWindowsHookExW failing means the process can no
+        // longer install hooks at all, which is the condition worth
+        // reporting. When it succeeds we learn hooks still work and drop the
+        // probe, leaving the real one untouched for its whole lifetime.
+        //
+        // Costs one extra hook in the chain for the microseconds between the
+        // two calls. That is strictly less exposure than removing the only
+        // hook we have.
+        let probe = unsafe {
+            ffi::SetWindowsHookExW(ffi::WH_KEYBOARD_LL, hook_proc, std::ptr::null_mut(), 0)
+        };
+        let hooks_still_work = !probe.is_null();
+        if hooks_still_work {
+            unsafe { ffi::UnhookWindowsHookEx(probe) };
+        }
+
+        // Only when the process cannot install hooks at all do we touch the
+        // live one, and then the old unhook-and-replace path is correct:
+        // whatever we hold is already useless.
+        if !hooks_still_work {
             let fresh = unsafe {
                 ffi::SetWindowsHookExW(ffi::WH_KEYBOARD_LL, hook_proc, std::ptr::null_mut(), 0)
             };
@@ -425,21 +452,8 @@ fn pump_with_watchdog(mut hook: ffi::HHOOK) {
                 }
             }
             eprintln!("hotkey: keyboard hook was removed by the OS and has been reinstalled");
-        } else {
-            // The unhook SUCCEEDED, which means the hook was alive and we
-            // just removed it ourselves. Put it straight back.
-            let fresh = unsafe {
-                ffi::SetWindowsHookExW(ffi::WH_KEYBOARD_LL, hook_proc, std::ptr::null_mut(), 0)
-            };
-            if fresh.is_null() {
-                eprintln!(
-                    "hotkey: failed to reinstall the keyboard hook after a liveness check \
-                     (error {}); the hotkey is DEAD until restart",
-                    unsafe { ffi::GetLastError() }
-                );
-                return;
-            }
-            hook = fresh;
         }
+        // Healthy path: nothing to do. The live hook was never touched, which
+        // is the entire point of probing with a throwaway.
     }
 }

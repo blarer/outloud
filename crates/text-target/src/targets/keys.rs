@@ -166,6 +166,59 @@ pub enum Acceptance {
     ClipboardOnly,
 }
 
+/// The executable name of the foreground window's process, lowercased and
+/// without the `.exe` suffix, for [`accepts`].
+///
+/// macOS reads the app's accessibility title; Windows has no equivalent, so
+/// this uses the process name, which is what `AX_VALUE_IGNORED_APPS` entries
+/// like "discord" and "slack" already match against.
+///
+/// `None` when the window or process cannot be identified, which `accepts`
+/// treats as an ordinary destination rather than assuming the worst.
+#[cfg(all(target_os = "windows", feature = "display"))]
+pub fn foreground_process_name() -> Option<String> {
+    use windows::Win32::Foundation::CloseHandle;
+    use windows::Win32::System::Threading::{
+        OpenProcess, QueryFullProcessImageNameW, PROCESS_NAME_FORMAT,
+        PROCESS_QUERY_LIMITED_INFORMATION,
+    };
+    use windows::Win32::UI::WindowsAndMessaging::{GetForegroundWindow, GetWindowThreadProcessId};
+
+    unsafe {
+        let hwnd = GetForegroundWindow();
+        if hwnd.0.is_null() {
+            return None;
+        }
+        let mut pid = 0u32;
+        GetWindowThreadProcessId(hwnd, Some(&mut pid));
+        if pid == 0 {
+            return None;
+        }
+        // LIMITED_INFORMATION rather than QUERY_INFORMATION: it is the
+        // narrowest right that answers "what is this process called", and it
+        // works against elevated processes where the broader right does not.
+        let handle = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, pid).ok()?;
+        let mut buf = [0u16; 260];
+        let mut len = buf.len() as u32;
+        let ok = QueryFullProcessImageNameW(
+            handle,
+            PROCESS_NAME_FORMAT(0),
+            windows::core::PWSTR(buf.as_mut_ptr()),
+            &mut len,
+        );
+        let _ = CloseHandle(handle);
+        ok.ok()?;
+        let path = String::from_utf16_lossy(&buf[..len as usize]);
+        Some(
+            path.rsplit(['\\', '/'])
+                .next()?
+                .trim_end_matches(".exe")
+                .trim_end_matches(".EXE")
+                .to_ascii_lowercase(),
+        )
+    }
+}
+
 /// What transports `app` will actually accept.
 ///
 /// `None` means the destination is unknown, which is treated as an ordinary

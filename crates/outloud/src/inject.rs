@@ -364,6 +364,17 @@ fn stage_terminal_edit(text: &str) -> Option<Outcome> {
     }
 }
 
+/// The frontmost application's name, for the per-app transport rules.
+///
+/// Windows has no `ax_edit`, so this asks the OS directly. `None` when the
+/// window or its process cannot be identified, which `accepts` treats as an
+/// ordinary destination: assuming the worst would push every unrecognised app
+/// onto the clipboard and clobber the pasteboard during ordinary dictation.
+#[cfg(all(target_os = "windows", feature = "display"))]
+fn frontmost_app_name() -> Option<String> {
+    text_target::targets::keys::foreground_process_name()
+}
+
 #[cfg(not(target_os = "macos"))]
 fn deliver_via_tiers(mode: &Mode, text: &str) -> Outcome {
     // Same rule the macOS path applies, for the same shipped-broken
@@ -398,28 +409,43 @@ fn deliver_via_tiers(mode: &Mode, text: &str) -> Outcome {
     #[cfg(all(target_os = "windows", feature = "display"))]
     {
         use text_target::targets::ax::UiaTarget;
+        use text_target::targets::keys::{accepts, Acceptance};
         use text_target::TextTarget;
 
-        // Tier 1: UI Automation. For an edit this is a true in-place
-        // rewrite of the field's value; for dictation it appends at the
-        // field's end, which is where a dictated sentence belongs.
-        let uia_err = match UiaTarget::new() {
-            Ok(mut t) => {
-                let res = match mode {
-                    Mode::Dictate => t.insert(&payload),
-                    Mode::Edit { .. } => t.replace(&payload),
-                };
-                match res {
-                    Ok(()) => {
-                        return Outcome::Wrote {
-                            text: payload,
-                            via: "windows-uia".into(),
+        // The same per-app transport question macOS asks, asked here too.
+        //
+        // This path did not ask it at all, so every per-app rule was
+        // macOS-only. That is not a theoretical gap: Discord accepts an
+        // accessibility write, reports success, and reverts it a moment
+        // later, which is exactly the failure that took five separate fixes
+        // on macOS because each write path had to remember the rule
+        // independently. Windows had none of them.
+        //
+        // `accepts` keys on the app name, so a destination we cannot name
+        // resolves to AxAndTyping and behaves as before.
+        let acceptance = accepts(frontmost_app_name().as_deref());
+        let uia_err = if acceptance == Acceptance::ClipboardOnly {
+            // Skip both UIA and synthetic keys: this app discards both.
+            "destination discards accessibility writes and synthetic keys".to_string()
+        } else {
+            match UiaTarget::new() {
+                Ok(mut t) => {
+                    let res = match mode {
+                        Mode::Dictate => t.insert(&payload),
+                        Mode::Edit { .. } => t.replace(&payload),
+                    };
+                    match res {
+                        Ok(()) => {
+                            return Outcome::Wrote {
+                                text: payload,
+                                via: "windows-uia".into(),
+                            }
                         }
+                        Err(e) => e.to_string(),
                     }
-                    Err(e) => e.to_string(),
                 }
+                Err(e) => e.to_string(),
             }
-            Err(e) => e.to_string(),
         };
         eprintln!("outloud: UI Automation write refused ({uia_err}); falling back");
 
@@ -428,7 +454,11 @@ fn deliver_via_tiers(mode: &Mode, text: &str) -> Outcome {
         // replacing it. That is a corruption, not a degradation, so edits
         // stop at the clipboard (where the user pastes over their own
         // selection deliberately) and only dictation types.
-        if may_use_insert_only_tier(mode) {
+        // TypingOnly apps ignore accessibility writes but take keystrokes,
+        // so they reach here and type normally. ClipboardOnly apps discard
+        // keystrokes too, so typing would report success into a field that
+        // empties itself a second later; they fall through to the clipboard.
+        if may_use_insert_only_tier(mode) && acceptance != Acceptance::ClipboardOnly {
             use text_target::targets::keys::SendInputTarget;
             let mut keys = SendInputTarget;
             match keys.insert(&payload) {
