@@ -402,6 +402,18 @@ fn main() -> anyhow::Result<()> {
             .sensitivity
             .or_else(|| menu_host.as_ref().map(|h| h.sensitivity()))
             .unwrap_or(50),
+        // A live view of the same setting, so editing config.toml takes
+        // effect at the next key-down instead of the next launch.
+        //
+        // Skipped when --sensitivity was passed: an explicit flag must not be
+        // silently overridden by a file the user did not touch this run.
+        live_sensitivity: match (args.sensitivity, &menu_host) {
+            (None, Some(_)) => {
+                let runtime = runtime.clone();
+                Some(std::sync::Arc::new(move || runtime.sensitivity()) as _)
+            }
+            _ => None,
+        },
         // Read from config even without a menu host: `--once` has no menu,
         // and a safety net that cannot be exercised in a test is a safety
         // net nobody has seen work.

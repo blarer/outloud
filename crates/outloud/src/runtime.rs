@@ -13,7 +13,7 @@
 //! [`crate::state::StatusShared`] already works: locks held for nanoseconds,
 //! and the reader never blocks the pipeline.
 
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
 use std::sync::{Arc, Mutex};
 
 /// What the daemon actually bound and opened.
@@ -62,6 +62,16 @@ pub struct RuntimeShared {
     /// dropped before any capture starts, so "paused" genuinely means the
     /// microphone is never opened rather than "recorded and discarded".
     enabled: Arc<AtomicBool>,
+    /// `microphone.sensitivity`, as an atomic so a live config reload reaches
+    /// the pipeline.
+    ///
+    /// The pipeline receives `Config` by value at startup, so anything read
+    /// from that copy is frozen for the life of the process. Sensitivity was:
+    /// the segmenter IS rebuilt at every key-down, but from the stale copy, so
+    /// changing the setting appeared to do nothing until restart. This is the
+    /// same "settings the process can adopt without a restart" channel the
+    /// Pause switch uses.
+    sensitivity: Arc<AtomicU8>,
 }
 
 impl Default for RuntimeShared {
@@ -79,6 +89,9 @@ impl RuntimeShared {
             // hotkey, which is the failure this whole surface exists to
             // prevent; the config's `enabled` overrides this at load.
             enabled: Arc::new(AtomicBool::new(true)),
+            // Matches `Config::default().sensitivity`. Overridden at load,
+            // and again on every reload.
+            sensitivity: Arc::new(AtomicU8::new(50)),
         }
     }
 
@@ -112,6 +125,19 @@ impl RuntimeShared {
     /// Arm or pause dictation, from the `enabled` setting.
     pub fn set_enabled(&self, enabled: bool) {
         self.enabled.store(enabled, Ordering::Relaxed);
+    }
+
+    /// Publish `microphone.sensitivity` so a reload reaches the running
+    /// pipeline. Clamped to the documented 1-100 range, because a config file
+    /// is user-editable and a zero here would mean "never hear anything".
+    pub fn set_sensitivity(&self, sensitivity: u8) {
+        self.sensitivity
+            .store(sensitivity.clamp(1, 100), Ordering::Relaxed);
+    }
+
+    /// The sensitivity the segmenter should be built with right now.
+    pub fn sensitivity(&self) -> u8 {
+        self.sensitivity.load(Ordering::Relaxed)
     }
 
     /// Record a working capture device. Also clears the blocked flag: a
@@ -192,5 +218,39 @@ mod tests {
         let b = a.clone();
         a.set_bound_hotkey(Some("f13".into()));
         assert_eq!(b.snapshot().bound_hotkey.as_deref(), Some("f13"));
+    }
+
+    /// A config reload must reach the running pipeline, not just the menu.
+    ///
+    /// F-8 in docs/investigations/robustness.md. The segmenter IS rebuilt at
+    /// every key-down, so sensitivity was always adoptable in principle; the
+    /// pipeline just read it from a `Config` copied at startup, so the reload
+    /// had nowhere to land and the setting appeared restart-only.
+    #[test]
+    fn sensitivity_changes_are_visible_to_a_live_reader() {
+        let shared = RuntimeShared::new();
+        // Matches Config::default(), so a host that never sets it still
+        // segments the way the schema documents.
+        assert_eq!(shared.sensitivity(), 50);
+
+        shared.set_sensitivity(80);
+        assert_eq!(shared.sensitivity(), 80, "a reload must be observable");
+
+        // A config file is user-editable, and 0 would mean "never hear
+        // anything", which is indistinguishable from a broken microphone.
+        shared.set_sensitivity(0);
+        assert_eq!(shared.sensitivity(), 1, "clamped to the documented floor");
+        shared.set_sensitivity(255);
+        assert_eq!(
+            shared.sensitivity(),
+            100,
+            "clamped to the documented ceiling"
+        );
+
+        // Clones share the value: the pipeline holds one and the menu host
+        // another, which is the whole point.
+        let other = shared.clone();
+        shared.set_sensitivity(30);
+        assert_eq!(other.sensitivity(), 30);
     }
 }

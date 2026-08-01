@@ -80,6 +80,17 @@ pub struct Config {
     /// and any host without a config), in which case the flat values on
     /// this struct are used unchanged.
     pub resolve_for_app: Option<AppResolver>,
+    /// Live `microphone.sensitivity`, when the host has one to offer.
+    ///
+    /// `sensitivity` on this struct is a snapshot taken when `run` was
+    /// called, so a config reload could never reach it: the segmenter is
+    /// rebuilt at every key-down, but from the frozen copy, so changing the
+    /// setting appeared to do nothing until restart. This closure reads the
+    /// value the host holds now.
+    ///
+    /// `None` for hosts with no live config (the `--once` measurement path),
+    /// which then use the flat `sensitivity` field unchanged.
+    pub live_sensitivity: Option<std::sync::Arc<dyn Fn() -> u8 + Send + Sync>>,
 }
 
 /// Resolves per-app settings for the app the user was looking at.
@@ -118,6 +129,7 @@ impl Default for Config {
             // indicator, not the faster one.
             warm_hold_ms: 0,
             resolve_for_app: None,
+            live_sensitivity: None,
         }
     }
 }
@@ -211,7 +223,7 @@ pub async fn run(
         mut mic,
     } = channels;
     let mut reports = Vec::new();
-    let mut segmenter = new_segmenter(cfg.sensitivity);
+    let mut segmenter = new_segmenter(current_sensitivity(&cfg));
     let mut listening = false;
     // Key held before the recognizer was ready: the model-loading state
     // buffers the capture instead of losing the user's words (UX doc).
@@ -493,7 +505,7 @@ pub async fn run(
                         } else {
                             None
                         };
-                        segmenter = new_segmenter(cfg.sensitivity);
+                        segmenter = new_segmenter(current_sensitivity(&cfg));
                         in_flight = Some(InFlight {
                             mode,
                             // From the key-down snapshot, so the commit path
@@ -1121,6 +1133,18 @@ type Segmenter = audio::segment::SpeechSegmenter<audio::vad::EnergyVad>;
 /// enough behind push-to-talk, where the key edges, not the VAD, bound the
 /// utterance; swap for Silero (the `silero` feature in crates/audio) when
 /// voice activation lands.
+/// The sensitivity to build the segmenter with right now.
+///
+/// Prefers the host's live value so a config reload takes effect at the next
+/// key-down rather than the next launch, and falls back to the startup
+/// snapshot for hosts that have no live config.
+fn current_sensitivity(cfg: &Config) -> u8 {
+    cfg.live_sensitivity
+        .as_ref()
+        .map(|f| f())
+        .unwrap_or(cfg.sensitivity)
+}
+
 fn new_segmenter(sensitivity: u8) -> Segmenter {
     audio::segment::SpeechSegmenter::new(
         audio::vad::EnergyVad::from_sensitivity(sensitivity),
@@ -1456,5 +1480,36 @@ mod tests {
         .unwrap()[0]
             .transcript
             .clone()
+    }
+
+    /// The pipeline must read sensitivity through the live view when it has
+    /// one, and fall back to the startup snapshot when it does not.
+    ///
+    /// The unit test on RuntimeShared proves the value can be published. This
+    /// proves the pipeline actually READS it, which is the half that was
+    /// broken: the setting was published to a runtime nobody consulted.
+    #[test]
+    fn live_sensitivity_overrides_the_startup_snapshot() {
+        let snapshot_only = Config {
+            sensitivity: 50,
+            live_sensitivity: None,
+            ..Default::default()
+        };
+        assert_eq!(
+            current_sensitivity(&snapshot_only),
+            50,
+            "with no live view, the startup value stands"
+        );
+
+        let live = Config {
+            sensitivity: 50,
+            live_sensitivity: Some(std::sync::Arc::new(|| 80)),
+            ..Default::default()
+        };
+        assert_eq!(
+            current_sensitivity(&live),
+            80,
+            "a reload must beat the value copied at startup"
+        );
     }
 }

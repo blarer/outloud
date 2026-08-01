@@ -241,6 +241,10 @@ impl MenuHost {
         // Push the settings the running process can adopt live. Everything
         // else needs a restart, and the menu says so rather than pretending.
         self.runtime.set_enabled(self.settings.enabled);
+        // Sensitivity is adoptable because the segmenter is rebuilt at every
+        // key-down. It only LOOKED restart-only because the pipeline read it
+        // from a Config copied at startup, so the reload had nowhere to land.
+        self.runtime.set_sensitivity(self.settings.sensitivity);
         // Force a rebuild on the next publish.
         self.model = None;
     }

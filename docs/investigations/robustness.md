@@ -14,7 +14,7 @@ The four bugs found the hard way this session (tail-drop, Discord AXValue,
 success, or reports nothing, while losing user data.** The findings below were
 selected for that same shape rather than for being merely untidy.
 
-> **Status, checked 2026-08-01.** Most of these are fixed. This file is kept
+> **Status, checked 2026-08-01. All eight are now fixed.** This file is kept
 > for the reproductions, which are the expensive part, not as a list of open
 > work. Verified against the code rather than from memory:
 >
@@ -27,7 +27,7 @@ selected for that same shape rather than for being merely untidy.
 > | F-5 focus changes mid-utterance, text lands elsewhere | **Fixed** — the overlay now names the app that took it |
 > | F-6 device disconnect mid-utterance is silent | **Fixed 2026-08-01.** It was worse than described: the `CaptureIssue` went only to stderr, which a Finder-launched app does not have. Now published as `live_detail` on Listening, which is drawn |
 > | F-7 rapid key presses drop the second utterance | **Fixed** — key-down is refused while a commit is in flight, with a reason |
-> | F-8 config reload mid-utterance is partly applied | **Partly fixed.** The half-swapped read is gone (config is an `Arc<RwLock<_>>` snapshot), but `sensitivity` is still read once into the segmenter at startup, so changing it needs a restart |
+> | F-8 config reload mid-utterance is partly applied | **Fixed 2026-08-01.** The half-swapped read was already gone (config is an `Arc<RwLock<_>>` snapshot); `sensitivity` now reaches the pipeline through `RuntimeShared`, so a reload lands at the next key-down instead of the next launch |
 >
 > F-5 is worth reading if you touch text injection: it took four attempts to
 > fix, and three of those were believed done while the warning was invisible.
