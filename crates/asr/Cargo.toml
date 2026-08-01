@@ -10,6 +10,12 @@ rust-version.workspace = true
 publish = false
 description = "Streaming speech recognition: trait, backends, two-stage pipeline, model manager"
 
+[features]
+# Off by default: whisper-rs builds whisper.cpp from source and needs cmake
+# plus a C++ toolchain. A default-on native build would break `cargo build`
+# for anyone without those, including CI jobs that only want to typecheck.
+whisper = ["dep:whisper-rs"]
+
 [dependencies]
 anyhow = { workspace = true }
 serde = { version = "1", features = ["derive"] }
@@ -17,3 +23,5 @@ serde_json = "1"
 sha2 = "0.10"
 thiserror = "2"
 ureq = "2"
+# Bindings to whisper.cpp. Optional: see the `whisper` feature above.
+whisper-rs = { version = "0.14", optional = true, default-features = false }

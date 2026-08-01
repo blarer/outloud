@@ -54,7 +54,7 @@ can compare measured numbers against them.
 | `MockRecognizer` | tests/CI | done | n/a (deterministic) | yes | all |
 | Apple SpeechTranscriber | zero-install finalizer (+partials) on macOS 26+ | **working, measured** | unpublished, subjectively strong | volatile results | macOS 26+ |
 | Parakeet TDT 0.6b v2 (ONNX) | primary cross-platform finalizer | stub + model registry entry | 6.05% Open-ASR avg | chunked | all (via ONNX Runtime) |
-| whisper.cpp | multilingual fallback finalizer | stub + model registry entry | 7.3-10% by size | pseudo only | all |
+| whisper.cpp | multilingual fallback finalizer, and the only recognizer off macOS | **implemented** behind `--features whisper` | 7.3-10% by size | pseudo only | all |
 | Moonshine / sherpa-onnx Zipformer | streamer tier | planned (M1 weeks 9-12) | 6.65-8% | native | all |
 
 ### Apple SpeechTranscriber: measured results (this machine, macOS 26.5, 2026-07)
@@ -82,6 +82,45 @@ f32le PCM on stdin and NDJSON events on stdout. Measured with
 
 Model assets are downloaded and owned by the OS (`AssetInventory`): zero app
 download, model RAM charged to the system.
+
+## Running with whisper.cpp
+
+The only recognizer that works off macOS. Apple's `SpeechTranscriber` is
+macOS-only, so on Windows and Linux this is what makes dictation possible at
+all.
+
+Off by default because `whisper-rs` builds whisper.cpp from source, which
+needs cmake and a C++ toolchain. Turning it on by default would break
+`cargo build` for contributors who only want to typecheck.
+
+```bash
+# 1. Build with the backend (needs cmake).
+cargo build --release -p outloud --features whisper
+
+# 2. Get a ggml model. base.en is 142MiB and the fastest useful one.
+curl -L -o ggml-base.en.bin \
+  https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-base.en.bin
+
+# 3. Point the daemon at it.
+OUTLOUD_WHISPER_MODEL=$PWD/ggml-base.en.bin outloud --asr whisper
+```
+
+Measured on an M4 Pro with `ggml-base.en.bin`, transcribing a 4.96s recording:
+
+| Backend | release->text | Realtime factor |
+|---|---|---|
+| whisper.cpp base.en | 222-233ms | ~21x |
+| Apple SpeechTranscriber | ~300ms | — |
+
+whisper being faster here is not a general claim: base.en is the smallest
+useful model, and Apple's recognizer streams partials that whisper cannot
+produce. Larger whisper models trade latency for accuracy (small.en roughly
+150-300ms on this hardware, large-v3-turbo 8-15x realtime).
+
+Whisper's encoder takes a fixed 30-second window. Longer utterances are
+truncated at the START of the audio, with a line on stderr saying so, because
+a transcript that begins mid-thought reads as a recognition failure rather
+than a length limit.
 
 ## Model and licence audit
 

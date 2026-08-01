@@ -15,6 +15,11 @@ description = "The dictation daemon: hotkey -> capture -> VAD -> recognizer -> i
 # that is what a user runs. Mirrors the `display` gate in text-target and
 # overlay so `--no-default-features` stays a workspace-wide headless guarantee.
 default = ["display"]
+# Forwarded so `cargo build -p outloud --features whisper` reaches the
+# backend. Off by default for the same reason it is in asr: whisper-rs builds
+# whisper.cpp from source and needs cmake plus a C++ toolchain, which not
+# every contributor has and no typecheck-only CI job should require.
+whisper = ["asr/whisper"]
 # `audio/capture` rides on `display` because they answer the same question:
 # is there a human at this machine? A desktop build needs a microphone and a
 # window; a headless build has neither, takes its audio from --wav or a

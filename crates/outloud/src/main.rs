@@ -129,7 +129,7 @@ fn parse_args() -> anyhow::Result<Args> {
                      --once           run one dictation cycle and exit\n\
                      --wav FILE       feed FILE instead of the microphone (with --once)\n\
                      --say TEXT       synthesize TEXT with `say` and feed it (with --once)\n\
-                     --asr apple|mock recognizer backend (default apple)\n\
+                     --asr BACKEND    apple (default), whisper, or mock\n\
                      --chord CHORD    hotkey (default right-option)\n\
                      --no-overlay     log state changes instead of drawing the panel\n\
                      --realtime       pace file audio like live speech\n\
@@ -161,7 +161,31 @@ fn make_recognizer_factory(kind: &str, sensitivity: u8) -> anyhow::Result<Recogn
             let r = asr::backends::apple::AppleRecognizer::new()?;
             Ok(Box::new(r) as _)
         })),
-        other => anyhow::bail!("unknown --asr backend {other} (want apple or mock)"),
+        // The only recognizer that runs off macOS, and the reason Windows
+        // and Linux can work at all.
+        //
+        // The model path is explicit rather than discovered: whisper ggml
+        // files are 142MiB to 1.6GiB, users keep them wherever they keep
+        // large files, and guessing a location then failing is worse than
+        // asking. OUTLOUD_WHISPER_MODEL is checked first so a shell can
+        // override without editing config.
+        "whisper" => {
+            let path = std::env::var("OUTLOUD_WHISPER_MODEL").map_err(|_| {
+                anyhow::anyhow!(
+                    "--asr whisper needs a model: set OUTLOUD_WHISPER_MODEL to a ggml \
+                     .bin (see https://huggingface.co/ggerganov/whisper.cpp)"
+                )
+            })?;
+            Ok(Box::new(move || {
+                let r = asr::backends::whisper_cpp::WhisperCppRecognizer::new(
+                    std::path::Path::new(&path),
+                )?;
+                Ok(Box::new(r) as _)
+            }))
+        }
+        other => {
+            anyhow::bail!("unknown --asr backend {other} (want apple, whisper, or mock)")
+        }
     }
 }
 
