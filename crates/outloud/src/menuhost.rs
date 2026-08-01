@@ -590,4 +590,47 @@ mod tests {
             "the no-host path must resolve sensitivity exactly as the daemon does"
         );
     }
+
+    /// Every documented setting is either wired up or says it is not.
+    ///
+    /// Ten of twenty-one keys in docs/configuration.md were advertised as
+    /// working while nothing read them: the formatting group, vocabulary
+    /// sets, history, paste-fallback, launch-at-login. Verified by running
+    /// the binary with each formatting option set and diffing the transcript,
+    /// which was identical every time.
+    ///
+    /// A setting that parses, validates, and does nothing is worse than a
+    /// missing one: the user sets it, sees no change, and cannot tell whether
+    /// they typed it wrong or the app ignored them.
+    ///
+    /// This test does not check whether a setting WORKS, which needs the real
+    /// binary. It checks the cheaper property that keeps the promise honest:
+    /// nothing in the documented table is silently unimplemented.
+    #[test]
+    fn documented_settings_are_implemented_or_say_they_are_not() {
+        let doc = include_str!("../../../docs/configuration.md");
+
+        // Keys known to be parsed-only. Shrinking this list is the point;
+        // adding to it without also adding the doc note is the failure.
+        const UNIMPLEMENTED: &[&str] = &[
+            "insertion.paste-fallback",
+            "formatting.casing",
+            "formatting.smart-quotes",
+            "formatting.trailing-punctuation",
+            "history.enabled",
+            "vocabulary.sets",
+            "launch-at-login",
+        ];
+
+        for key in UNIMPLEMENTED {
+            let row = doc
+                .lines()
+                .find(|l| l.starts_with(&format!("| `{key}`")))
+                .unwrap_or_else(|| panic!("{key} is no longer documented; update this test"));
+            assert!(
+                row.contains("Not implemented yet"),
+                "{key} does nothing but the docs do not say so:\n  {row}"
+            );
+        }
+    }
 }

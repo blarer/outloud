@@ -88,18 +88,18 @@ Both spellings work: dotted keys (`insertion.mode = "stream"`) or tables
 | `model` | `"balanced"` | Recognizer trade-off: `fast`, `balanced`, or `accurate`. |
 | `enabled` | `true` | Master switch. Profiles set this `false` to mute the tool in an app. |
 | `insertion.mode` | `"on-release"` | `on-release` inserts the whole utterance at once; `stream` types words as you speak. |
-| `insertion.paste-fallback` | `false` | Force clipboard-paste insertion for apps with broken accessibility. |
-| `formatting.casing` | `"standard"` | `standard` or `casual-lowercase` (chat apps often read better lowercase). |
-| `formatting.smart-quotes` | `true` | Convert straight quotes to typographic quotes. |
-| `formatting.trailing-punctuation` | `true` | End utterances with inferred punctuation. |
-| `history.enabled` | `true` | Keep a local plain-text transcription history. |
+| `insertion.paste-fallback` | `false` | Force clipboard-paste insertion for apps with broken accessibility. **Not implemented yet:** parsed and validated, but nothing reads it. |
+| `formatting.casing` | `"standard"` | `standard` or `casual-lowercase` (chat apps often read better lowercase). **Not implemented yet:** parsed and validated, but nothing reads it. Verified by running the binary with it set. |
+| `formatting.smart-quotes` | `true` | Convert straight quotes to typographic quotes. **Not implemented yet:** parsed and validated, but nothing reads it. Verified by running the binary with it set. |
+| `formatting.trailing-punctuation` | `true` | End utterances with inferred punctuation. **Not implemented yet:** parsed and validated, but nothing reads it. Verified by running the binary with it set. |
+| `history.enabled` | `true` | Keep a local plain-text transcription history. **Not implemented yet:** there is no transcript history to enable. |
 | `microphone.sensitivity` | `50` | How quiet a voice still counts as speech (1–100). Raise it if you sit back from the mic; lower it if room noise is transcribed. |
 | `microphone.warm-hold-ms` | `0` | Keep a *slow* microphone open this long after you stop speaking, so the next utterance is not clipped (0–10000). Off by default. |
 | `silence-timeout-ms` | `60000` | Safety net: force-commit and close the microphone after capture has run this long (1000–600000). |
 | `overlay.position` | `"bottom-center"` | `bottom-center`, `bottom-left`, `bottom-right`, `top-center`, or `hidden`. |
-| `vocabulary.sets` | `[]` | Named vocabulary sets active by default; profiles override per app. |
-| `telemetry.enabled` | `false` | Anonymous usage reporting. Off by default, forever. |
-| `launch-at-login` | `false` | Start the daemon when you log in. |
+| `vocabulary.sets` | `[]` | Named vocabulary sets active by default; profiles override per app. **Not implemented yet:** the matcher is written and tested (`crates/config/src/vocab.rs`) and the menu opens the folder, but no transcript passes through it. |
+| `telemetry.enabled` | `false` | Anonymous usage reporting. Off by default, forever. Nothing to disable: the binary links no networking framework, so no telemetry exists to send. |
+| `launch-at-login` | `false` | Start the daemon when you log in. **Not implemented yet:** parsed and shown, but no login item is installed. |
 | `schema-version` | `1` | Written by the daemon; used for automatic migration. |
 
 ### Bluetooth headsets and the first word
