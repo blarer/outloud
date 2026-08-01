@@ -107,6 +107,37 @@ impl MenuHost {
     /// Same layering as the daemon, for the reason given on
     /// `silence_timeout_from_config`: a test must not pass against different
     /// precedence rules than production uses.
+    /// The merged vocabulary for the active `vocabulary.sets`, if any.
+    ///
+    /// Loaded once at startup rather than per utterance: the files are small,
+    /// but reading and parsing them on every commit would put disk I/O on the
+    /// path between the user releasing the key and seeing text.
+    pub fn vocabulary_from_config() -> Option<config::vocab::Vocabulary> {
+        let user = config::ensure_user_config().ok();
+        let system = std::fs::read_to_string(config::system_config_path())
+            .ok()
+            .map(|t| (config::system_config_path(), t));
+        let env: std::collections::BTreeMap<String, String> = std::env::vars()
+            .filter(|(k, _)| {
+                k.starts_with(config::ENV_PREFIX) || k.starts_with(config::LEGACY_ENV_PREFIX)
+            })
+            .collect();
+        let (cfg, _) = config::Config::build(
+            system.as_ref().map(|(p, t)| (p, t.as_str())),
+            user.as_ref().map(|(p, t)| (p, t.as_str())),
+            &env,
+        )
+        .ok()?;
+        let names = match cfg.get("vocabulary.sets") {
+            Some(p) => match &p.value {
+                config::Value::List(names) => names.clone(),
+                _ => return None,
+            },
+            _ => return None,
+        };
+        config::vocab::load_sets(&names)
+    }
+
     pub fn sensitivity_from_config() -> u8 {
         Self::settings_from_config().map_or(50, |s| s.sensitivity)
     }
@@ -618,7 +649,6 @@ mod tests {
             "formatting.smart-quotes",
             "formatting.trailing-punctuation",
             "history.enabled",
-            "vocabulary.sets",
             "launch-at-login",
         ];
 

@@ -91,6 +91,12 @@ pub struct Config {
     /// `None` for hosts with no live config (the `--once` measurement path),
     /// which then use the flat `sensitivity` field unchanged.
     pub live_sensitivity: Option<std::sync::Arc<dyn Fn() -> u8 + Send + Sync>>,
+    /// The merged vocabulary for `vocabulary.sets`, when any are active.
+    ///
+    /// `None` skips the correction pass entirely, which is the common path:
+    /// most users configure no sets, and an empty pass over every transcript
+    /// is work with no possible effect.
+    pub vocabulary: Option<std::sync::Arc<config::vocab::Vocabulary>>,
 }
 
 /// Resolves per-app settings for the app the user was looking at.
@@ -130,6 +136,7 @@ impl Default for Config {
             warm_hold_ms: 0,
             resolve_for_app: None,
             live_sensitivity: None,
+            vocabulary: None,
         }
     }
 }
@@ -341,7 +348,7 @@ pub async fn run(
                     StreamerEvent::Finished { result, wrote_any } => {
                         let Some(pf) = pending_final.take() else { continue };
                         let report = settle_streamed(
-                            &mut engine, pf, result, wrote_any, &feed, recorder,
+                            &mut engine, pf, result, wrote_any, &feed, recorder, cfg.vocabulary.as_deref(),
                         ).await;
                         if let Some(r) = report {
                             eprintln!("outloud: {}", r.render());
@@ -780,7 +787,7 @@ pub async fn run(
                                     continue; // report comes with Finished
                                 }
                                 let report = commit_transcript(
-                                    &mut engine, &fl, &text, finalize_ms, &feed, recorder,
+                                    &mut engine, &fl, &text, finalize_ms, &feed, recorder, cfg.vocabulary.as_deref(),
                                 ).await;
                                 if let Some(r) = report {
                                     eprintln!("outloud: {}", r.render());
@@ -899,6 +906,7 @@ async fn settle_streamed(
     wrote_any: bool,
     feed: &AudioFeed,
     recorder: &mut Recorder,
+    vocabulary: Option<&config::vocab::Vocabulary>,
 ) -> Option<UtteranceReport> {
     let inject_ms = pf.inject_started.elapsed().as_secs_f64() * 1000.0;
     recorder.record(
@@ -922,8 +930,16 @@ async fn settle_streamed(
                 released_at: pf.released_at,
                 streamer: None,
             };
-            return commit_transcript(engine, &fl, &pf.transcript, pf.finalize_ms, feed, recorder)
-                .await;
+            return commit_transcript(
+                engine,
+                &fl,
+                &pf.transcript,
+                pf.finalize_ms,
+                feed,
+                recorder,
+                vocabulary,
+            )
+            .await;
         }
         Err(e) => {
             let msg = format!(
@@ -971,6 +987,7 @@ async fn commit_transcript(
     finalize_ms: f64,
     feed: &AudioFeed,
     recorder: &mut Recorder,
+    vocabulary: Option<&config::vocab::Vocabulary>,
 ) -> Option<UtteranceReport> {
     if text.is_empty() {
         // The documented "empty (silence) result" edge.
@@ -978,6 +995,31 @@ async fn commit_transcript(
         return None;
     }
     engine.transition(OverlayState::Injecting, None);
+
+    // Vocabulary correction, before any transport sees the text.
+    //
+    // Applied here rather than at each write site for the same reason the
+    // transport decision was collapsed into one function: five separate
+    // bypasses of one per-app rule shipped when the decision lived at the
+    // call sites. This is the single funnel every finalised utterance passes
+    // through, so a new transport cannot miss it.
+    let corrected;
+    let text = match vocabulary {
+        Some(vocab) => {
+            let (fixed, applied) = vocab.correct(text);
+            if !applied.is_empty() {
+                // Logged because a correction the user did not ask for is
+                // indistinguishable from a recognizer error otherwise, and
+                // "why did it write that" needs an answer.
+                for c in &applied {
+                    eprintln!("outloud: vocabulary: {:?} -> {:?}", c.from, c.to);
+                }
+            }
+            corrected = fixed;
+            corrected.as_str()
+        }
+        None => text,
+    };
 
     // Did focus move while the user was speaking? The write goes wherever
     // focus is NOW, so if a window raised itself mid-utterance the text is

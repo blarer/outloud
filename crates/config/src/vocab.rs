@@ -80,6 +80,43 @@ const FUZZY_THRESHOLD: f64 = 0.63;
 /// too many things.
 const MIN_FUZZY_LEN: usize = 5;
 
+/// Load the named vocabulary sets from the vocabulary folder.
+///
+/// A set named `team-names` is the file `team-names.txt` beside the user's
+/// config. Missing files are skipped rather than reported as errors: the
+/// config names sets by intent, and a set the user has not written yet is a
+/// normal state, not a misconfiguration.
+///
+/// Returns the merged vocabulary, so callers get one object regardless of how
+/// many sets are active, and `None` when nothing is active. `None` rather than
+/// an empty `Vocabulary` so the caller can skip the correction pass entirely
+/// on the overwhelmingly common path where no sets are configured.
+pub fn load_sets(names: &[String]) -> Option<Vocabulary> {
+    if names.is_empty() {
+        return None;
+    }
+    let dir = crate::vocabulary_dir()?;
+    let loaded: Vec<Vocabulary> = names
+        .iter()
+        .filter_map(|name| {
+            // Reject anything that could escape the vocabulary folder. The
+            // names come from a config file, which is user-editable, and a
+            // set called "../../.ssh/id_rsa" must not be readable as a
+            // vocabulary.
+            if name.contains('/') || name.contains('\\') || name.contains("..") {
+                return None;
+            }
+            std::fs::read_to_string(dir.join(format!("{name}.txt"))).ok()
+        })
+        .map(|text| Vocabulary::parse(&text))
+        .collect();
+    if loaded.is_empty() {
+        return None;
+    }
+    let refs: Vec<&Vocabulary> = loaded.iter().collect();
+    Some(Vocabulary::merge(&refs))
+}
+
 impl Vocabulary {
     /// Parse a vocabulary file. Never fails: bad lines become warnings.
     pub fn parse(text: &str) -> Vocabulary {
@@ -281,12 +318,20 @@ impl Vocabulary {
                 }
                 (_, Some((entry, _))) => {
                     let replacement = carry_punctuation(words[i], &entry.written, entry.flags);
-                    log.push(Correction {
-                        from: words[i].to_string(),
-                        to: replacement.clone(),
-                        rule_line: entry.line,
-                        kind: CorrectionKind::Fuzzy,
-                    });
+                    // A word that already matches its own entry is not a
+                    // correction. The exact-replacement pass runs first, so
+                    // its output arrives here looking like a fuzzy candidate
+                    // for the term it just produced, and logging that reports
+                    // "BROWNIE -> BROWNIE" to a user who would reasonably
+                    // wonder what changed.
+                    if replacement != words[i] {
+                        log.push(Correction {
+                            from: words[i].to_string(),
+                            to: replacement.clone(),
+                            rule_line: entry.line,
+                            kind: CorrectionKind::Fuzzy,
+                        });
+                    }
                     out.push(replacement);
                     i += 1;
                 }
@@ -569,5 +614,35 @@ mod tests {
         let v = vocab("# header\nkubectl\n");
         let (_, log) = v.correct("run cube cuddle now");
         assert_eq!(log[0].rule_line, 2);
+    }
+
+    /// A word that already equals its vocabulary entry is not a correction.
+    ///
+    /// The exact-replacement pass runs before the fuzzy pass, so its output
+    /// arrives at the fuzzy stage as a perfect match for the term it just
+    /// produced. Logging that reported "BROWNIE -> BROWNIE" in a live run,
+    /// which tells a user something happened while showing no change.
+    #[test]
+    fn an_unchanged_word_is_not_reported_as_corrected() {
+        let vocab = Vocabulary::parse("brown -> BROWNIE\n");
+        let (text, corrections) = vocab.correct("the dog is brown");
+
+        assert_eq!(text, "the dog is BROWNIE");
+        assert_eq!(
+            corrections.len(),
+            1,
+            "one word changed, so exactly one correction: {corrections:?}"
+        );
+        assert_eq!(corrections[0].from, "brown");
+        assert_eq!(corrections[0].to, "BROWNIE");
+
+        // And a transcript that already contains the written form reports
+        // nothing at all.
+        let (text, corrections) = vocab.correct("the dog is BROWNIE");
+        assert_eq!(text, "the dog is BROWNIE");
+        assert!(
+            corrections.is_empty(),
+            "nothing changed, so nothing to report: {corrections:?}"
+        );
     }
 }

@@ -97,7 +97,7 @@ Both spellings work: dotted keys (`insertion.mode = "stream"`) or tables
 | `microphone.warm-hold-ms` | `0` | Keep a *slow* microphone open this long after you stop speaking, so the next utterance is not clipped (0–10000). Off by default. |
 | `silence-timeout-ms` | `60000` | Safety net: force-commit and close the microphone after capture has run this long (1000–600000). |
 | `overlay.position` | `"bottom-center"` | `bottom-center`, `bottom-left`, `bottom-right`, `top-center`, or `hidden`. |
-| `vocabulary.sets` | `[]` | Named vocabulary sets active by default; profiles override per app. **Not implemented yet:** the matcher is written and tested (`crates/config/src/vocab.rs`) and the menu opens the folder, but no transcript passes through it. |
+| `vocabulary.sets` | `[]` | Named vocabulary sets active by default; profiles override per app. |
 | `telemetry.enabled` | `false` | Anonymous usage reporting. Off by default, forever. Nothing to disable: the binary links no networking framework, so no telemetry exists to send. |
 | `launch-at-login` | `false` | Start the daemon when you log in. **Not implemented yet:** parsed and shown, but no login item is installed. |
 | `schema-version` | `1` | Written by the daemon; used for automatic migration. |

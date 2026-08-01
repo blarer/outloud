@@ -430,6 +430,11 @@ fn main() -> anyhow::Result<()> {
         // and therefore no profiles, which keeps its numbers comparable
         // across runs.
         resolve_for_app: menu_host.as_ref().map(|h| h.app_resolver()),
+        // Read on every path including `--once`, so the measurement mode
+        // transcribes what a real run would. Loaded once: the files are
+        // small, but parsing them per utterance would put disk I/O between
+        // the key release and the text.
+        vocabulary: outloud::menuhost::MenuHost::vocabulary_from_config().map(std::sync::Arc::new),
     };
 
     // After cfg, so the mock's voiced-window gate can follow the same
