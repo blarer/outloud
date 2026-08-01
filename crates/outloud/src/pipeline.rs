@@ -1184,13 +1184,38 @@ mod tests {
         );
     }
 
-    /// `prefer_streaming: true` with no streamable field (CI has no
-    /// accessibility focus) must degrade to exactly the buffered behaviour:
-    /// one report, one write attempt, no hang waiting for a writer thread
-    /// that was never spawned. This is the degradation-matrix contract at
-    /// the pipeline level, not just the session level.
+    /// `prefer_streaming: true` with no streamable field must degrade to
+    /// exactly the buffered behaviour: one report, one write attempt, no hang
+    /// waiting for a writer thread that was never spawned. This is the
+    /// degradation-matrix contract at the pipeline level, not just the
+    /// session level.
+    ///
+    /// `OUTLOUD_NO_INJECT` is what makes "no streamable field" true rather
+    /// than hoped for. The test previously relied on the environment having
+    /// no accessibility focus, which holds on CI and does NOT hold on a
+    /// developer's Mac: there the run took the live AX path, wrote into
+    /// whatever window happened to be focused, and blocked on it. That is
+    /// why this failed roughly one run in four under load while passing
+    /// eight times out of eight on an idle machine, and why raising the
+    /// timeout would have hidden the cause instead of fixing it.
     #[tokio::test]
     async fn streaming_preference_degrades_to_buffered_without_a_field() {
+        // Scoped guard: the variable is process-wide and tests share a
+        // process, so it must not leak into whatever runs next.
+        struct NoInject;
+        impl NoInject {
+            fn set() -> Self {
+                std::env::set_var("OUTLOUD_NO_INJECT", "1");
+                NoInject
+            }
+        }
+        impl Drop for NoInject {
+            fn drop(&mut self) {
+                std::env::remove_var("OUTLOUD_NO_INJECT");
+            }
+        }
+        let _no_inject = NoInject::set();
+
         let (ftx, frx) = tokio::sync::mpsc::unbounded_channel();
         let (atx, arx) = tokio::sync::mpsc::unbounded_channel();
         let (rtx, rrx) = tokio::sync::oneshot::channel();
