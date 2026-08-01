@@ -77,3 +77,11 @@ objc2 = "0.6"
 objc2-foundation = { version = "0.3", features = ["NSDate", "NSRunLoop"] }
 objc2-app-kit = { version = "0.3", features = ["NSApplication", "NSResponder"] }
 block2 = "0.6"
+
+[target.'cfg(windows)'.dependencies]
+# For the single-instance named mutex. Windows has no flock, so without this
+# the guard is a no-op and two daemons can both bind the hotkey.
+windows = { version = "0.62", features = [
+    "Win32_Foundation",
+    "Win32_System_Threading",
+] }

@@ -172,11 +172,46 @@ fn try_lock_exclusive(file: &std::fs::File) -> bool {
     unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) == 0 }
 }
 
-/// Non-unix has no `flock`. Returning true keeps the daemon working rather
-/// than refusing to start on a platform where the guard is not implemented;
-/// Windows should use a named mutex when its backends are exercised on real
-/// hardware.
-#[cfg(not(unix))]
+/// Windows has no `flock`, so the guard is a named mutex.
+///
+/// This returned `true` unconditionally until the Windows backends were run
+/// on real hardware, which made the guard a no-op on the one platform where
+/// double-launching is most likely: there is no tray icon yet, so nothing
+/// tells a user a daemon is already running. Two daemons both bind the
+/// hotkey and both open the microphone, so one keypress records twice and
+/// types twice, which is exactly what this module exists to prevent.
+///
+/// `Global\` scope rather than `Local\`: session-local would still allow one
+/// daemon per terminal-services session, and the microphone is not
+/// per-session. The handle is deliberately leaked, because the mutex must
+/// live as long as the process and Windows releases it on exit.
+#[cfg(windows)]
+fn try_lock_exclusive(_file: &std::fs::File) -> bool {
+    use windows::core::w;
+    use windows::Win32::Foundation::{GetLastError, ERROR_ALREADY_EXISTS};
+    use windows::Win32::System::Threading::CreateMutexW;
+
+    unsafe {
+        let handle = match CreateMutexW(None, true, w!("Global\\dev.outloud.outloud.single")) {
+            Ok(h) => h,
+            // Cannot create the mutex at all (a sandbox denying Global\, say).
+            // Allow the launch: refusing to start over a guard we could not
+            // evaluate is worse than the duplicate it was meant to prevent.
+            Err(_) => return true,
+        };
+        if GetLastError() == ERROR_ALREADY_EXISTS {
+            // Another daemon holds it. Our handle is closed by process exit.
+            return false;
+        }
+        // Held for the process lifetime on purpose.
+        std::mem::forget(handle);
+        true
+    }
+}
+
+/// Platforms with neither `flock` nor a named mutex keep the daemon working
+/// rather than refusing to start over a guard that is not implemented.
+#[cfg(not(any(unix, windows)))]
 fn try_lock_exclusive(_file: &std::fs::File) -> bool {
     true
 }
