@@ -110,7 +110,7 @@ impl WhisperCppRecognizer {
             }
             silence_whisper_logging();
             let ctx = whisper_rs::WhisperContext::new_with_params(
-                &model_path.to_string_lossy(),
+                model_path,
                 whisper_rs::WhisperContextParameters::default(),
             )
             .map_err(|e| anyhow::anyhow!("whisper failed to load {}: {e}", model_path.display()))?;
@@ -204,13 +204,16 @@ impl Recognizer for WhisperCppRecognizer {
                 .full(params, audio)
                 .map_err(|e| anyhow::anyhow!("whisper transcription failed: {e}"))?;
 
-            let n = state
-                .full_n_segments()
-                .map_err(|e| anyhow::anyhow!("whisper segment count failed: {e}"))?;
+            let n = state.full_n_segments();
             let mut text = String::new();
             for i in 0..n {
-                if let Ok(seg) = state.full_get_segment_text(i) {
-                    text.push_str(&seg);
+                // `to_str_lossy` rather than `to_str`: whisper can emit bytes
+                // that are not valid UTF-8 mid-token, and losing a character
+                // is better than losing the sentence.
+                if let Some(seg) = state.get_segment(i) {
+                    if let Ok(part) = seg.to_str_lossy() {
+                        text.push_str(&part);
+                    }
                 }
             }
 
