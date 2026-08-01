@@ -119,6 +119,16 @@ mod ffi {
         pub fn UnhookWindowsHookEx(hhk: HHOOK) -> i32;
         pub fn CallNextHookEx(hhk: HHOOK, code: i32, w_param: WPARAM, l_param: LPARAM) -> LRESULT;
         pub fn PeekMessageW(msg: *mut MSG, hwnd: HWND, min: u32, max: u32, remove: u32) -> i32;
+        /// Blocks IN the message system until input arrives or the timeout
+        /// expires. This is what makes the thread available for hook
+        /// dispatch; a sleep is not.
+        pub fn MsgWaitForMultipleObjects(
+            count: u32,
+            handles: *const std::ffi::c_void,
+            wait_all: i32,
+            millis: u32,
+            wake_mask: u32,
+        ) -> u32;
         pub fn RegisterHotKey(hwnd: HWND, id: i32, modifiers: u32, vk: u32) -> i32;
         pub fn UnregisterHotKey(hwnd: HWND, id: i32) -> i32;
         pub fn GetLastError() -> u32;
@@ -233,6 +243,12 @@ pub fn chord_already_registered(vk: u32, chord: &crate::chord::Chord) -> bool {
 /// any human's tolerance for a dead hotkey, and cheap: one API call.
 const WATCHDOG_INTERVAL: std::time::Duration = std::time::Duration::from_secs(2);
 
+/// `QS_ALLINPUT`: wake for any input or posted message.
+///
+/// The value matters less than the blocking: what the thread must not do is
+/// sleep, because a sleeping thread cannot dispatch a hook callback.
+const QS_ALLINPUT: u32 = 0x04FF;
+
 pub fn spawn(
     chord: &crate::chord::Chord,
     matcher: Matcher,
@@ -298,9 +314,22 @@ pub fn spawn(
 /// Windows removes a hook whose callback exceeded `LowLevelHooksTimeout`
 /// and tells nobody: there is no event, no error, no callback. The macOS
 /// event tap at least delivers `kCGEventTapDisabledByTimeout` as an event,
-/// so the Windows recovery has to be *polled*. `PeekMessageW` with a
-/// timeout would be the tidy shape, but a plain timed wait is enough
-/// because this thread's only job is to exist for hook dispatch.
+/// so the Windows recovery has to be *polled*.
+///
+/// The wait MUST block inside the message system rather than sleep, and this
+/// is not a style preference. A low-level hook callback is delivered by the
+/// OS while the owning thread is waiting on its message queue. A thread
+/// asleep in `thread::sleep` is not waiting on its queue, so every keystroke
+/// stalls until the sleep ends. Windows gives a hook
+/// `LowLevelHooksTimeout` (300ms by default) to respond and silently
+/// unhooks it otherwise, so a 2s sleep guarantees the hook is killed on the
+/// first keypress.
+///
+/// The symptom is worse than a dead hotkey: the hook sits in the chain for
+/// EVERY key system-wide, so the whole keyboard freezes until Windows tears
+/// it down. Observed on Windows 11 the first time this code ran on real
+/// hardware; Ctrl+Alt+Del cleared it, which is the signature of exactly this
+/// failure.
 ///
 /// On detecting a dead hook we reinstall AND reset the matcher and state
 /// machine: while unhooked we may have missed a key-UP, and a state machine
@@ -321,7 +350,19 @@ fn pump_with_watchdog(mut hook: ffi::HHOOK) {
             }
         }
 
-        std::thread::sleep(WATCHDOG_INTERVAL);
+        // Blocks in the message system, so the OS can dispatch hook
+        // callbacks the whole time, and still returns by the watchdog
+        // deadline so the liveness check below runs on schedule. Replacing
+        // this with a sleep reintroduces a system-wide keyboard freeze.
+        unsafe {
+            ffi::MsgWaitForMultipleObjects(
+                0,
+                std::ptr::null(),
+                0,
+                WATCHDOG_INTERVAL.as_millis() as u32,
+                QS_ALLINPUT,
+            );
+        }
 
         // Poison check, and why it belongs in the watchdog: the callback
         // takes the state with `try_lock`, and a POISONED mutex returns Err
