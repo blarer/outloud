@@ -656,6 +656,19 @@ impl Check for Clipboard {
                      SSH/daemon context",
                 ),
             }
+        } else if cfg!(target_os = "windows") {
+            // Windows has a native clipboard with nothing to install, and no
+            // DISPLAY or WAYLAND_DISPLAY: those are X11 and Wayland variables
+            // that are never set on a native session. Without this branch the
+            // check fell through to the else arm below and told Windows users
+            // "no display: no clipboard" as a FAIL, on a machine where the
+            // clipboard demonstrably works.
+            //
+            // A confident wrong answer is worse than no answer, because it
+            // stops the search. This project already lost an hour to the same
+            // shape when the doctor reported another process's permissions as
+            // the app's.
+            CheckOutcome::pass("Windows clipboard is native; nothing to install")
         } else if env.get("WAYLAND_DISPLAY").is_some() {
             CheckOutcome::warn(
                 "Wayland clipboard requires wl-clipboard",

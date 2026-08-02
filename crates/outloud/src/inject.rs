@@ -120,15 +120,37 @@ pub fn snapshot_and_mode_at_keydown() -> (Mode, Option<TextSnapshot>) {
 /// returns `None`, so profiles are simply unresolved rather than absent
 /// at compile time.
 pub fn app_identity(snap: Option<&TextSnapshot>) -> Option<config::AppIdentity> {
-    let snap = snap?;
-    if snap.bundle_id.is_none() && snap.app.is_none() {
-        return None;
+    if let Some(snap) = snap {
+        if snap.bundle_id.is_some() || snap.app.is_some() {
+            return Some(config::AppIdentity {
+                bundle_id: snap.bundle_id.clone(),
+                process_name: snap.app.clone(),
+                window_class: None,
+            });
+        }
     }
-    Some(config::AppIdentity {
-        bundle_id: snap.bundle_id.clone(),
-        process_name: snap.app.clone(),
-        window_class: None,
-    })
+    // No snapshot: ask the OS directly.
+    //
+    // Windows never has one, because `snapshot_and_mode_at_keydown` returns
+    // None for it, so this returned None every time and `resolve_for_app` was
+    // never called. The whole [profile.*] feature documented in
+    // docs/configuration.md was unreachable on Windows while appearing to be
+    // supported.
+    //
+    // `match.bundle-id` still cannot match here: Windows has no bundle ids.
+    // `match.process-name` can, which is what the docs already suggest for
+    // terminal programs.
+    #[cfg(all(target_os = "windows", feature = "display"))]
+    {
+        let name = text_target::targets::keys::foreground_process_name()?;
+        return Some(config::AppIdentity {
+            bundle_id: None,
+            process_name: Some(name),
+            window_class: None,
+        });
+    }
+    #[cfg(not(all(target_os = "windows", feature = "display")))]
+    None
 }
 
 /// How one utterance ended, for the overlay and the log.

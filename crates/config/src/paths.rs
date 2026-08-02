@@ -28,14 +28,41 @@ pub const APP_DIR: &str = "outloud";
 pub fn user_config_path() -> Option<PathBuf> {
     let dir = match std::env::var_os("XDG_CONFIG_HOME") {
         Some(x) if !x.is_empty() => PathBuf::from(x),
-        _ => PathBuf::from(std::env::var_os("HOME")?).join(".config"),
+        _ => PathBuf::from(home_dir()?).join(".config"),
     };
     Some(dir.join(APP_DIR).join("config.toml"))
+}
+
+/// The user's home directory.
+///
+/// `HOME` first, because it is what unix sets and what a Git Bash or WSL-ish
+/// shell sets on Windows too, so honouring it keeps those environments
+/// working. `USERPROFILE` is the native Windows answer and is the reason
+/// this helper exists: without it `user_config_path` returned `None` on a
+/// normally-launched Windows daemon, so config.toml, the vocabulary folder
+/// and every per-app profile silently resolved to nothing. The daemon still
+/// ran, which is what made it hard to notice.
+fn home_dir() -> Option<std::ffi::OsString> {
+    match std::env::var_os("HOME") {
+        Some(h) if !h.is_empty() => Some(h),
+        _ => std::env::var_os("USERPROFILE").filter(|u| !u.is_empty()),
+    }
 }
 
 /// The machine-wide file for managed deployments. Read-only as far as the
 /// daemon is concerned; it never writes here.
 pub fn system_config_path() -> PathBuf {
+    // Windows has no /etc. ProgramData is the documented location for
+    // machine-wide application data, and an admin deploying a managed
+    // config expects it there rather than at a unix path that cannot exist.
+    #[cfg(windows)]
+    {
+        let root = std::env::var_os("ProgramData")
+            .map(PathBuf::from)
+            .unwrap_or_else(|| PathBuf::from(r"C:\ProgramData"));
+        return root.join("OutLoud").join("config.toml");
+    }
+    #[cfg(not(windows))]
     PathBuf::from("/etc/outloud/config.toml")
 }
 
