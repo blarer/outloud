@@ -83,10 +83,10 @@ use windows::Win32::Graphics::Direct2D::Common::{
     D2D1_FILL_MODE_WINDING, D2D1_GRADIENT_STOP, D2D1_PIXEL_FORMAT,
 };
 use windows::Win32::Graphics::Direct2D::{
-    D2D1CreateFactory, ID2D1DCRenderTarget, ID2D1Factory, ID2D1PathGeometry,
+    D2D1CreateFactory, ID2D1DCRenderTarget, ID2D1Factory, ID2D1PathGeometry, D2D1_ELLIPSE,
     D2D1_EXTEND_MODE_CLAMP, D2D1_FACTORY_TYPE_SINGLE_THREADED, D2D1_FEATURE_LEVEL_DEFAULT,
-    D2D1_GAMMA_2_2, D2D1_LINEAR_GRADIENT_BRUSH_PROPERTIES, D2D1_RENDER_TARGET_PROPERTIES,
-    D2D1_RENDER_TARGET_TYPE_DEFAULT, D2D1_RENDER_TARGET_USAGE_NONE,
+    D2D1_GAMMA_2_2, D2D1_LINEAR_GRADIENT_BRUSH_PROPERTIES, D2D1_RADIAL_GRADIENT_BRUSH_PROPERTIES,
+    D2D1_RENDER_TARGET_PROPERTIES, D2D1_RENDER_TARGET_TYPE_DEFAULT, D2D1_RENDER_TARGET_USAGE_NONE,
 };
 use windows::Win32::Graphics::Dxgi::Common::DXGI_FORMAT_B8G8R8A8_UNORM;
 use windows::Win32::Graphics::Gdi::{
@@ -107,10 +107,11 @@ use windows_numerics::{Matrix3x2, Vector2};
 
 /// Panel size in points (treated as device pixels; see the DPI note in the
 /// module doc — this crate does not yet scale the render target for
-/// non-100% monitors). Sized to comfortably hold the skull box plus the
-/// stage-2 shadow's offset, with no text lane yet (stage 3).
-const PANEL_W: i32 = 96;
-const PANEL_H: i32 = 96;
+/// non-100% monitors). Sized to comfortably hold the skull box, the
+/// stage-2 shadow's offset, and the stage-3 glow aura's reach, with no
+/// text lane yet.
+const PANEL_W: i32 = 160;
+const PANEL_H: i32 = 160;
 
 /// The skull's bounding box inside the panel, in panel points. Same
 /// `SKULL_SIZE=42` macOS uses (`macos.rs`'s `SKULL_SIZE` constant), per the
@@ -119,6 +120,18 @@ const PANEL_H: i32 = 96;
 const SKULL_SIZE: f64 = 42.0;
 const SKULL_X: f64 = (PANEL_W as f64 - SKULL_SIZE) / 2.0;
 const SKULL_Y: f64 = (PANEL_H as f64 - SKULL_SIZE) / 2.0;
+
+/// The glow aura's centre (panel centre, matching the skull box's own
+/// centre) and base radius, mirroring `macos.rs`'s `GLOW_CX`/`GLOW_CY`/
+/// `GLOW_R` — same footprint policy, different rendering technique (one
+/// native radial-gradient fill here vs. macOS's 20-ring fake, plan §2.5:
+/// Direct2D has a real radial gradient brush, so this is simpler code, not
+/// a compromise). Unlike macOS's ring loop, a single radial brush needs no
+/// separate inner-floor radius (`ORB_R` there) — the gradient stops
+/// themselves define where the fade starts.
+const GLOW_CX: f64 = PANEL_W as f64 / 2.0;
+const GLOW_CY: f64 = PANEL_H as f64 / 2.0;
+const GLOW_R: f64 = 58.0;
 
 /// Where the light comes from, mirroring `macos.rs`'s `LIGHT_ELEVATION`
 /// doc: depth is every highlight and shadow agreeing about one light.
@@ -413,16 +426,107 @@ impl WinOverlay {
         Ok(())
     }
 
+    /// The gaze aura behind the skull: one native radial-gradient fill,
+    /// simpler than `macos.rs`'s 20-ring `NSGradient` workaround because
+    /// Direct2D has a real `ID2D1RadialGradientBrush` (plan §2.5 — this is
+    /// better than parity, not a compromise). Radius and alpha both track
+    /// `pose.eye_glow` the same way macOS's `gain`/`reach` do, so the aura
+    /// still breathes with the voice.
+    fn draw_glow(
+        &self,
+        accent: theme::Color,
+        eye_glow: f64,
+        fade: f64,
+    ) -> windows::core::Result<()> {
+        let reach = GLOW_R * (0.72 + 0.28 * eye_glow);
+        // Alpha at the centre; the stop collection fades it to fully
+        // transparent by the outer edge, same shape as macOS's Gaussian
+        // falloff approximated with a 3-stop curve instead of 20 discrete
+        // rings.
+        let inner_a = (0.16 * (0.55 + 0.45 * eye_glow) * fade).clamp(0.0, 1.0);
+        let mid = D2D1_COLOR_F {
+            r: accent.r as f32,
+            g: accent.g as f32,
+            b: accent.b as f32,
+            a: inner_a as f32,
+        };
+        let outer = D2D1_COLOR_F {
+            r: accent.r as f32,
+            g: accent.g as f32,
+            b: accent.b as f32,
+            a: 0.0,
+        };
+        unsafe {
+            let stops = [
+                D2D1_GRADIENT_STOP {
+                    position: 0.0,
+                    color: mid,
+                },
+                D2D1_GRADIENT_STOP {
+                    position: 0.45,
+                    color: mid,
+                },
+                D2D1_GRADIENT_STOP {
+                    position: 1.0,
+                    color: outer,
+                },
+            ];
+            let stop_collection = self.render_target.CreateGradientStopCollection(
+                &stops,
+                D2D1_GAMMA_2_2,
+                D2D1_EXTEND_MODE_CLAMP,
+            )?;
+            let radial_props = D2D1_RADIAL_GRADIENT_BRUSH_PROPERTIES {
+                center: Vector2 {
+                    X: GLOW_CX as f32,
+                    Y: GLOW_CY as f32,
+                },
+                gradientOriginOffset: Vector2 { X: 0.0, Y: 0.0 },
+                radiusX: reach as f32,
+                radiusY: reach as f32,
+            };
+            let brush = self.render_target.CreateRadialGradientBrush(
+                &radial_props,
+                None,
+                &stop_collection,
+            )?;
+            let ellipse = D2D1_ELLIPSE {
+                point: Vector2 {
+                    X: GLOW_CX as f32,
+                    Y: GLOW_CY as f32,
+                },
+                radiusX: reach as f32,
+                radiusY: reach as f32,
+            };
+            self.render_target.FillEllipse(&ellipse, &brush);
+        }
+        Ok(())
+    }
+
     /// The skull: pure posed geometry from [`crate::skull`], mapped into
     /// the panel's skull box and filled via Direct2D. Mirrors
-    /// `macos.rs::draw_skull`, minus the 20-ring aura and text lane
-    /// (stage 3) and with a cheap offset-fill shadow instead of a real
-    /// blurred one (stage 2, plan §2.4 option b — see the module doc for
-    /// why a DC render target cannot cheaply do a real blur).
-    fn draw_skull(&self, state: OverlayState, pose: &SkullPose) -> windows::core::Result<()> {
+    /// `macos.rs::draw_skull`: the gaze aura (native radial gradient
+    /// instead of macOS's 20-ring fake, plan §2.5), the bone fills, and a
+    /// cheap offset-fill shadow instead of a real blurred one (stage 2,
+    /// plan §2.4 option b — see the module doc for why a DC render target
+    /// cannot cheaply do a real blur). Text lane (stage 3b) is not wired
+    /// in yet.
+    fn draw_skull(
+        &self,
+        state: OverlayState,
+        pose: &SkullPose,
+        reduce_motion: bool,
+    ) -> windows::core::Result<()> {
         let accent = theme::accent(state);
         let geo = skull::posed_geometry(pose);
         let fade = pose.opacity;
+
+        // Aura first, so the skull draws over it. Reduced motion drops it
+        // entirely: it exists to flicker with the voice, same rationale as
+        // macos.rs::draw_skull's identical guard.
+        if !reduce_motion {
+            self.draw_glow(accent, pose.eye_glow, fade)?;
+        }
 
         // Three bone tones instead of one, so a lit top can meet a shaded
         // underside — same rationale as macos.rs's identical comment.
@@ -476,7 +580,13 @@ impl WinOverlay {
     /// lifetimes have a single scope with a single cleanup path — same
     /// shape as the old GDI-only `paint`, with GDI shape/text drawing
     /// replaced by a Direct2D pass bound to the same DC.
-    fn paint(&self, state: OverlayState, pose: &SkullPose, pos: Rect) -> anyhow::Result<()> {
+    fn paint(
+        &self,
+        state: OverlayState,
+        pose: &SkullPose,
+        reduce_motion: bool,
+        pos: Rect,
+    ) -> anyhow::Result<()> {
         unsafe {
             let screen_dc: HDC = GetDC(None);
             let mem_dc = CreateCompatibleDC(Some(screen_dc));
@@ -510,7 +620,7 @@ impl WinOverlay {
             // only the skull's own pixels are, matching macOS's
             // `panel.setOpaque(false)` / clear background color.
             self.render_target.Clear(None);
-            self.draw_skull(state, pose)?;
+            self.draw_skull(state, pose, reduce_motion)?;
             self.render_target.EndDraw(None, None)?;
 
             // No manual premultiply pass here — see the module doc's
@@ -612,7 +722,7 @@ impl Overlay for WinOverlay {
             height: PANEL_H as f64,
         };
         let pos = place(frame.anchor, overlay_size, self.screen_bounds());
-        self.paint(frame.state, &self.pose, pos)?;
+        self.paint(frame.state, &self.pose, reduce_motion, pos)?;
 
         self.last_state = frame.state;
 
