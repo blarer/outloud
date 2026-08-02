@@ -43,6 +43,7 @@
 use crate::layout::{place, Anchor, Point, Rect, Size};
 use crate::pixel::{premultiply, PANEL_ALPHA};
 use crate::state::OverlayState;
+use crate::theme;
 use crate::{Overlay, OverlayFrame};
 
 use windows::core::PCWSTR;
@@ -93,17 +94,20 @@ fn colorref(r: u8, g: u8, b: u8) -> COLORREF {
     COLORREF((b as u32) << 16 | (g as u32) << 8 | r as u32)
 }
 
-/// The per-state accent, mirroring macos.rs so both platforms speak the
-/// same visual language.
+/// The per-state accent color as 8-bit sRGB components, ready for
+/// `colorref()`. `theme::accent` is the single source of truth for this
+/// mapping (see `theme.rs`'s module doc) — this used to be a hand-rolled
+/// copy that had drifted from it (Listening was green here, `COBALT` blue
+/// in `theme.rs`); converting through `Color::hex()` instead of
+/// re-declaring the table is what keeps drift impossible rather than just
+/// unlikely.
 fn accent(state: OverlayState) -> (u8, u8, u8) {
-    match state {
-        OverlayState::Listening => (64, 200, 120), // green: mic hot
-        OverlayState::Transcribing => (240, 200, 80), // amber: working
-        OverlayState::Error => (235, 90, 90),      // red
-        OverlayState::NoPermission => (235, 90, 90), // red
-        OverlayState::ModelLoading => (120, 160, 240), // blue: wait
-        _ => (160, 160, 160),
-    }
+    let hex = theme::accent(state).hex();
+    (
+        ((hex >> 16) & 0xFF) as u8,
+        ((hex >> 8) & 0xFF) as u8,
+        (hex & 0xFF) as u8,
+    )
 }
 
 pub struct WinOverlay {

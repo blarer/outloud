@@ -89,13 +89,30 @@ path = "src/bin/overlay-demo.rs"
 name = "status-demo"
 path = "src/bin/status-demo.rs"
 
-# Windows overlay: layered/click-through/non-activating window plus GDI
-# text drawing. Same double gating as the AppKit dependencies above: only
-# Windows targets download it, only display builds link it.
+# Windows overlay: layered/click-through/non-activating window, rendered
+# with Direct2D/DirectWrite into the same premultiplied-alpha DIB the
+# layered window already uses (see windows.rs's module doc). Same double
+# gating as the AppKit dependencies above: only Windows targets download
+# it, only display builds link it.
 [target.'cfg(target_os = "windows")'.dependencies]
 windows = { version = "0.62", optional = true, features = [
     "Win32_Foundation",
     "Win32_Graphics_Gdi",
+    # Direct2D: fills the skull's arbitrary polygons with alpha-blended
+    # solid/gradient brushes, which GDI cannot do natively (see
+    # docs/plans/windows-overlay.md §2.1). `ID2D1DCRenderTarget` binds to
+    # the existing GDI memory DC, so the window-plumbing half of this file
+    # is unchanged; only what draws *into* the DC changes.
+    "Win32_Graphics_Direct2D",
+    "Win32_Graphics_Direct2D_Common",
+    # DirectWrite: the skull's text-lane analog of `NSFont`/`NSString`
+    # measurement and drawing (§2.6). Not wired into a renderer yet at
+    # Stage 0-2; the feature is added now so Stage 3 (text lane) is a pure
+    # code change with no Cargo-plumbing risk left to discover.
+    "Win32_Graphics_DirectWrite",
+    # Pixel format enums (`DXGI_FORMAT_B8G8R8A8_UNORM`) Direct2D's render
+    # target creation wants.
+    "Win32_Graphics_Dxgi_Common",
     "Win32_UI_HiDpi",
     "Win32_UI_WindowsAndMessaging",
 ] }
