@@ -1,15 +1,22 @@
 # Windows overlay: bringing it to macOS visual parity
 
-Status: **stages 0-2 and 3a implemented** (see `crates/overlay/src/windows.rs`
-and the commits landing this plan). Cargo plumbing, a flat skull, depth/
-lighting, and the gaze aura all compile against real Windows Direct2D/
-DirectWrite types on `--target x86_64-pc-windows-msvc`, verified
-compile-clean and matched against unit-tested shared logic in
-`skull.rs`/`theme.rs`. **Not yet run on Windows hardware** — the
-premultiply/BindDC/DPI risks flagged throughout this doc (§2.1, §5) remain
-open and are called out again in each landing commit's message. Text lane
-(§2.6, stage 3b) and Reduce Motion wiring (§2.7, stage 4) are not attempted.
-The original plan below is left as written for the parts still ahead.
+Status: **stages 0-2 and 3a implemented and running on real Windows CI
+infrastructure** (see `crates/overlay/src/windows.rs`, the commits landing
+this plan, and the `windows-overlay-runtime-smoke` CI job). Cargo plumbing,
+a flat skull, depth/lighting, and the gaze aura compile, link, AND execute
+without a runtime error on real `windows-2025` GitHub-hosted runners: the
+CI job runs `overlay-demo`'s Windows path, which calls `WinOverlay::new()`
+and `render()` across every `OverlayState` (including `Listening`, whose
+non-zero `eye_glow` exercises the aura's radial-gradient brush, and
+`Transcribing`, which exercises the depth-gradient/shadow passes), and
+exits cleanly. **Still not verified: how it looks.** No CI job, headless
+or not, can observe pixel-level correctness — the premultiply/BindDC/DPI
+risks flagged throughout this doc (§2.1, §5) are about whether the pixels
+that got pushed to the layered window are the *right* pixels, not whether
+the code path completes, and that remains genuinely open pending a human
+looking at a real screen. Text lane (§2.6, stage 3b) and Reduce Motion
+wiring (§2.7, stage 4) are not attempted. The original plan below is left
+as written for the parts still ahead.
 
 ## 0. The one-sentence summary
 
