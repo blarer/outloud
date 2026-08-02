@@ -192,6 +192,51 @@ jobs:
         run: >-
           echo "::error title=build failed for ${{ matrix.target }}::Workspace does not compile for ${{ matrix.target }} on ${{ matrix.os }} (cross: ${{ matrix.use-cross || 'false' }}). The first 'error' line in the Build step above names the crate at fault."
 
+  # Windows runtime smoke test: the build-matrix job above proves the
+  # Direct2D overlay renderer COMPILES AND LINKS on Windows, but link
+  # success says nothing about whether D2D1CreateFactory, BindDC, or
+  # UpdateLayeredWindow actually succeed at runtime — that is exactly the
+  # class of bug this project has hit before (see docs/plans/
+  # windows-overlay.md's own "cannot verify without hardware" caveats).
+  # This runs the real overlay-demo binary's Windows path
+  # (crates/overlay/src/bin/overlay-demo.rs's `windemo::run()`) on a real
+  # windows-2025 GitHub-hosted runner, which is CI infrastructure, not the
+  # user's machine, so it does not touch anything this task was told to
+  # stay away from. It cycles every OverlayState (including the Direct2D
+  # skull paint path added by this change) for a few seconds and asserts a
+  # clean exit: any HRESULT failure inside WinOverlay::new()/render()
+  # (factory creation, DC render target creation, BindDC, geometry/brush
+  # creation, UpdateLayeredWindow) surfaces as `anyhow::Result` propagating
+  # up through `?` and returning a non-zero exit code, which this step
+  # catches. What this still cannot prove: whether the pixels it pushed to
+  # the layered window are visually correct (right colors, right alpha,
+  # right position) — that needs a screenshot and a human, which is the
+  # one gap this job does not close.
+  windows-overlay-runtime-smoke:
+    runs-on: windows-2025
+    # GHA-native timeout instead of the `timeout` coreutil: git-bash on the
+    # Windows runner is not guaranteed to ship it, and a job-level timeout
+    # is the same backstop without depending on one.
+    timeout-minutes: 3
+    steps:
+      - uses: actions/checkout@v4
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: windows-overlay-smoke
+      - name: Run overlay-demo (exercises WinOverlay::new/render for real)
+        shell: bash
+        run: |
+          # Exits 0 on its own after cycling 8 states x2 at 2.5s each
+          # (~40s); the job-level timeout-minutes above is the backstop
+          # against a real hang (e.g. a message-pump deadlock), not the
+          # expected path.
+          cargo run -p overlay --bin overlay-demo --features display
+      - name: Attribute failure
+        if: failure()
+        shell: bash
+        run: >-
+          echo "::error title=windows overlay runtime smoke failed::overlay-demo's Windows path panicked, returned an error, or hung on a real windows-2025 runner. This means the Direct2D renderer built cleanly but failed at runtime (factory/render-target/BindDC/UpdateLayeredWindow) -- check the step output above for the HRESULT or panic message."
+
   # Headless build: proves the daemon path stays display-free. Runs on a
   # plain ubuntu container with no X/Wayland present, which IS the deployment
   # environment being claimed.
