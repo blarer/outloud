@@ -1,8 +1,15 @@
 # Windows overlay: bringing it to macOS visual parity
 
-Status: plan only, nothing implemented. Written against `crates/overlay` as of
-this commit. All line numbers below were read directly from the files named,
-not estimated.
+Status: **stages 0-2 and 3a implemented** (see `crates/overlay/src/windows.rs`
+and the commits landing this plan). Cargo plumbing, a flat skull, depth/
+lighting, and the gaze aura all compile against real Windows Direct2D/
+DirectWrite types on `--target x86_64-pc-windows-msvc`, verified
+compile-clean and matched against unit-tested shared logic in
+`skull.rs`/`theme.rs`. **Not yet run on Windows hardware** — the
+premultiply/BindDC/DPI risks flagged throughout this doc (§2.1, §5) remain
+open and are called out again in each landing commit's message. Text lane
+(§2.6, stage 3b) and Reduce Motion wiring (§2.7, stage 4) are not attempted.
+The original plan below is left as written for the parts still ahead.
 
 ## 0. The one-sentence summary
 
