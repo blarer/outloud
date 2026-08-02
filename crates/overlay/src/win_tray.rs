@@ -6,10 +6,13 @@
 //! to be paused or quit except Task Manager — the same "invisible and
 //! unquittable" problem the macOS status item was built to fix. See
 //! `docs/plans/windows-tray.md` for the full design and the staging this
-//! module follows (Stage 0: message window + icon + fixed menu; Stage 1,
-//! folded in here since the tree-walker is not meaningfully more code than
-//! a hardcoded two-row menu: the *actual* `menubar::build()` tree, drawn
-//! once in a neutral colour rather than a full per-state icon set).
+//! module follows: the real `menubar::build()` menu tree (Stage 0's fixed
+//! two-row menu plus Stage 1's full tree, folded together since the
+//! tree-walker is not meaningfully more code than a hardcoded stand-in),
+//! and a per-`OverlayState` icon cache reusing the same `glyph_tint()`
+//! macOS reads. Not done: the theme-aware untinted colour and the
+//! `RegGetValueW`/`WM_SETTINGCHANGE` watch that would drive it — see
+//! `draw_mark_icon`'s doc comment for the specific gap.
 //!
 //! Three properties mirrored from the macOS backend, because they are the
 //! same correctness requirements on either platform:
@@ -30,6 +33,7 @@
 //!    Windows never destroys and reopens a menu the user might have open.
 
 use std::cell::RefCell;
+use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use windows::core::PCWSTR;
@@ -52,7 +56,8 @@ use windows::Win32::UI::WindowsAndMessaging::{
 };
 
 use crate::mark;
-use crate::menu::{MenuId, MenuItem, MenuModel};
+use crate::menu::{glyph_tint, MenuId, MenuItem, MenuModel};
+use crate::state::OverlayState;
 use crate::theme::Color;
 
 /// The tray icon's callback message. `WM_APP` (0x8000) is the first id an
@@ -262,11 +267,19 @@ pub struct WinTray {
     /// exists: an unchanged model must cost one comparison, not an icon
     /// rebuild, and re-adding an unchanged tray icon would flicker it.
     applied: Option<MenuModel>,
-    /// The rendered icon, rebuilt only when it actually needs to change
-    /// (currently: never, past the first draw — Stage 0/1 draws one
-    /// neutral-colour icon rather than the full per-state set in
-    /// docs/plans/windows-tray.md §3, which is explicitly deferred).
-    icon: Option<HICON>,
+    /// One rendered `HICON` per distinct [`OverlayState`], built lazily on
+    /// first use and cached for the life of the tray — mirrors
+    /// `MacStatusItem`'s "redraw only on an actual state change" behaviour,
+    /// just with a cache keyed by state instead of a live-recoloured
+    /// template image (Win32 has no `NSImage` `setTemplate` equivalent, so
+    /// the whole icon is swapped rather than tinted).
+    ///
+    /// Light/dark **taskbar** detection (docs/plans/windows-tray.md §3,
+    /// the `RegGetValueW`/`WM_SETTINGCHANGE` half of Stage 1) is
+    /// deliberately NOT done here: every entry below is drawn against a
+    /// single neutral palette rather than a per-theme pair, which is a
+    /// real, documented gap on very light taskbars, not an oversight.
+    icons: HashMap<OverlayState, HICON>,
 }
 
 /// A process-unique class name. Registering the same class name twice in
@@ -336,7 +349,7 @@ impl WinTray {
                 hwnd,
                 state,
                 applied: None,
-                icon: None,
+                icons: HashMap::new(),
             };
             tray.register_icon()?;
             Ok(tray)
@@ -348,8 +361,7 @@ impl WinTray {
     }
 
     fn register_icon(&mut self) -> anyhow::Result<()> {
-        let icon = draw_mark_icon(None)?;
-        self.icon = Some(icon);
+        let icon = self.icon_for(OverlayState::Idle)?;
         let mut data = notify_icon_data(self.hwnd, icon, "OutLoud");
         unsafe {
             if !Shell_NotifyIconW(NIM_ADD, &data).as_bool() {
@@ -366,6 +378,19 @@ impl WinTray {
         Ok(())
     }
 
+    /// The `HICON` for `state`, drawing and caching it on first request.
+    /// Reuses `crate::menu::glyph_tint` — the exact function `MacStatusItem`
+    /// calls — so a state's colour can never drift between the two
+    /// backends: add a tint there and both platforms pick it up.
+    fn icon_for(&mut self, state: OverlayState) -> anyhow::Result<HICON> {
+        if let Some(icon) = self.icons.get(&state) {
+            return Ok(*icon);
+        }
+        let icon = draw_mark_icon(glyph_tint(state))?;
+        self.icons.insert(state, icon);
+        Ok(icon)
+    }
+
     /// Push a model to the tray. Cheap and idempotent: an identical model
     /// is ignored, so the host can call this every frame exactly as it
     /// does for `MacStatusItem::apply`.
@@ -373,19 +398,29 @@ impl WinTray {
         if self.applied.as_ref() == Some(model) {
             return;
         }
-        // Update the tooltip live; the menu itself is rebuilt lazily, at
-        // click time, from whatever is in `state().model` — rebuilding an
-        // HMENU here would be wasted work on every unchanged-menu frame.
-        let data = notify_icon_data(self.hwnd, self.current_icon(), &model.tooltip);
+        // The menu itself is rebuilt lazily, at click time, from whatever
+        // is in `state().model` — rebuilding an HMENU here would be wasted
+        // work on every frame where only the icon or tooltip changed.
+        let icon = match self.icon_for(model.state) {
+            Ok(icon) => icon,
+            Err(e) => {
+                eprintln!(
+                    "outloud: could not draw tray icon for {:?}: {e}",
+                    model.state
+                );
+                // Fall back to whatever the previous apply() last set
+                // rather than leaving the icon untouched with a stale
+                // NOTIFYICONDATAW: NIM_MODIFY still needs a valid hIcon in
+                // every call that carries NIF_ICON.
+                self.icons.values().next().copied().unwrap_or_default()
+            }
+        };
+        let data = notify_icon_data(self.hwnd, icon, &model.tooltip);
         unsafe {
             let _ = Shell_NotifyIconW(NIM_MODIFY_COMPAT, &data);
         }
         *self.state().model.borrow_mut() = Some(model.clone());
         self.applied = Some(model.clone());
-    }
-
-    fn current_icon(&self) -> HICON {
-        self.icon.unwrap_or_default()
     }
 
     /// Take everything the user clicked since the last call. The host maps
@@ -426,10 +461,17 @@ fn notify_icon_data(hwnd: HWND, icon: HICON, tip: &str) -> NOTIFYICONDATAW {
 /// into an `HICON` sized for the tray (`SM_CXSMICON`, DPI-aware — the tray
 /// genuinely scales on high-DPI displays, unlike a fixed toolbar bitmap).
 ///
-/// `tint`: `None` draws a neutral light-grey mark, matching the "quiet
-/// monochrome" untinted states on macOS closely enough for Stage 0/1 (the
-/// full per-state, per-theme icon cache from docs/plans/windows-tray.md §3
-/// is explicitly deferred — this always draws one icon, once).
+/// `tint`: `Some` draws the state's accent colour, exactly as
+/// `MacStatusItem::mark_image` does for the same `glyph_tint()` value.
+/// `None` (the untinted states: Idle, Injecting, DegradedOffline) draws a
+/// neutral near-white mark — legible against the near-universally-dark
+/// default Windows 10/11 taskbar, but NOT theme-aware: the macOS side
+/// re-derives untinted colour from the live menu-bar appearance
+/// (`is_dark_menu_bar`), and the Windows equivalent (reading
+/// `SystemUsesLightTheme` from the registry, watching
+/// `WM_SETTINGCHANGE`/`WM_THEMECHANGED`) is docs/plans/windows-tray.md §3's
+/// remaining Stage 1 gap, not done here. A very light taskbar is the one
+/// documented condition where this icon will be hard to see.
 fn draw_mark_icon(tint: Option<Color>) -> anyhow::Result<HICON> {
     unsafe {
         let size = GetSystemMetrics(SM_CXSMICON).max(16);
@@ -569,7 +611,7 @@ impl Drop for WinTray {
             let mut data = notify_icon_data(self.hwnd, HICON::default(), "");
             data.uFlags = Default::default();
             let _ = Shell_NotifyIconW(NIM_DELETE, &data);
-            if let Some(icon) = self.icon.take() {
+            for (_, icon) in self.icons.drain() {
                 let _ = DestroyIcon(icon);
             }
             let _ = DestroyWindow(self.hwnd);
