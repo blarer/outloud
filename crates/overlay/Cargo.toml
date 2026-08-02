@@ -25,6 +25,7 @@ display = [
     "dep:objc2-app-kit",
     "dep:block2",
     "dep:windows",
+    "dep:windows-numerics",
 ]
 
 [dependencies]
@@ -115,7 +116,18 @@ windows = { version = "0.62", optional = true, features = [
     "Win32_Graphics_Dxgi_Common",
     "Win32_UI_HiDpi",
     "Win32_UI_WindowsAndMessaging",
+    # Shell_NotifyIconW / NOTIFYICONDATAW for the tray icon (win_tray.rs).
+    # TrackPopupMenu, AppendMenuW, GetMessageW etc. are already covered by
+    # Win32_UI_WindowsAndMessaging above; only the Shell_NotifyIcon family
+    # lives in this separate feature.
+    "Win32_UI_Shell",
 ] }
+# `windows_numerics::Vector2`/`Matrix3x2` are the point/transform types every
+# Direct2D method signature above actually takes (`ID2D1RenderTarget::
+# FillGeometry`, `ID2D1GeometrySink::AddLine`, …) — they are re-exported by
+# name from a sibling crate, not nested under `windows::`, so they need
+# their own dependency line rather than a feature flag on `windows` itself.
+windows-numerics = { version = "0.3", optional = true }
 
 # A perf gate rather than a criterion benchmark: criterion answers "how
 # fast", this answers "still fast enough" with an exit code CI can act on.

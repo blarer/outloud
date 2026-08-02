@@ -59,6 +59,12 @@ pub mod status_item;
 #[cfg(all(target_os = "windows", feature = "display"))]
 pub mod windows;
 
+/// The Windows notification-area tray icon. Gated exactly like [`windows`]:
+/// a headless build has no tray to put anything in, and must not link the
+/// Shell_NotifyIcon / TrackPopupMenu surface.
+#[cfg(all(target_os = "windows", feature = "display"))]
+pub mod win_tray;
+
 pub use layout::{place, Anchor, Point, Rect, Size};
 pub use menu::{MenuId, MenuItem, MenuModel};
 pub use state::OverlayState;

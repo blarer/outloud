@@ -769,19 +769,42 @@ fn overlay_main(
 
 /// Windows + display: the overlay is a layered window that needs no run
 /// loop of its own (it paints via UpdateLayeredWindow and takes no input,
-/// see crates/overlay/src/windows.rs), so the render loop is a plain
-/// 30Hz sleep on the main thread with the pipeline behind it. This mirrors
-/// the macOS structure without AppKit's run-loop pumping.
+/// see crates/overlay/src/windows.rs), but the tray icon does: Shell_NotifyIcon
+/// delivers its clicks as ordinary window messages to the message-only
+/// window `overlay::win_tray::WinTray` owns, so this loop pumps
+/// `PeekMessageW`/`DispatchMessageW` every tick alongside the existing
+/// render-and-poll cadence. Draining (`PM_REMOVE`) rather than blocking on
+/// `GetMessageW` is deliberate: it keeps this function on the exact same
+/// 30Hz cycle as the macOS overlay_main (render, poll config, check the
+/// pipeline-done channel), instead of turning "a menu click arrived" into
+/// the only thing that can wake this thread up.
 #[cfg(all(target_os = "windows", feature = "display"))]
 fn overlay_main(
     shared: outloud::state::StatusShared,
-    // No tray backend on Windows yet: the notification-area equivalent
-    // (Shell_NotifyIcon) is separate work and belongs to the Windows port.
-    _menu_host: Option<outloud::menuhost::MenuHost>,
-    _runtime: outloud::runtime::RuntimeShared,
+    menu_host: Option<outloud::menuhost::MenuHost>,
+    runtime: outloud::runtime::RuntimeShared,
     run_pipeline: impl FnOnce() -> anyhow::Result<()> + Send + 'static,
 ) -> anyhow::Result<()> {
+    use windows::Win32::UI::WindowsAndMessaging::{
+        DispatchMessageW, PeekMessageW, TranslateMessage, MSG, PM_REMOVE,
+    };
+
     let mut ov = overlay::platform_overlay()?;
+
+    // The tray icon. Created before the pipeline starts, same reasoning as
+    // the macOS status item: "is it on?" must be answerable from the first
+    // instant the process is running, not only once dictation works.
+    let mut tray = match overlay::win_tray::WinTray::new() {
+        Ok(t) => Some(t),
+        Err(e) => {
+            // A missing tray icon leaves the app invisible but still
+            // functional (same as a missing macOS status item), so this is
+            // a loud warning, not a fatal error.
+            eprintln!("outloud: could not create the tray icon: {e}");
+            None
+        }
+    };
+    let mut menu_host = menu_host;
 
     let (done_tx, done_rx) = std::sync::mpsc::channel::<anyhow::Result<()>>();
     std::thread::Builder::new()
@@ -797,6 +820,44 @@ fn overlay_main(
         if let Err(e) = ov.render(&frame) {
             eprintln!("outloud: overlay render failed: {e}");
         }
+
+        // Tray: publish the current state, then perform whatever the user
+        // clicked since the last tick. Mirrors the macOS block in the
+        // sibling overlay_main above almost line for line — same model,
+        // same host, same `Action` routing, only the platform surface
+        // (`WinTray` vs `MacStatusItem`) differs.
+        if let (Some(t), Some(host)) = (tray.as_mut(), menu_host.as_mut()) {
+            host.poll_file_changes();
+            t.apply(host.model(frame.state, frame.detail.clone(), &runtime.snapshot()));
+        }
+
+        // Drain whatever the tray's message-only window has queued
+        // (WM_TRAYICON callbacks; TrackPopupMenu itself runs its own modal
+        // loop synchronously inside DispatchMessageW while a menu is open,
+        // exactly like NSMenu tracking on the macOS side). PM_REMOVE and a
+        // non-blocking Peek keep this from starving the render/pipeline
+        // checks below when the queue is empty, which is the common case.
+        let mut msg = MSG::default();
+        while unsafe { PeekMessageW(&mut msg, None, 0, 0, PM_REMOVE) }.as_bool() {
+            unsafe {
+                let _ = TranslateMessage(&msg);
+                DispatchMessageW(&msg);
+            }
+        }
+
+        if let (Some(t), Some(host)) = (tray.as_ref(), menu_host.as_mut()) {
+            for id in t.drain_clicks() {
+                if host.handle(id) {
+                    // Quit: drop the tray first so the icon leaves the
+                    // notification area immediately rather than lingering
+                    // until the process is reaped.
+                    let _ = ov.hide();
+                    drop(tray);
+                    return Ok(());
+                }
+            }
+        }
+
         std::thread::sleep(std::time::Duration::from_millis(33));
         match done_rx.try_recv() {
             Ok(result) => {
