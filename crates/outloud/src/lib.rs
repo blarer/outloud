@@ -47,6 +47,8 @@ pub mod runtime;
 pub mod source;
 pub mod state;
 pub mod streamer;
+#[cfg(test)]
+pub(crate) mod testenv;
 pub mod wav;
 
 /// Convert a UTF-16 code-unit offset (the unit the accessibility API

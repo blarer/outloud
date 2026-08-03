@@ -125,6 +125,20 @@ pub enum EditRoute {
     NoMatch { command: String },
 }
 
+impl EditRoute {
+    /// A short, stable name for logs and dry runs. Deliberately carries no
+    /// user text: this is printed on a measurement path.
+    pub fn label(&self) -> &'static str {
+        match self {
+            EditRoute::Undo => "undo",
+            EditRoute::Dictate { .. } => "dictate",
+            EditRoute::Unsupported { .. } => "unsupported",
+            EditRoute::Rewrite { .. } => "rewrite",
+            EditRoute::NoMatch { .. } => "no-match",
+        }
+    }
+}
+
 /// Decide what an edit-mode utterance means.
 pub fn route_edit(text: &str, selected: &str) -> EditRoute {
     // Recognizers punctuate ("Change quick to slow."), but spoken edit
@@ -344,9 +358,19 @@ pub fn deliver(mode: &Mode, transcript: &str) -> Outcome {
     // happened. An automated run must be able to exercise the whole
     // pipeline without touching a UI it does not own.
     if std::env::var_os("OUTLOUD_NO_INJECT").is_some_and(|v| v == "1") {
-        return Outcome::Suppressed {
-            text: text.to_string(),
+        // Report the ROUTE an edit would take, not just the transcript.
+        // Returning early with the raw text meant no automated run could
+        // ever observe the edit routing, which is precisely how the undo
+        // ring stayed unreachable: the only way to exercise it was to speak
+        // into a real window and watch. Routing is pure, so a dry run can
+        // answer "what would this have done" without touching the UI.
+        let text = match mode {
+            Mode::Edit { selected } => {
+                format!("{text} [route: {}]", route_edit(text, selected).label())
+            }
+            Mode::Dictate => text.to_string(),
         };
+        return Outcome::Suppressed { text };
     }
 
     // A terminal destination inverts the transport decision for edit
@@ -1519,6 +1543,10 @@ mod tests {
 
     #[test]
     fn edit_with_absent_search_text_reports_no_match() {
+        // Excludes the suppression switch even though this test does not
+        // set it: a sibling test that does would otherwise turn this into
+        // Suppressed and fail it.
+        let _guard = crate::testenv::deliver_lock();
         let mode = Mode::Edit {
             selected: "the quick brown fox".into(),
         };
@@ -2034,5 +2062,29 @@ mod tier_tests {
             matches!(ring.undo("after"), stream::undo::UndoOutcome::Restore(_)),
             "an unchanged field must restore"
         );
+    }
+
+    /// A dry run must report the edit ROUTE, not just the transcript.
+    ///
+    /// OUTLOUD_NO_INJECT returned before any routing happened, so no
+    /// automated run could observe which branch an edit command took. The
+    /// only way to find out was to speak into a live window and watch,
+    /// which is how an unreachable undo ring survived for weeks.
+    #[test]
+    fn a_dry_run_reports_which_route_an_edit_took() {
+        // Sets the switch AND holds the lock for as long as it is set.
+        let _guard = crate::testenv::no_inject();
+        let mode = Mode::Edit {
+            selected: "the quick brown fox".to_string(),
+        };
+        let outcome = deliver(&mode, "scratch that");
+
+        match outcome {
+            Outcome::Suppressed { text } => assert!(
+                text.contains("[route: undo]"),
+                "a dry run must name the route, got {text:?}"
+            ),
+            other => panic!("expected suppression, got {other:?}"),
+        }
     }
 }

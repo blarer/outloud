@@ -75,6 +75,16 @@ whatever window is focused. Benchmarking against a recording while someone is
 working will otherwise type the test sentence into their chat window, which is
 exactly how this guard came to exist. `scripts/sweep-sensitivity.sh` sets it.
 
+For an edit-mode utterance the report also names the route the command would
+have taken, as `transcript [route: undo|rewrite|no-match|dictate|unsupported]`.
+Routing is a pure decision, so a dry run can answer "what would this have
+done" without touching the machine; only the delivery is suppressed.
+
+That distinction matters more than it looks. The guard used to return before
+any routing happened, which meant no automated run could observe edit
+behaviour at all, and the undo ring sat wired to nothing behind a fully green
+test suite. Deciding and doing are separate, and only the doing is unsafe.
+
 ## Options
 
 Both spellings work: dotted keys (`insertion.mode = "stream"`) or tables

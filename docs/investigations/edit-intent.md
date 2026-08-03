@@ -187,6 +187,25 @@ Notably `unrecognised_phrase_with_a_selection_is_dictated`, the test pinning
 finding (b)'s behaviour, is one of those. The `payload_for` tests are pure
 and remain meaningful.
 
+**Update: this prediction came true, and is now fixed.** The undo ring
+(`crates/stream/src/undo.rs`) shipped complete and tested, `"scratch that"`
+parsed to `EditIntent::Undo`, and `edit_intent::apply` returned `None` for it
+with a comment deferring to "the caller's undo ring". No caller existed, so
+every undo command reported "that command did not match". Nothing caught it
+for weeks: the pieces each had passing tests, and the one mode that could
+have exercised the connection end to end returned before reaching it.
+
+The fix separates deciding from doing. `route_edit -> EditRoute` is a pure
+function, so the guard now runs it and reports the chosen route
+(`transcript [route: undo]`) while still writing nothing. Delivery dispatches
+on the enum, so an unhandled route is a compile error rather than a silent
+fall-through to "no match". Both halves are covered: deleting the route fails
+a test, deleting the dispatch fails to build.
+
+Worth stating plainly, because it generalises past this bug: a value being
+computed correctly is not evidence that a user can see it. Every serious bug
+found in this codebase so far has been of that shape.
+
 ### Measured: parser correctness over a 55-command corpus
 
 A corpus of realistic edit commands run through the shipped parser. The

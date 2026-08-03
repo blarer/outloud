@@ -1289,21 +1289,11 @@ mod tests {
     /// timeout would have hidden the cause instead of fixing it.
     #[tokio::test]
     async fn streaming_preference_degrades_to_buffered_without_a_field() {
-        // Scoped guard: the variable is process-wide and tests share a
-        // process, so it must not leak into whatever runs next.
-        struct NoInject;
-        impl NoInject {
-            fn set() -> Self {
-                std::env::set_var("OUTLOUD_NO_INJECT", "1");
-                NoInject
-            }
-        }
-        impl Drop for NoInject {
-            fn drop(&mut self) {
-                std::env::remove_var("OUTLOUD_NO_INJECT");
-            }
-        }
-        let _no_inject = NoInject::set();
+        // The variable is process-wide and tests run in parallel, so this
+        // guard holds a lock shared with every other test that depends on
+        // the switch. The local version scoped the variable correctly but
+        // took no lock, which made concurrent deliver() tests fail.
+        let _no_inject = crate::testenv::no_inject();
 
         let (ftx, frx) = tokio::sync::mpsc::unbounded_channel();
         let (atx, arx) = tokio::sync::mpsc::unbounded_channel();
