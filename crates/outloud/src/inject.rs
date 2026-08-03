@@ -443,6 +443,20 @@ pub fn payload_for(mode: &Mode, text: &str) -> Result<String, Outcome> {
             // must not write "slow.".
             let command = text.trim_end_matches(['.', '!', '?', ',']);
             let intent = edit_intent::parse(command);
+            // Undo is not wired on the tier platforms: restoring needs to
+            // read the field's CURRENT text back, which the tier ladder has
+            // no equivalent of yet (see the macOS `apply_undo`).
+            //
+            // Say so, rather than falling through to `apply`, which returns
+            // None for Undo and would report the user's own phrase as an
+            // unmatched command. Being told "not supported here" is a fact
+            // to act on; being told "scratch that did not match" is a lie
+            // that sends someone looking for a typo in what they said.
+            if let EditIntent::Undo(_) = &intent {
+                return Err(Outcome::EditNoMatch {
+                    command: "undo: not supported on this platform yet".to_string(),
+                });
+            }
             if let EditIntent::Freeform { .. } = &intent {
                 // Same split as the macOS path, through the same rule:
                 // an instruction about the selection is refused (nothing
@@ -2044,6 +2058,10 @@ mod tier_tests {
 
         // The ring's answer for "nothing recorded yet", which is the wording
         // a user gets and the thing a missing call site cannot produce.
+        // macOS-only because the restore path writes through the
+        // accessibility tree; the routing assertions above are checked on
+        // every platform.
+        #[cfg(target_os = "macos")]
         match undo_outcome_to_result(stream::undo::UndoOutcome::Empty) {
             Outcome::EditNoMatch { command } => assert!(
                 command.starts_with("undo:"),
