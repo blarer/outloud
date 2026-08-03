@@ -420,9 +420,19 @@ mod tests {
     #[cfg(unix)]
     fn the_reaper_never_targets_its_own_process() {
         let me = std::process::id();
-        let pgrep_output = format!("111\n{me}\n222\n");
+        // Derived from our own pid rather than hardcoded: with literal 111
+        // and 222 this test failed whenever the test runner happened to BE
+        // pid 111 or 222, which is reachable on macOS where pids recycle
+        // low. A reaper test that fails at random would train us to ignore
+        // it, and this reaper sends SIGKILL.
+        let (other_a, other_b) = (me.wrapping_add(1), me.wrapping_add(2));
+        let pgrep_output = format!("{other_a}\n{me}\n{other_b}\n");
         let targets = helper_pids_to_reap(&pgrep_output, me);
-        assert_eq!(targets, vec![111, 222], "our own pid must be filtered out");
+        assert_eq!(
+            targets,
+            vec![other_a, other_b],
+            "our own pid must be filtered out"
+        );
         assert!(!targets.contains(&me));
     }
 

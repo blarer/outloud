@@ -103,6 +103,153 @@ pub fn snapshot_and_mode_at_keydown() -> (Mode, Option<TextSnapshot>) {
     }
 }
 
+/// What an edit-mode utterance should do, decided without touching the
+/// accessibility tree, the clipboard, or the undo ring's contents.
+///
+/// Separated from delivery so the routing is unit-testable on any platform,
+/// and so that `deliver`'s match must list every route: a new intent that
+/// nobody wired up is a compile error rather than a silent "no match".
+#[derive(Debug, PartialEq, Eq)]
+pub enum EditRoute {
+    /// "scratch that" -- resolved against the undo ring, not the selection.
+    Undo,
+    /// Plain dictation that happened while something was selected.
+    Dictate { text: String },
+    /// An instruction about the selection that nothing here can carry out.
+    /// Writes nothing: the selected text must survive.
+    Unsupported { instruction: String },
+    /// A parsed edit that matched, with the replacement text.
+    Rewrite { rewritten: String },
+    /// Parsed as an edit but matched nothing in the selection. Worth
+    /// reporting rather than inserting.
+    NoMatch { command: String },
+}
+
+/// Decide what an edit-mode utterance means.
+pub fn route_edit(text: &str, selected: &str) -> EditRoute {
+    // Recognizers punctuate ("Change quick to slow."), but spoken edit
+    // commands are imperatives whose trailing punctuation was never said:
+    // strip it so "to slow." does not write "slow.".
+    let command = text.trim_end_matches(['.', '!', '?', ',']);
+    let intent = edit_intent::parse(command);
+
+    // Undo resolves against the ring, not the selection.
+    // `edit_intent::apply` returns None for it and says so itself: "which
+    // the caller's undo ring resolves". This is that caller.
+    if let EditIntent::Undo(_) = &intent {
+        return EditRoute::Undo;
+    }
+
+    // A selection means an edit is POSSIBLE, not that one was intended, and
+    // the two readings of an unparsed phrase have opposite correct
+    // behaviours. Text is selected far more often than people realise (a
+    // terminal keeps the last drag selected, editors highlight the current
+    // word, browsers hold a selection long after the click), so refusing
+    // every unparsed phrase turned ordinary dictation into "the app stopped
+    // transcribing". But inserting every unparsed phrase meant "tighten
+    // this up" REPLACED the selected sentence with the words "Tighten this
+    // up.", destroying it silently.
+    //
+    // `freeform::classify` is the rule that separates them, and it is
+    // biased: a wrong refusal costs one retry, a wrong overwrite costs a
+    // paragraph. See that module for the signals and the escape hatch
+    // ("type: ...").
+    if let EditIntent::Freeform { .. } = &intent {
+        return match classify(text, selected) {
+            FreeformDisposition::Dictate { text } => EditRoute::Dictate { text },
+            FreeformDisposition::RewriteRequest { instruction } => {
+                EditRoute::Unsupported { instruction }
+            }
+        };
+    }
+
+    match edit_intent::apply(selected, &intent) {
+        Some(rewritten) => EditRoute::Rewrite { rewritten },
+        None => EditRoute::NoMatch {
+            command: text.to_string(),
+        },
+    }
+}
+
+/// The undo ring behind `EditIntent::Undo` ("scratch that", "undo that").
+///
+/// Process-lifetime, because undo spans utterances by definition: the
+/// dictation being undone finished before the one asking for the undo began.
+/// Depth 10 is the roadmap's stated exit criterion.
+///
+/// `crates/stream/src/undo.rs` was a complete, tested ring with no caller for
+/// weeks. The phrase parsed, `edit_intent::apply` returned None for it saying
+/// "the caller's undo ring resolves this", and no such caller existed, so the
+/// user was told their command did not match.
+#[cfg(target_os = "macos")]
+static UNDO: std::sync::Mutex<Option<stream::undo::UndoRing>> = std::sync::Mutex::new(None);
+
+/// Record a completed edit so it can be undone.
+///
+/// A unit that changed nothing is dropped by the ring itself: an undo step
+/// that does nothing would make "scratch that" feel broken.
+#[cfg(target_os = "macos")]
+fn record_undo(before: &str, after: &str) {
+    // A poisoned lock means a panic happened mid-record. Undo history is a
+    // convenience rather than anything the user typed, so losing it beats
+    // refusing to dictate.
+    let mut guard = UNDO.lock().unwrap_or_else(|p| p.into_inner());
+    let ring = guard.get_or_insert_with(|| stream::undo::UndoRing::new(10));
+    ring.begin_unit(before, None);
+    ring.end_unit(after);
+}
+
+/// Resolve an undo against the ring and the field's current contents.
+///
+/// Reads the field back first so the ring's stale-snapshot guard can compare
+/// what we wrote against what is there now, and decline rather than destroy
+/// work the user did afterwards.
+#[cfg(target_os = "macos")]
+fn apply_undo() -> Outcome {
+    let now = match ax_edit::snapshot_focused() {
+        Ok(snap) => snap.value.unwrap_or_default(),
+        Err(e) => {
+            return Outcome::Failed {
+                situation_action: format!(
+                    "could not read the field to undo into ({e}) -> click into it and try again"
+                ),
+            }
+        }
+    };
+    let mut guard = UNDO.lock().unwrap_or_else(|p| p.into_inner());
+    let outcome = match guard.as_mut() {
+        Some(ring) => ring.undo(&now),
+        None => stream::undo::UndoOutcome::Empty,
+    };
+    drop(guard);
+    undo_outcome_to_result(outcome)
+}
+
+/// The half of undo that needs no accessibility tree, so the routing can be
+/// tested at all. The live read is exactly the dependency that let the
+/// unwired ring go unnoticed.
+#[cfg(target_os = "macos")]
+fn undo_outcome_to_result(outcome: stream::undo::UndoOutcome) -> Outcome {
+    use stream::undo::UndoOutcome;
+    match outcome {
+        // `write_focused` writes a whole field value and already routes
+        // through the per-app transport rules, so undoing in Discord takes
+        // the same clipboard path a dictation does.
+        UndoOutcome::Restore(unit) => write_focused(
+            &unit.before,
+            typing_strategy(None, must_pace_typing(AxRefusal::WriteIgnored)),
+        ),
+        // Deliberately not forced: restoring here would destroy edits the
+        // user made after ours, which is worse than declining.
+        UndoOutcome::FieldChanged { .. } => Outcome::EditNoMatch {
+            command: "undo: nothing to undo, the field changed since".to_string(),
+        },
+        UndoOutcome::Empty => Outcome::EditNoMatch {
+            command: "undo: nothing to undo yet".to_string(),
+        },
+    }
+}
+
 /// The profile-matching identity of the app a snapshot came from.
 ///
 /// Built from the snapshot rather than looked up separately so the app
@@ -224,54 +371,27 @@ pub fn deliver(mode: &Mode, transcript: &str) -> Outcome {
     #[cfg(target_os = "macos")]
     match mode {
         Mode::Dictate => insert_with_fallback(text),
-        Mode::Edit { selected } => {
-            // Recognizers punctuate ("Change quick to slow."), but spoken
-            // edit commands are imperatives whose trailing punctuation was
-            // never said: strip it so "to slow." does not write "slow.".
-            let command = text.trim_end_matches(['.', '!', '?', ',']);
-            let intent = edit_intent::parse(command);
-
-            // A selection means an edit is POSSIBLE, not that one was
-            // intended, and the two readings of an unparsed phrase have
-            // opposite correct behaviours. Text is selected far more often
-            // than people realise (a terminal keeps the last drag
-            // selected, editors highlight the current word, browsers hold
-            // a selection long after the click), so refusing every
-            // unparsed phrase turned ordinary dictation into "the app
-            // stopped transcribing". But inserting every unparsed phrase
-            // meant "tighten this up" REPLACED the selected sentence with
-            // the words "Tighten this up.", destroying it silently.
-            //
-            // `freeform::classify` is the rule that separates them, and it
-            // is biased: a wrong refusal costs one retry, a wrong
-            // overwrite costs a paragraph. See that module for the signals
-            // and the escape hatch ("type: ...").
-            if let EditIntent::Freeform { .. } = &intent {
-                return match classify(text, selected) {
-                    // Dictation that happened while something was
-                    // selected. Insert it, exactly as before.
-                    FreeformDisposition::Dictate { text } => insert_with_fallback(&text),
-                    // Recognisably an instruction ABOUT the selection that
-                    // nothing here can carry out. Write NOTHING and say so
-                    // through the Error overlay: the user's selected text
-                    // is the one thing that must survive.
-                    FreeformDisposition::RewriteRequest { instruction } => {
-                        Outcome::FreeformUnsupported { instruction }
-                    }
-                };
+        Mode::Edit { selected } => match route_edit(text, selected) {
+            // Every route is dispatched here and nowhere else. An enum
+            // rather than a chain of early returns because a forgotten
+            // branch then fails to COMPILE instead of silently falling
+            // through to "that command did not match" -- which is exactly
+            // how the undo ring sat unreachable behind a passing test
+            // suite. Adding a variant must break this match.
+            EditRoute::Undo => apply_undo(),
+            EditRoute::Dictate { text } => insert_with_fallback(&text),
+            EditRoute::Unsupported { instruction } => Outcome::FreeformUnsupported { instruction },
+            EditRoute::Rewrite { rewritten } => {
+                let outcome = replace_selection(&rewritten);
+                // Record only a write that happened, so every undo step
+                // corresponds to something the user actually saw.
+                if let Outcome::Wrote { .. } = &outcome {
+                    record_undo(selected, &rewritten);
+                }
+                outcome
             }
-
-            match edit_intent::apply(selected, &intent) {
-                Some(rewritten) => replace_selection(&rewritten),
-                // The command parsed as an edit but matched nothing in the
-                // selection. That IS worth reporting: the user said
-                // "change X to Y" and meant it, so silently inserting the
-                // sentence would be the wrong guess.
-                None => Outcome::EditNoMatch {
-                    command: text.to_string(),
-                },
-            }
-        }
+            EditRoute::NoMatch { command } => Outcome::EditNoMatch { command },
+        },
     }
 }
 
@@ -1856,6 +1976,63 @@ mod tier_tests {
             typing_strategy_for(Some("Slack"), must_pace_typing(AxRefusal::ReadOnlyField)),
             TypingStrategy::PerCharPaced,
             "the same app pinned to a read-only field must still be paced"
+        );
+    }
+
+    /// "scratch that" must be answered by the undo ring.
+    ///
+    /// Every piece of undo existed and passed its own tests for weeks while
+    /// nothing connected them: the ring in `stream::undo`, the parse in
+    /// `edit_intent`, and `apply` returning None with a doc comment saying
+    /// "the caller's undo ring resolves" it. No caller was ever written, so
+    /// the user said "scratch that" and was told the command did not match.
+    ///
+    /// Testing the pieces is what let that happen, so this asserts on the
+    /// connection: the empty ring's own wording. Un-wired, an Undo intent
+    /// falls through to `edit_intent::apply`, which returns None, and
+    /// EditNoMatch carries the user's raw phrase instead.
+    #[test]
+    fn an_undo_command_is_answered_by_the_ring() {
+        for phrase in ["scratch that", "undo that", "scratch this"] {
+            let intent = edit_intent::parse(phrase);
+            assert!(
+                matches!(intent, EditIntent::Undo(_)),
+                "{phrase:?} must parse as Undo, got {intent:?}"
+            );
+            // The routing assertion: the phrase must reach the ring even
+            // with text selected, which is when an edit looks plausible.
+            assert_eq!(
+                route_edit(phrase, "some selected text"),
+                EditRoute::Undo,
+                "{phrase:?} must route to the undo ring"
+            );
+            // apply declining is what makes a caller mandatory rather than
+            // optional, so it is part of the contract worth pinning.
+            assert!(
+                edit_intent::apply("some selected text", &intent).is_none(),
+                "apply must leave Undo to the ring"
+            );
+        }
+
+        // The ring's answer for "nothing recorded yet", which is the wording
+        // a user gets and the thing a missing call site cannot produce.
+        match undo_outcome_to_result(stream::undo::UndoOutcome::Empty) {
+            Outcome::EditNoMatch { command } => assert!(
+                command.starts_with("undo:"),
+                "the ring must answer in its own words, got {command:?}"
+            ),
+            other => panic!("expected the ring to answer, got {other:?}"),
+        }
+
+        // And a recorded edit comes back restorable rather than being
+        // reported as a failed match.
+        let mut ring = stream::undo::UndoRing::new(10);
+        ring.begin_unit("before", None);
+        ring.end_unit("after");
+        assert_eq!(ring.len(), 1, "a real change must be undoable");
+        assert!(
+            matches!(ring.undo("after"), stream::undo::UndoOutcome::Restore(_)),
+            "an unchanged field must restore"
         );
     }
 }
