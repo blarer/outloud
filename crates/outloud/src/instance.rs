@@ -203,8 +203,16 @@ fn try_lock_exclusive(_file: &std::fs::File) -> bool {
             // Another daemon holds it. Our handle is closed by process exit.
             return false;
         }
-        // Held for the process lifetime on purpose.
-        std::mem::forget(handle);
+        // Held for the process lifetime on purpose: not closing it IS the
+        // lock. `HANDLE` is a Copy newtype with no Drop, so simply dropping
+        // the binding leaks it, which is what we want.
+        //
+        // This previously called `std::mem::forget(handle)`, which on a Copy
+        // type forgets a COPY and does nothing at all. Harmless only by
+        // accident, and it stated an intent the code was not carrying out.
+        // Windows-only clippy caught it the first time this crate was ever
+        // linted for a Windows target.
+        let _ = handle;
         true
     }
 }

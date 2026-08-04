@@ -60,10 +60,12 @@ pub fn system_config_path() -> PathBuf {
         let root = std::env::var_os("ProgramData")
             .map(PathBuf::from)
             .unwrap_or_else(|| PathBuf::from(r"C:\ProgramData"));
-        return root.join("OutLoud").join("config.toml");
+        root.join("OutLoud").join("config.toml")
     }
     #[cfg(not(windows))]
-    PathBuf::from("/etc/outloud/config.toml")
+    {
+        PathBuf::from("/etc/outloud/config.toml")
+    }
 }
 
 /// The vocabulary folder, beside the user's config file.

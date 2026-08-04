@@ -139,10 +139,12 @@ fn main() {
 /// async-signal-safe state: no allocation, no closures, no locks.
 static INTERRUPTED: AtomicBool = AtomicBool::new(false);
 
+#[cfg(unix)]
 extern "C" fn on_sigint(_: i32) {
     INTERRUPTED.store(true, Ordering::SeqCst);
 }
 
+#[cfg(unix)]
 fn install_sigint_handler() {
     // SAFETY: `on_sigint` only stores to a static atomic, which is
     // async-signal-safe.
@@ -150,3 +152,13 @@ fn install_sigint_handler() {
         libc::signal(libc::SIGINT, on_sigint as *const () as libc::sighandler_t);
     }
 }
+
+/// Windows has no `signal(2)`. Ctrl-C terminates the example instead of
+/// unwinding to the summary, which is acceptable for a dev tool and much
+/// better than the example failing to compile for the target at all.
+///
+/// It did fail, and nothing noticed: CI does not build examples for
+/// Windows, and this file was only ever compiled on a Mac. Found the first
+/// time the workspace was linted for a Windows target.
+#[cfg(not(unix))]
+fn install_sigint_handler() {}

@@ -361,14 +361,16 @@ pub fn app_identity(snap: Option<&TextSnapshot>) -> Option<config::AppIdentity> 
     #[cfg(all(target_os = "windows", feature = "display"))]
     {
         let name = text_target::targets::keys::foreground_process_name()?;
-        return Some(config::AppIdentity {
+        Some(config::AppIdentity {
             bundle_id: None,
             process_name: Some(name),
             window_class: None,
-        });
+        })
     }
     #[cfg(not(all(target_os = "windows", feature = "display")))]
-    None
+    {
+        None
+    }
 }
 
 /// How one utterance ended, for the overlay and the log.
@@ -488,6 +490,23 @@ pub fn deliver(mode: &Mode, transcript: &str) -> Outcome {
     }
 }
 
+/// Write `text` verbatim, replacing the field's contents.
+///
+/// For a restore: the text is known, so no intent parsing may touch it, and
+/// the write must REPLACE rather than insert or the old text lands beside
+/// the new one.
+#[cfg(not(target_os = "macos"))]
+fn write_literal_via_tiers(text: &str) -> Outcome {
+    // `Mode::Edit` selects replace semantics on the ladder. The selection
+    // field is unused by `write_via_tiers`, which no longer parses anything.
+    write_via_tiers(
+        &Mode::Edit {
+            selected: String::new(),
+        },
+        text.to_string(),
+    )
+}
+
 /// Undo for the tier platforms (Windows today).
 ///
 /// Reads the focused field through UIA, resolves against the shared ring,
@@ -513,19 +532,32 @@ fn apply_undo_via_tiers() -> Outcome {
             }
         };
 
-        return match resolve_undo(&now) {
+        match resolve_undo(&now) {
             // Delivered as an ordinary edit so it walks the same tier
             // ladder, including the per-app rule. Recursion is impossible:
             // the restored text is field contents, never an undo command.
-            // Calls the INNER function: a restore must not be recorded as a
-            // new undoable unit, or "scratch that" would undo the previous
-            // "scratch that" and the pair would loop forever.
-            stream::undo::UndoOutcome::Restore(unit) => deliver_via_tiers_inner(
-                &Mode::Edit {
-                    selected: now.clone(),
-                },
-                &unit.before,
-            ),
+            // Writes the restored text LITERALLY.
+            //
+            // Routing it back through `deliver_via_tiers_inner` re-parsed it
+            // as a spoken command, which is wrong three different ways,
+            // because restored text is whatever the user dictated earlier
+            // and can contain any words at all:
+            //
+            //   "scratch that ..."     -> parses as Undo -> calls this
+            //                             function again -> infinite loop.
+            //                             The comment here previously
+            //                             claimed that was impossible.
+            //   "change this to that"  -> parses as Replace and rewrites the
+            //                             selection into something else.
+            //   ordinary prose         -> Freeform, which `classify` may
+            //                             demote to Dictate, so the old text
+            //                             is INSERTED next to the new rather
+            //                             than replacing it.
+            //
+            // A restore is not an utterance. It is a known string going to a
+            // known place, so it skips intent entirely and goes straight to
+            // the transport ladder.
+            stream::undo::UndoOutcome::Restore(unit) => write_literal_via_tiers(&unit.before),
             // Deliberately not forced: restoring here would destroy edits
             // the user made after ours, which is worse than declining.
             stream::undo::UndoOutcome::FieldChanged { .. } => Outcome::EditNoMatch {
@@ -534,7 +566,7 @@ fn apply_undo_via_tiers() -> Outcome {
             stream::undo::UndoOutcome::Empty => Outcome::EditNoMatch {
                 command: "undo: nothing to undo yet".to_string(),
             },
-        };
+        }
     }
 
     // No readable text backend on this build: a headless or display-less
@@ -739,7 +771,22 @@ fn deliver_via_tiers_inner(mode: &Mode, text: &str) -> Outcome {
         Ok(p) => p,
         Err(outcome) => return outcome,
     };
+    write_via_tiers(mode, payload)
+}
 
+/// Write text that is already decided, down the transport ladder.
+///
+/// Split from the intent handling above so a caller holding a KNOWN string
+/// can reach the transports without it being re-parsed as a spoken command.
+/// The undo restore is that caller: the text it writes is whatever the user
+/// dictated earlier, so passing it back through intent parsing meant a
+/// restored "scratch that ..." recursed forever and restored prose could be
+/// inserted instead of replacing.
+///
+/// `mode` still selects insert-vs-replace semantics; it no longer decides
+/// what the text MEANS.
+#[cfg(not(target_os = "macos"))]
+fn write_via_tiers(mode: &Mode, payload: String) -> Outcome {
     #[cfg(all(target_os = "windows", feature = "display"))]
     {
         use text_target::targets::ax::UiaTarget;
@@ -2428,6 +2475,71 @@ mod tier_tests {
         assert_eq!(
             depth_before, depth_after,
             "a no-op edit must not become an undo step"
+        );
+    }
+
+    /// Restored text must never be re-parsed as a spoken command.
+    ///
+    /// The tier-platform restore originally wrote through the same function
+    /// that handles an utterance, which re-ran intent parsing over the text
+    /// it was restoring. Restored text is whatever the user dictated
+    /// earlier, so it can be anything, including a phrase the parser reads
+    /// as an instruction.
+    ///
+    /// A correction to my own first version of this comment, which claimed
+    /// the failure was unbounded recursion via "scratch that ...". It is
+    /// not: `parse_undo` matches the WHOLE utterance exactly, so a longer
+    /// sentence starting with those words is Freeform, and only a field
+    /// whose entire contents are literally "scratch that" could re-enter
+    /// the undo path. Rare, and bounded by the ring emptying.
+    ///
+    /// The damaging cases are the ordinary ones, and they need no unusual
+    /// text at all:
+    ///
+    /// - "change the plan to something else" parses as Replace, so
+    ///   restoring it would rewrite the selection into "something else"
+    ///   instead of putting that sentence back.
+    /// - "delete the second paragraph" parses as DeleteScope, so restoring
+    ///   it would DELETE part of the field.
+    /// - plain prose is Freeform, which `classify` may demote to Dictate,
+    ///   so the old text is inserted beside the new rather than replacing
+    ///   it.
+    ///
+    /// This asserts those phrases really are commands to the parser, which
+    /// is what makes routing a restore through parsing a live hazard rather
+    /// than a theoretical one.
+    #[test]
+    fn text_that_looks_like_a_command_is_a_hazard_to_restore_by_parsing() {
+        for hazard in [
+            "change the plan to something else",
+            "delete the second paragraph",
+            "scratch that",
+        ] {
+            let intent = edit_intent::parse(hazard);
+            assert!(
+                !matches!(intent, EditIntent::Freeform { .. }),
+                "{hazard:?} parses as {intent:?}, so restoring it through the \
+                 command path would act on it instead of writing it"
+            );
+        }
+
+        // The phrase I first assumed would recurse. It does not: undo
+        // matches the whole utterance, so this is not an undo command.
+        // It is something worse. "scratch X" is the DELETE grammar, so
+        // restoring this sentence through the parser would delete
+        // "that idea, it was wrong" from the user's field rather than
+        // putting the sentence back.
+        //
+        // Both of my guesses about this string were wrong, in the safe
+        // direction and then in the dangerous one. That is the argument
+        // for the restore path not going through the parser at all,
+        // rather than for enumerating which phrases are safe.
+        assert!(
+            matches!(
+                edit_intent::parse("scratch that idea, it was wrong"),
+                EditIntent::Delete { .. }
+            ),
+            "restoring a 'scratch ...' sentence by parsing it would delete text"
         );
     }
 }

@@ -78,4 +78,10 @@ echo "==> cfg check OK"
 echo
 echo "NOTE: crates/outloud is not cross-checked here, because ureq -> rustls"
 echo "-> ring needs a C compiler for the target and none is installed. Its"
-echo "non-macOS branches are covered by CI's Linux jobs, not by this script."
+echo "Linux branches are covered by CI's Linux jobs, not by this script."
+echo
+echo "For WINDOWS that gap is now closable locally:"
+echo "    scripts/ci-check-windows.sh"
+echo "which uses cargo-xwin + brew llvm to supply the missing toolchain and"
+echo "lints the real target. Its first run found four defects macOS cannot"
+echo "see, including a no-op mem::forget in the single-instance guard."
