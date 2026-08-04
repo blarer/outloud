@@ -95,12 +95,26 @@ Add-Type -Namespace Win32 -Name Focus -MemberDefinition @'
 [DllImport("user32.dll")] public static extern uint GetWindowThreadProcessId(IntPtr hWnd, out uint pid);
 '@
 $stolenBy = $null
+$reclaims = 0
 while (-not $outloud.HasExited) {
     $fg = [Win32.Focus]::GetForegroundWindow()
     $fgPid = 0
     [Win32.Focus]::GetWindowThreadProcessId($fg, [ref]$fgPid) | Out-Null
     if ($fgPid -ne 0 -and $fgPid -ne $window.Id -and -not $DryRun) {
-        $stolenBy = (Get-Process -Id $fgPid -ErrorAction SilentlyContinue).ProcessName
+        # Try to take focus back ONCE before giving up. A window that flashes
+        # to the front and yields again (an updater, a notification toast) is
+        # common on a machine someone is using, and aborting on it makes the
+        # check unrunnable. A window that holds focus is the dangerous case,
+        # because the utterance would be written into it.
+        $thief = (Get-Process -Id $fgPid -ErrorAction SilentlyContinue).ProcessName
+        if ($reclaims -lt 1) {
+            $reclaims++
+            Say "note: '$thief' took focus; reclaiming once"
+            [Microsoft.VisualBasic.Interaction]::AppActivate($window.Id)
+            Start-Sleep -Milliseconds 400
+            continue
+        }
+        $stolenBy = $thief
         $outloud.Kill()
         break
     }
