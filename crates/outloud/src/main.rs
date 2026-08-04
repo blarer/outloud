@@ -44,6 +44,49 @@ struct Args {
     sensitivity: Option<u8>,
 }
 
+/// What `--permissions` prints for the "accessibility" row.
+///
+/// This is per-platform because the *mechanism* is per-platform, and
+/// reporting one platform's mechanism on another is worse than silence: it
+/// sends the user to fix something that does not exist. On Windows the row
+/// previously read `MISSING (text will paste, not insert)` on every machine
+/// forever, because `ax_edit::is_trusted` is a macOS-only query that returns
+/// a hardcoded `false` everywhere else. Windows has no accessibility grant to
+/// hold: UI Automation is available to any non-elevated process, so the only
+/// honest question is whether a UIA session can actually be created.
+fn accessibility_permission_line() -> String {
+    #[cfg(target_os = "macos")]
+    {
+        if ax_edit::is_trusted(false) {
+            "granted".into()
+        } else {
+            "MISSING (text will paste, not insert)".into()
+        }
+    }
+    // A UIA session that constructs is the real precondition for reading a
+    // field, which is what undo and edit-by-voice need. It is not a grant and
+    // cannot be granted: a failure here is COM being unavailable, which is a
+    // broken machine rather than a settings pane to visit. UIPI (an elevated
+    // window in focus) is deliberately NOT probed, because it is a property of
+    // whatever happens to be focused at this instant, not of this process, and
+    // `docs/hotkeys.md` covers it.
+    #[cfg(all(target_os = "windows", feature = "display"))]
+    {
+        match text_target::targets::ax::UiaTarget::new() {
+            Ok(_) => "n/a on Windows (UI Automation reachable)".into(),
+            Err(e) => format!("UI Automation unavailable: {e}"),
+        }
+    }
+    #[cfg(all(target_os = "windows", not(feature = "display")))]
+    {
+        "n/a on Windows (UI Automation needs --features display)".into()
+    }
+    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+    {
+        "n/a on this platform".into()
+    }
+}
+
 fn parse_args() -> anyhow::Result<Args> {
     let mut args = Args {
         once: false,
@@ -107,11 +150,7 @@ fn parse_args() -> anyhow::Result<Args> {
                 );
                 println!(
                     "accessibility:    {}",
-                    if ax_edit::is_trusted(false) {
-                        "granted"
-                    } else {
-                        "MISSING (text will paste, not insert)"
-                    }
+                    accessibility_permission_line()
                 );
                 println!(
                     "bundle:           {}",
