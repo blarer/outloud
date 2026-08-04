@@ -202,19 +202,48 @@ pub fn spawn_mic(
 /// human would; `false` shoves it through as fast as the channel takes it,
 /// for CI where wall time matters.
 pub fn spawn_wav(samples: Vec<f32>, realtime: bool, tx: UnboundedSender<FrontendEvent>) {
+    spawn_wav_sequence(vec![samples], realtime, tx)
+}
+
+/// Replay SEVERAL utterances through one process, as separate key cycles.
+///
+/// Anything spanning utterances cannot be tested with one recording per
+/// process. Undo is the case that forced this: the ring is process-lifetime
+/// (the dictation being undone finished before the one asking for the undo
+/// began), so a `--once` run's ring is always empty and "scratch that" can
+/// never succeed there. A verification built on single runs would have
+/// reported success while never exercising undo at all.
+///
+/// Each utterance is a full KeyDown/chunks/KeyUp cycle with a gap between,
+/// so the pipeline commits one before the next begins, exactly as a person
+/// speaking twice would produce.
+pub fn spawn_wav_sequence(
+    utterances: Vec<Vec<f32>>,
+    realtime: bool,
+    tx: UnboundedSender<FrontendEvent>,
+) {
     tokio::spawn(async move {
-        let _ = tx.send(FrontendEvent::KeyDown);
-        // 200ms chunks: the pacing the asr benchmarks use, coarse enough to
-        // be cheap, fine enough that partials interleave.
-        let chunk = audio::SAMPLE_RATE as usize / 5;
-        for c in samples.chunks(chunk) {
-            if tx.send(FrontendEvent::Chunk(c.to_vec())).is_err() {
-                return;
+        for (i, samples) in utterances.into_iter().enumerate() {
+            if i > 0 {
+                // Long enough for the previous utterance to commit and its
+                // write to land before the next key cycle opens. Without
+                // this the second utterance races the first one's delivery
+                // and reads a field that is still mid-write.
+                tokio::time::sleep(std::time::Duration::from_millis(1200)).await;
             }
-            if realtime {
-                tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+            let _ = tx.send(FrontendEvent::KeyDown);
+            // 200ms chunks: the pacing the asr benchmarks use, coarse enough
+            // to be cheap, fine enough that partials interleave.
+            let chunk = audio::SAMPLE_RATE as usize / 5;
+            for c in samples.chunks(chunk) {
+                if tx.send(FrontendEvent::Chunk(c.to_vec())).is_err() {
+                    return;
+                }
+                if realtime {
+                    tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+                }
             }
+            let _ = tx.send(FrontendEvent::KeyUp);
         }
-        let _ = tx.send(FrontendEvent::KeyUp);
     });
 }

@@ -33,6 +33,18 @@ const ERROR_DISMISS_AFTER: std::time::Duration = std::time::Duration::from_secs(
 pub struct Config {
     /// Exit after one committed utterance (the `--once` testing mode).
     pub once: bool,
+    /// Exit after this many committed utterances when `once` is set.
+    ///
+    /// Defaults to 1. Higher only for replaying a SEQUENCE of recordings
+    /// through one process, which is the only way to exercise anything that
+    /// spans utterances: the undo ring is process-lifetime, so a run that
+    /// exits after the first utterance can never have anything to undo.
+    ///
+    /// Counted in UTTERANCES, not reports. A silent utterance commits
+    /// nothing and produces no report, so counting reports would leave the
+    /// loop waiting forever for one nobody is going to speak. That is not
+    /// hypothetical: it hung `silence_commits_nothing` for twenty minutes.
+    pub once_after: usize,
     /// Commit on the VAD endpoint instead of waiting for a key edge. This is
     /// what lets `--once` run a full cycle with nobody holding a key: speak,
     /// pause, and the hangover fires the commit.
@@ -126,6 +138,7 @@ impl Default for Config {
     fn default() -> Config {
         Config {
             once: false,
+            once_after: 1,
             auto_endpoint: false,
             prefer_streaming: false,
             // The schema default, kept in one place.
@@ -230,6 +243,10 @@ pub async fn run(
         mut mic,
     } = channels;
     let mut reports = Vec::new();
+    // Every commit, including ones that produce no report (silence, empty
+    // transcript). See `Config::once_after`: counting reports instead left
+    // the loop waiting forever for an utterance nobody was going to speak.
+    let mut committed: usize = 0;
     let mut segmenter = new_segmenter(current_sensitivity(&cfg));
     let mut listening = false;
     // Key held before the recognizer was ready: the model-loading state
@@ -354,7 +371,8 @@ pub async fn run(
                             eprintln!("outloud: {}", r.render());
                             reports.push(r);
                         }
-                        if cfg.once {
+                        committed += 1;
+                        if cfg.once && committed >= cfg.once_after.max(1) {
                             return Ok(reports);
                         }
                     }
@@ -770,7 +788,8 @@ pub async fn run(
                                         // The writer still needs its Finish
                                         // (it exits on it) but writes nothing.
                                         s.finish("", Instant::now());
-                                        if cfg.once {
+                                        committed += 1;
+                                        if cfg.once && committed >= cfg.once_after.max(1) {
                                             return Ok(reports);
                                         }
                                         continue;
@@ -801,7 +820,8 @@ pub async fn run(
                                 );
                             }
                         }
-                        if cfg.once {
+                        committed += 1;
+                        if cfg.once && committed >= cfg.once_after.max(1) {
                             hold_for_inspection();
                             return Ok(reports);
                         }
@@ -1564,5 +1584,93 @@ mod tests {
             80,
             "a reload must beat the value copied at startup"
         );
+    }
+
+    /// A silent utterance must still count toward `once_after`.
+    ///
+    /// `once_after` was first implemented by counting REPORTS. Silence
+    /// commits nothing and produces no report, so the count never advanced
+    /// and `run` waited forever for an utterance nobody was going to speak.
+    /// That hung the suite for twenty minutes, and the failure mode is a
+    /// hang rather than an assertion, which is the kind CI reports as a
+    /// timeout with no useful message.
+    ///
+    /// The sender is deliberately kept ALIVE until the timeout. An earlier
+    /// version dropped it when its feeding task finished, which closes the
+    /// frontend channel and ends `run` through the "channel closed" break
+    /// rather than through the counter. That version passed with the bug
+    /// fully restored at all three call sites: it was measuring the
+    /// shutdown path, not the thing it claimed to test. Verified by
+    /// re-introducing the bug and watching this fail.
+    #[tokio::test]
+    async fn a_silent_utterance_still_ends_a_multi_utterance_run() {
+        let (ftx, frx) = tokio::sync::mpsc::unbounded_channel();
+        let (atx, arx) = tokio::sync::mpsc::unbounded_channel();
+        let (rtx, rrx) = tokio::sync::oneshot::channel();
+        let feed = recognize::spawn(|| Ok(Box::new(MockRecognizer::new()) as _), atx, rtx);
+        let (engine, _shared) = Engine::new();
+        let mut recorder = Recorder::new();
+
+        // Two utterances, both silent: no reports at all.
+        //
+        // Fed from a task with a gap, NOT queued up front. Queueing both
+        // makes the second KeyDown arrive while the first utterance is
+        // still finalizing, and the pipeline correctly refuses it
+        // ("key-down ignored, previous utterance still committing"), so the
+        // run would hang waiting for a second commit that was never going
+        // to happen. That is the pipeline being right and the test being
+        // wrong, and it is also what a real speaker does: finish, pause,
+        // speak again. `spawn_wav_sequence` inserts the same gap.
+        let feeder = ftx.clone();
+        tokio::spawn(async move {
+            for i in 0..2 {
+                if i > 0 {
+                    tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+                }
+                feeder.send(FrontendEvent::KeyDown).unwrap();
+                feeder
+                    .send(FrontendEvent::Chunk(vec![0.0; 16_000]))
+                    .unwrap();
+                feeder.send(FrontendEvent::KeyUp).unwrap();
+            }
+            // Held open forever: closing it would end `run` through the
+            // channel-closed path and hide whether the counter works.
+            std::future::pending::<()>().await;
+        });
+
+        let cfg = Config {
+            once: true,
+            once_after: 2,
+            auto_endpoint: false,
+            prefer_streaming: false,
+            ..Default::default()
+        };
+
+        let reports = tokio::time::timeout(
+            std::time::Duration::from_secs(10),
+            run(
+                cfg,
+                engine,
+                Channels {
+                    frontend: frx,
+                    asr_events: arx,
+                    feed,
+                    ready: rrx,
+                    mic: None,
+                },
+                &mut recorder,
+            ),
+        )
+        .await
+        .expect("run must terminate: silent utterances have to count too")
+        .unwrap();
+
+        assert!(
+            reports.is_empty(),
+            "silence commits nothing, so there is nothing to report"
+        );
+        // Proves the channel never closed, so `run` returned because the
+        // counter reached its target and not because its input went away.
+        drop(ftx);
     }
 }

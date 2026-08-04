@@ -27,7 +27,7 @@ use outloud::state::Engine;
 struct Args {
     once: bool,
     wav: Option<std::path::PathBuf>,
-    say: Option<String>,
+    say: Vec<String>,
     asr: String,
     chord: String,
     /// Whether `--chord` was passed. An explicit flag must beat the config
@@ -48,7 +48,7 @@ fn parse_args() -> anyhow::Result<Args> {
     let mut args = Args {
         once: false,
         wav: None,
-        say: None,
+        say: Vec::new(),
         asr: "apple".into(),
         chord: "right-option".into(),
         chord_from_flag: false,
@@ -65,7 +65,12 @@ fn parse_args() -> anyhow::Result<Args> {
         match a.as_str() {
             "--once" => args.once = true,
             "--wav" => args.wav = Some(val("--wav")?.into()),
-            "--say" => args.say = Some(val("--say")?),
+            // Repeatable: each --say is one utterance, replayed through
+            // ONE process. Undo needs this. Its ring is process-lifetime,
+            // so a single-utterance run has nothing to undo and a
+            // verification built on repeated single runs would pass while
+            // never exercising undo at all.
+            "--say" => args.say.push(val("--say")?),
             "--asr" => args.asr = val("--asr")?,
             "--chord" => {
                 args.chord = val("--chord")?;
@@ -127,6 +132,9 @@ fn parse_args() -> anyhow::Result<Args> {
                 println!(
                     "outloud: hold the hotkey, speak, release, text appears\n\
                      --once           run one dictation cycle and exit\n\
+                     --say TEXT       synthesize TEXT and dictate it; repeat\n\
+                                      the flag to replay several utterances\n\
+                                      through one process (needed for undo)\n\
                      --wav FILE       feed FILE instead of the microphone (with --once)\n\
                      --say TEXT       synthesize TEXT with `say` and feed it (with --once)\n\
                      --asr BACKEND    apple (default), whisper, or mock\n\
@@ -403,15 +411,20 @@ fn main() -> anyhow::Result<()> {
     }
 
     // The pipeline future, boxed so both thread layouts can run it.
-    let file_samples = match (&args.wav, &args.say) {
-        (Some(_), Some(_)) => anyhow::bail!("--wav and --say are mutually exclusive"),
-        (Some(p), None) => Some(outloud::wav::load_16k_mono(p)?),
-        (None, Some(text)) => {
-            let p = synthesize(text)?;
-            Some(outloud::wav::load_16k_mono(&p)?)
+    let file_samples: Option<Vec<Vec<f32>>> = match (&args.wav, args.say.is_empty()) {
+        (Some(_), false) => anyhow::bail!("--wav and --say are mutually exclusive"),
+        (Some(p), true) => Some(vec![outloud::wav::load_16k_mono(p)?]),
+        (None, false) => {
+            let mut utterances = Vec::with_capacity(args.say.len());
+            for text in &args.say {
+                let p = synthesize(text)?;
+                utterances.push(outloud::wav::load_16k_mono(&p)?);
+            }
+            Some(utterances)
         }
-        (None, None) => None,
+        (None, true) => None,
     };
+    let utterance_count = file_samples.as_ref().map(|u| u.len()).unwrap_or(1);
     anyhow::ensure!(
         file_samples.is_none() || args.once,
         "--wav/--say only make sense with --once"
@@ -419,6 +432,9 @@ fn main() -> anyhow::Result<()> {
 
     let cfg = Config {
         once: args.once,
+        // Every replayed utterance must commit before the process exits, or
+        // the last one is cut off mid-delivery.
+        once_after: utterance_count,
         // File-driven runs commit on the synthetic KeyUp; mic-driven --once
         // has nobody holding a key, so the VAD endpoint is the commit.
         auto_endpoint: args.once && file_samples.is_none(),
@@ -502,8 +518,8 @@ fn main() -> anyhow::Result<()> {
             // the full daemon binds the hotkey and opens the mic.
             let mut mic = None;
             match file_samples {
-                Some(samples) => {
-                    source::spawn_wav(samples, args.realtime, ftx.clone());
+                Some(utterances) => {
+                    source::spawn_wav_sequence(utterances, args.realtime, ftx.clone());
                 }
                 None => {
                     // The microphone is NOT opened here. The pipeline opens
