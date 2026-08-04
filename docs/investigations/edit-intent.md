@@ -195,6 +195,12 @@ every undo command reported "that command did not match". Nothing caught it
 for weeks: the pieces each had passing tests, and the one mode that could
 have exercised the connection end to end returned before reaching it.
 
+Wired on both backends, not just macOS: Windows resolves the same ring
+through UIA's TextPattern/ValuePattern read, so the behaviour is shared
+rather than reimplemented. `resolve_undo` is platform-neutral and unit-tested
+on macOS CI, which is what stops the Windows half from being covered only by
+hardware nobody runs the suite on.
+
 The fix separates deciding from doing. `route_edit -> EditRoute` is a pure
 function, so the guard now runs it and reports the chosen route
 (`transcript [route: undo]`) while still writing nothing. Delivery dispatches

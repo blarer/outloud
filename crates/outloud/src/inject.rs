@@ -235,14 +235,12 @@ pub fn route_edit(text: &str, selected: &str) -> EditRoute {
 /// weeks. The phrase parsed, `edit_intent::apply` returned None for it saying
 /// "the caller's undo ring resolves this", and no such caller existed, so the
 /// user was told their command did not match.
-#[cfg(target_os = "macos")]
 static UNDO: std::sync::Mutex<Option<stream::undo::UndoRing>> = std::sync::Mutex::new(None);
 
 /// Record a completed edit so it can be undone.
 ///
 /// A unit that changed nothing is dropped by the ring itself: an undo step
 /// that does nothing would make "scratch that" feel broken.
-#[cfg(target_os = "macos")]
 fn record_undo(before: &str, after: &str) {
     // A poisoned lock means a panic happened mid-record. Undo history is a
     // convenience rather than anything the user typed, so losing it beats
@@ -251,6 +249,20 @@ fn record_undo(before: &str, after: &str) {
     let ring = guard.get_or_insert_with(|| stream::undo::UndoRing::new(10));
     ring.begin_unit(before, None);
     ring.end_unit(after);
+}
+
+/// Resolve an undo against the ring, given the field's CURRENT text.
+///
+/// Split from the platform read so both backends share one behaviour and so
+/// the decision is testable without a live field. Reading the field back is
+/// what lets the ring's stale-snapshot guard decline rather than destroy
+/// work the user did after our write.
+fn resolve_undo(now: &str) -> stream::undo::UndoOutcome {
+    let mut guard = UNDO.lock().unwrap_or_else(|p| p.into_inner());
+    match guard.as_mut() {
+        Some(ring) => ring.undo(now),
+        None => stream::undo::UndoOutcome::Empty,
+    }
 }
 
 /// Resolve an undo against the ring and the field's current contents.
@@ -270,13 +282,7 @@ fn apply_undo() -> Outcome {
             }
         }
     };
-    let mut guard = UNDO.lock().unwrap_or_else(|p| p.into_inner());
-    let outcome = match guard.as_mut() {
-        Some(ring) => ring.undo(&now),
-        None => stream::undo::UndoOutcome::Empty,
-    };
-    drop(guard);
-    undo_outcome_to_result(outcome)
+    undo_outcome_to_result(resolve_undo(&now))
 }
 
 /// The half of undo that needs no accessibility tree, so the routing can be
@@ -471,6 +477,64 @@ pub fn deliver(mode: &Mode, transcript: &str) -> Outcome {
     }
 }
 
+/// Undo for the tier platforms (Windows today).
+///
+/// Reads the focused field through UIA, resolves against the shared ring,
+/// and writes the restored text back through the normal delivery path so the
+/// per-app transport rules still apply: an app that discards accessibility
+/// writes gets the clipboard route for an undo exactly as it does for a
+/// dictation.
+#[cfg(not(target_os = "macos"))]
+fn apply_undo_via_tiers() -> Outcome {
+    #[cfg(all(target_os = "windows", feature = "display"))]
+    {
+        use text_target::targets::ax::UiaTarget;
+        use text_target::TextTarget;
+
+        let now = match UiaTarget::new().and_then(|mut t| t.read()) {
+            Ok(snap) => snap.text,
+            Err(e) => {
+                return Outcome::Failed {
+                    situation_action: format!(
+                        "could not read the field to undo into ({e}) -> click into it and try again"
+                    ),
+                }
+            }
+        };
+
+        return match resolve_undo(&now) {
+            // Delivered as an ordinary edit so it walks the same tier
+            // ladder, including the per-app rule. Recursion is impossible:
+            // the restored text is field contents, never an undo command.
+            // Calls the INNER function: a restore must not be recorded as a
+            // new undoable unit, or "scratch that" would undo the previous
+            // "scratch that" and the pair would loop forever.
+            stream::undo::UndoOutcome::Restore(unit) => deliver_via_tiers_inner(
+                &Mode::Edit {
+                    selected: now.clone(),
+                },
+                &unit.before,
+            ),
+            // Deliberately not forced: restoring here would destroy edits
+            // the user made after ours, which is worse than declining.
+            stream::undo::UndoOutcome::FieldChanged { .. } => Outcome::EditNoMatch {
+                command: "undo: nothing to undo, the field changed since".to_string(),
+            },
+            stream::undo::UndoOutcome::Empty => Outcome::EditNoMatch {
+                command: "undo: nothing to undo yet".to_string(),
+            },
+        };
+    }
+
+    // No readable text backend on this build: a headless or display-less
+    // target has no field to restore into. Says which, rather than
+    // reporting the user's phrase as an unmatched command.
+    #[cfg(not(all(target_os = "windows", feature = "display")))]
+    Outcome::EditNoMatch {
+        command: "undo: this build has no readable text destination".to_string(),
+    }
+}
+
 /// Delivery for platforms whose write path is a `text-target` tier rather
 /// than `ax-edit`: Windows today (UIA, then SendInput, then clipboard),
 /// and the shape any future Linux backend slots into.
@@ -495,18 +559,15 @@ pub fn payload_for(mode: &Mode, text: &str) -> Result<String, Outcome> {
             // must not write "slow.".
             let command = text.trim_end_matches(['.', '!', '?', ',']);
             let intent = edit_intent::parse(command);
-            // Undo is not wired on the tier platforms: restoring needs to
-            // read the field's CURRENT text back, which the tier ladder has
-            // no equivalent of yet (see the macOS `apply_undo`).
-            //
-            // Say so, rather than falling through to `apply`, which returns
-            // None for Undo and would report the user's own phrase as an
-            // unmatched command. Being told "not supported here" is a fact
-            // to act on; being told "scratch that did not match" is a lie
-            // that sends someone looking for a typo in what they said.
+            // Undo never reaches here: `deliver_via_tiers` resolves it
+            // against the ring before asking what to write, because the
+            // answer depends on the field's CURRENT text rather than on
+            // this utterance. Kept as an explicit refusal rather than
+            // falling through to `apply`, which returns None for Undo and
+            // would report the user's own phrase as an unmatched command.
             if let EditIntent::Undo(_) = &intent {
                 return Err(Outcome::EditNoMatch {
-                    command: "undo: not supported on this platform yet".to_string(),
+                    command: "undo: resolved by the ring, not by payload_for".to_string(),
                 });
             }
             if let EditIntent::Freeform { .. } = &intent {
@@ -609,6 +670,23 @@ fn frontmost_app_name() -> Option<String> {
 
 #[cfg(not(target_os = "macos"))]
 fn deliver_via_tiers(mode: &Mode, text: &str) -> Outcome {
+    let outcome = deliver_via_tiers_inner(mode, text);
+    // Record ONCE, here, rather than at each `return Outcome::Wrote` site
+    // inside the tier ladder. There are four of those (UIA, SendInput,
+    // clipboard, and the staged-terminal path), and the macOS side needed
+    // five separate fixes for exactly this shape of "every write path must
+    // remember to do the extra thing". One place cannot drift.
+    //
+    // Only a write that HAPPENED is recorded, so every undo step
+    // corresponds to something the user actually saw.
+    if let (Mode::Edit { selected }, Outcome::Wrote { text: written, .. }) = (mode, &outcome) {
+        record_undo(selected, written);
+    }
+    outcome
+}
+
+#[cfg(not(target_os = "macos"))]
+fn deliver_via_tiers_inner(mode: &Mode, text: &str) -> Outcome {
     // Same rule the macOS path applies, for the same shipped-broken
     // reason: a selection means an edit is POSSIBLE, not INTENDED. An
     // unparsed phrase that `freeform::classify` reads as ordinary
@@ -633,6 +711,19 @@ fn deliver_via_tiers(mode: &Mode, text: &str) -> Outcome {
         }
         m => m,
     };
+    // Undo, before anything asks what text to write.
+    //
+    // The answer depends on the field's CURRENT contents, not on this
+    // utterance, so it cannot come from `payload_for`. Reading the field
+    // back is also what lets the ring decline when the user changed it
+    // after our write, rather than destroying that work.
+    if let Mode::Edit { .. } = mode {
+        if let EditIntent::Undo(_) = edit_intent::parse(text.trim_end_matches(['.', '!', '?', ',']))
+        {
+            return apply_undo_via_tiers();
+        }
+    }
+
     let payload = match payload_for(mode, text) {
         Ok(p) => p,
         Err(outcome) => return outcome,
@@ -2253,6 +2344,75 @@ mod tier_tests {
         assert!(
             crate::testenv::delivery_suppressed_by_default(),
             "the suppressed default must come back when the guard drops"
+        );
+    }
+
+    /// The undo ring's decision, on every platform.
+    ///
+    /// `resolve_undo` is the half of undo that needs no live field, and both
+    /// backends share it: macOS reads through the accessibility tree,
+    /// Windows through UIA, and then both ask this. Testing it here means
+    /// the Windows behaviour is covered by macOS CI, rather than only by
+    /// hardware nobody runs the suite on.
+    #[test]
+    fn the_ring_declines_rather_than_destroying_later_work() {
+        // UNDO is process-wide and tests run in parallel, so this drains it
+        // rather than assuming it starts empty. Asserting on global
+        // emptiness would pass today and fail the day someone adds another
+        // test that records, with a failure pointing at the wrong place.
+        {
+            let mut guard = UNDO.lock().unwrap_or_else(|p| p.into_inner());
+            *guard = Some(stream::undo::UndoRing::new(10));
+        }
+
+        // Nothing recorded yet: must say so, instead of reporting the
+        // user's phrase as an unmatched command.
+        assert!(
+            matches!(resolve_undo("anything"), stream::undo::UndoOutcome::Empty),
+            "an empty ring must report Empty"
+        );
+
+        record_undo("the quick brown fox", "the slow brown fox");
+
+        // The field still holds what we wrote, so the restore is safe.
+        match resolve_undo("the slow brown fox") {
+            stream::undo::UndoOutcome::Restore(unit) => assert_eq!(
+                unit.before, "the quick brown fox",
+                "undo must restore the text as it was before our edit"
+            ),
+            other => panic!("expected a restore, got {other:?}"),
+        }
+
+        // The user kept typing after our edit. Forcing the old text back
+        // would destroy that work, so the ring must decline. This is the
+        // property that makes undo safe to wire to a voice command at all.
+        record_undo("before", "after");
+        assert!(
+            matches!(
+                resolve_undo("after, and then the user typed more"),
+                stream::undo::UndoOutcome::FieldChanged { .. }
+            ),
+            "a field edited after our write must not be overwritten"
+        );
+
+        // A "change" that changed nothing is not an undo step: undoing it
+        // would appear to do nothing and read as a broken command.
+        let depth_before = UNDO
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .as_ref()
+            .map(|r| r.len())
+            .unwrap_or(0);
+        record_undo("identical", "identical");
+        let depth_after = UNDO
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .as_ref()
+            .map(|r| r.len())
+            .unwrap_or(0);
+        assert_eq!(
+            depth_before, depth_after,
+            "a no-op edit must not become an undo step"
         );
     }
 }
