@@ -71,6 +71,9 @@ echo "    headless OK"
 echo "==> macOS-gated items called from ungated code"
 python3 "$ROOT/scripts/ci-check-gated-calls.py"
 
+echo "==> private fns reachable only from platform-gated code"
+python3 "$ROOT/scripts/ci-check-gated-only-callers.py"
+
 echo "==> cfg check OK"
 echo
 echo "NOTE: crates/outloud is not cross-checked here, because ureq -> rustls"

@@ -241,7 +241,10 @@ static UNDO: std::sync::Mutex<Option<stream::undo::UndoRing>> = std::sync::Mutex
 ///
 /// A unit that changed nothing is dropped by the ring itself: an undo step
 /// that does nothing would make "scratch that" feel broken.
-fn record_undo(before: &str, after: &str) {
+/// `pub` for the same reason as [`resolve_undo`]: both callers sit behind
+/// platform gates, so a build matching neither would see an unused private
+/// function, which clippy's `-D warnings` turns into a failure.
+pub fn record_undo(before: &str, after: &str) {
     // A poisoned lock means a panic happened mid-record. Undo history is a
     // convenience rather than anything the user typed, so losing it beats
     // refusing to dictate.
@@ -257,7 +260,15 @@ fn record_undo(before: &str, after: &str) {
 /// the decision is testable without a live field. Reading the field back is
 /// what lets the ring's stale-snapshot guard decline rather than destroy
 /// work the user did after our write.
-fn resolve_undo(now: &str) -> stream::undo::UndoOutcome {
+/// `pub` so it is reachable from every build configuration.
+///
+/// Both callers sit behind platform gates (macOS `apply_undo`, Windows
+/// `apply_undo_via_tiers`), so a Linux or headless build has none, and a
+/// private function with no callers is a clippy `-D warnings` failure
+/// there. The alternative is a third cfg gate listing the platforms that
+/// happen to have a caller today, which is a list that goes stale the
+/// moment a backend is added.
+pub fn resolve_undo(now: &str) -> stream::undo::UndoOutcome {
     let mut guard = UNDO.lock().unwrap_or_else(|p| p.into_inner());
     match guard.as_mut() {
         Some(ring) => ring.undo(now),
@@ -1351,7 +1362,11 @@ pub fn focus_moved_to(targeted: Option<&str>) -> Option<String> {
 /// also the part that must not guess: an unknown on either side means the
 /// answer is "cannot tell", and reporting a move on missing information
 /// would send users chasing a window that never had their text.
-fn focus_changed(targeted: Option<&str>, current: Option<&str>) -> Option<String> {
+/// `pub` because both call sites are inside `cfg(target_os)` branches, so on
+/// a target matching neither this private helper would be dead code and fail
+/// the build under `-D warnings`. Latent rather than observed: no such
+/// target is in CI today, and it would have broken the first one added.
+pub fn focus_changed(targeted: Option<&str>, current: Option<&str>) -> Option<String> {
     let was = targeted?;
     let now = current?;
     if now == was {
