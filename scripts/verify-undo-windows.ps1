@@ -81,6 +81,36 @@ Add-Type -AssemblyName System.Windows.Forms
 Start-Sleep -Milliseconds 600
 [System.Windows.Forms.SendKeys]::SendWait('^a')
 
+# Watch focus until the run finishes, and KILL it the moment the target
+# stops being frontmost.
+#
+# Not a nicety. A real (non-dry) run writes into whatever is focused, so an
+# app that steals focus mid-run receives the test sentence: on this machine
+# Discord did exactly that, matched its own ClipboardOnly rule, and got
+# "Change quick to slow." pasted into a live chat box. The window of exposure
+# is the whole utterance, and no amount of care about the FIRST focus call
+# closes it, because the theft happens later.
+Add-Type -Namespace Win32 -Name Focus -MemberDefinition @'
+[DllImport("user32.dll")] public static extern IntPtr GetForegroundWindow();
+[DllImport("user32.dll")] public static extern uint GetWindowThreadProcessId(IntPtr hWnd, out uint pid);
+'@
+$stolenBy = $null
+while (-not $outloud.HasExited) {
+    $fg = [Win32.Focus]::GetForegroundWindow()
+    $fgPid = 0
+    [Win32.Focus]::GetWindowThreadProcessId($fg, [ref]$fgPid) | Out-Null
+    if ($fgPid -ne 0 -and $fgPid -ne $window.Id -and -not $DryRun) {
+        $stolenBy = (Get-Process -Id $fgPid -ErrorAction SilentlyContinue).ProcessName
+        $outloud.Kill()
+        break
+    }
+    Start-Sleep -Milliseconds 120
+}
+if ($stolenBy) {
+    Say "ABORTED: '$stolenBy' took focus mid-run; killed the run before it could type into it. Rerun with nothing else grabbing focus."
+    exit 3
+}
+
 $outloud.WaitForExit(120000) | Out-Null
 
 Say '--- stdout ---'
