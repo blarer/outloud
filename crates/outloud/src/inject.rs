@@ -495,8 +495,16 @@ pub fn deliver(mode: &Mode, transcript: &str) -> Outcome {
 /// For a restore: the text is known, so no intent parsing may touch it, and
 /// the write must REPLACE rather than insert or the old text lands beside
 /// the new one.
+/// `pub` because its only caller is inside the Windows-and-display block of
+/// `apply_undo_via_tiers`, so on Linux this would be an unused private
+/// function and clippy's `-D warnings` turns that into a build failure.
+///
+/// Same shape as `resolve_undo` and `record_undo` before it. The pattern is
+/// now common enough to state as a rule: a helper shared BETWEEN platform
+/// branches belongs to the crate, not to one branch, and marking it `pub`
+/// says so once instead of chasing cfg lists that go stale.
 #[cfg(not(target_os = "macos"))]
-fn write_literal_via_tiers(text: &str) -> Outcome {
+pub fn write_literal_via_tiers(text: &str) -> Outcome {
     // `Mode::Edit` selects replace semantics on the ladder. The selection
     // field is unused by `write_via_tiers`, which no longer parses anything.
     write_via_tiers(
