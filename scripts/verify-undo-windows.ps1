@@ -112,6 +112,21 @@ if ([string]::IsNullOrEmpty($savedClipboard)) {
 Say '--- result ---'
 Say "original: '$Text'"
 Say "final:    '$final'"
+
+# Confirm the readback actually came from OUR Notepad. SendKeys goes to
+# whatever holds focus, so anything that steals it mid-run (a browser, an
+# updater, a game) is read instead, and the run reports a product failure
+# that is really a stolen-focus artifact. One such run came back holding a
+# browser's URL bar.
+Add-Type -AssemblyName UIAutomationClient
+Add-Type -AssemblyName UIAutomationTypes
+$focused = [System.Windows.Automation.AutomationElement]::FocusedElement
+$focusedPid = if ($focused) { $focused.Current.ProcessId } else { 0 }
+if ($focusedPid -ne $window.Id) {
+    Say "INCONCLUSIVE: focus was stolen (read from pid $focusedPid, expected $($window.Id)); rerun"
+    exit 2
+}
+
 # A mismatch is only meaningful if the field held the expected text to begin
 # with. SendKeys goes to whatever is focused at that instant, so a stray
 # keystroke landing in Notepad corrupts the fixture and the run then reports

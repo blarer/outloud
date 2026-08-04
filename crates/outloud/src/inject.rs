@@ -467,6 +467,19 @@ pub fn deliver(mode: &Mode, transcript: &str) -> Outcome {
             Mode::Edit { selected } => {
                 format!("{text} [route: {}]", route_edit(text, selected).label())
             }
+            // Undo is reachable WITHOUT a selection (our own write consumed
+            // it), so a dry run has to be able to say so. Reporting plain
+            // dictation here is what made the real bug invisible: the live
+            // path typed "scratch that" into the document while the dry run
+            // showed nothing unusual.
+            Mode::Dictate
+                if matches!(
+                    edit_intent::parse(text.trim_end_matches(['.', '!', '?', ','])),
+                    EditIntent::Undo(_)
+                ) =>
+            {
+                format!("{text} [route: undo]")
+            }
             Mode::Dictate => text.to_string(),
         };
         return Outcome::Suppressed { text };
@@ -796,11 +809,22 @@ fn deliver_via_tiers_inner(mode: &Mode, text: &str) -> Outcome {
     // utterance, so it cannot come from `payload_for`. Reading the field
     // back is also what lets the ring decline when the user changed it
     // after our write, rather than destroying that work.
-    if let Mode::Edit { .. } = mode {
-        if let EditIntent::Undo(_) = edit_intent::parse(text.trim_end_matches(['.', '!', '?', ',']))
-        {
-            return apply_undo_via_tiers();
-        }
+    //
+    // Deliberately NOT gated on `Mode::Edit`, i.e. not on there being a
+    // selection. `route_edit` states the rule already ("undo resolves
+    // against the ring, not the selection") and this is the same rule: what
+    // undo needs is a previous write of OURS, which has nothing to do with
+    // what happens to be selected when the user asks for it.
+    //
+    // Gating on a selection made undo unreachable in the one sequence that
+    // matters. Our own write REPLACES the selection, so by the time the user
+    // says "scratch that" the field holds a caret and no selection: the
+    // utterance fell through to dictation and typed the words "scratch that"
+    // into their document. Measured on Windows against Notepad: an edit
+    // landed correctly, then the undo appended, leaving
+    // "the slow brown foxscratch that".
+    if let EditIntent::Undo(_) = edit_intent::parse(text.trim_end_matches(['.', '!', '?', ','])) {
+        return apply_undo_via_tiers();
     }
 
     let payload = match payload_for(mode, text) {
@@ -2360,6 +2384,57 @@ mod tier_tests {
                 "a dry run must name the route, got {text:?}"
             ),
             other => panic!("expected suppression, got {other:?}"),
+        }
+    }
+
+    /// "Scratch that" must ask the ring even with nothing selected.
+    ///
+    /// This is the state the user is ALWAYS in when they want an undo: our
+    /// own write replaced their selection, so the field holds a caret. Gating
+    /// undo on `Mode::Edit` therefore made it unreachable in exactly the
+    /// sequence it exists for, and the phrase fell through to dictation.
+    /// Measured on Windows against Notepad: an edit landed, then "scratch
+    /// that" was TYPED, leaving "the slow brown foxscratch that" in the
+    /// document.
+    ///
+    /// Asserted through the dry-run route label rather than by delivering,
+    /// because the real path writes into whatever window is focused.
+    #[test]
+    fn undo_is_reachable_without_a_selection() {
+        let _guard = crate::testenv::no_inject();
+        for phrase in ["scratch that", "undo that", "scratch this"] {
+            match deliver(&Mode::Dictate, phrase) {
+                Outcome::Suppressed { text } => assert!(
+                    text.contains("[route: undo]"),
+                    "{phrase:?} with no selection must route to undo, got {text:?}: \
+                     our own write consumes the selection, so requiring one makes \
+                     undo unreachable and types the phrase into the document"
+                ),
+                other => panic!("expected suppression, got {other:?}"),
+            }
+        }
+    }
+
+    /// Ordinary dictation must NOT be diverted into the undo path.
+    ///
+    /// The counterweight to the test above: undo is now reachable from
+    /// `Mode::Dictate`, so the parser is the only thing keeping "scratch the
+    /// paint off" (a sentence) apart from "scratch that" (a command).
+    #[test]
+    fn dictation_that_merely_mentions_scratching_is_not_an_undo() {
+        let _guard = crate::testenv::no_inject();
+        for phrase in [
+            "scratch the paint off the door",
+            "we should scratch that idea from the agenda",
+            "the cat left a scratch",
+        ] {
+            match deliver(&Mode::Dictate, phrase) {
+                Outcome::Suppressed { text } => assert!(
+                    !text.contains("[route: undo]"),
+                    "{phrase:?} is dictation, not an undo command, got {text:?}"
+                ),
+                other => panic!("expected suppression, got {other:?}"),
+            }
         }
     }
 
