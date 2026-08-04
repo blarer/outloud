@@ -895,6 +895,12 @@ fn write_via_tiers(mode: &Mode, payload: String) -> Outcome {
 
     #[cfg(not(all(target_os = "windows", feature = "display")))]
     {
+        // `mode` is only consulted by the tier ladder above, which this
+        // build does not compile. Naming it here keeps the signature
+        // honest on every target: without this the parameter is unused on
+        // Linux and `-D warnings` fails the build, which is how this
+        // reached CI twice.
+        let _ = mode;
         Outcome::Failed {
             situation_action: format!(
                 "no write transport on this platform/build for \"{payload}\" \
