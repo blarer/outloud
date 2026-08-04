@@ -397,7 +397,19 @@ pub fn deliver(mode: &Mode, transcript: &str) -> Outcome {
     // user is working types the test sentence into their chat window. That
     // happened. An automated run must be able to exercise the whole
     // pipeline without touching a UI it does not own.
-    if std::env::var_os("OUTLOUD_NO_INJECT").is_some_and(|v| v == "1") {
+    // In a test build, suppression is the DEFAULT rather than something
+    // each test opts into. Two pipeline tests drove the real delivery path
+    // and pasted their fixture sentence into the developer's clipboard,
+    // destroying whatever they had copied; the suite was green throughout,
+    // because the damage lands outside anything a test asserts on. Fixing
+    // those two by hand would not stop the third.
+    #[cfg(test)]
+    let suppressed = crate::testenv::delivery_suppressed_by_default()
+        || std::env::var_os("OUTLOUD_NO_INJECT").is_some_and(|v| v == "1");
+    #[cfg(not(test))]
+    let suppressed = std::env::var_os("OUTLOUD_NO_INJECT").is_some_and(|v| v == "1");
+
+    if suppressed {
         // Report the ROUTE an edit would take, not just the transcript.
         // Returning early with the raw text meant no automated run could
         // ever observe the edit routing, which is precisely how the undo
@@ -1606,10 +1618,11 @@ mod tests {
 
     #[test]
     fn edit_with_absent_search_text_reports_no_match() {
-        // Excludes the suppression switch even though this test does not
-        // set it: a sibling test that does would otherwise turn this into
-        // Suppressed and fail it.
-        let _guard = crate::testenv::deliver_lock();
+        // Asserts on the real routing outcome, so it opts out of the
+        // suppressed-by-default test environment. Safe because the edit it
+        // makes matches nothing: `deliver` returns EditNoMatch before any
+        // transport is touched, so nothing reaches the developer's machine.
+        let _guard = crate::testenv::allow_inject();
         let mode = Mode::Edit {
             selected: "the quick brown fox".into(),
         };
@@ -2202,5 +2215,44 @@ mod tier_tests {
     fn draining_nothing_is_harmless() {
         drain_pending_restores();
         drain_pending_restores();
+    }
+
+    /// A test must not deliver into the developer's machine by accident.
+    ///
+    /// Two pipeline tests did: they drove the supervisor loop with no guard,
+    /// fell through to the clipboard transport, and replaced whatever the
+    /// developer had copied with their fixture sentence. The suite was green
+    /// the whole time, because the damage lands outside anything a test
+    /// asserts on. It was found by copying a sentinel, running `cargo test`,
+    /// and pasting.
+    ///
+    /// Fixing those two by hand would not stop the third, so suppression is
+    /// the default for test builds and a real write is opt-in. This pins the
+    /// default, without which the guarantee is only a convention.
+    #[test]
+    fn tests_do_not_write_to_the_machine_unless_they_ask() {
+        assert!(
+            crate::testenv::delivery_suppressed_by_default(),
+            "delivery must be suppressed by default in test builds"
+        );
+
+        // No guard, no env var: the plain case a new test gets for free.
+        match deliver(&Mode::Dictate, "this must not reach the clipboard") {
+            Outcome::Suppressed { .. } => {}
+            other => panic!("an unguarded test delivered for real: {other:?}"),
+        }
+
+        // Opting in is explicit and reverts on drop, including on panic.
+        {
+            let _allow = crate::testenv::allow_inject();
+            assert!(
+                !crate::testenv::delivery_suppressed_by_default(),
+                "allow_inject must permit a real delivery"
+            );
+        }
+        assert!(
+            crate::testenv::delivery_suppressed_by_default(),
+            "the suppressed default must come back when the guard drops"
+        );
     }
 }

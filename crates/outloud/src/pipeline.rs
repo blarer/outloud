@@ -1219,10 +1219,21 @@ mod tests {
 
     /// The full supervisor loop against the mock recognizer: a synthetic
     /// utterance must produce exactly one report with a nonempty transcript.
-    /// Injection will fail (no focused field in CI) and must fail *named*,
-    /// not panic: that is the graceful-degradation contract under test.
+    /// Injection is suppressed and must still report a *named* outcome, not
+    /// panic: that is the graceful-degradation contract under test.
     #[tokio::test]
     async fn one_utterance_flows_end_to_end() {
+        // Without this the test performs a REAL delivery. The old comment
+        // claimed "no focused text field in CI", which is true in CI and
+        // false on a developer's Mac: there the write fell through to the
+        // clipboard transport, so running `cargo test` silently replaced
+        // whatever the developer had copied with the fixture sentence.
+        //
+        // Caught by copying a sentinel string, running the suite, and
+        // pasting. The suite was green throughout: the damage was outside
+        // everything it asserted on.
+        let _no_inject = crate::testenv::no_inject();
+
         let (ftx, frx) = tokio::sync::mpsc::unbounded_channel();
         let (atx, arx) = tokio::sync::mpsc::unbounded_channel();
         let (rtx, rrx) = tokio::sync::oneshot::channel();
