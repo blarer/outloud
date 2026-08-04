@@ -127,9 +127,16 @@ including `--features display`. Its first run found four defects that macOS
 could not see, including a `std::mem::forget` on a `Copy` type in the
 single-instance guard that did nothing at all.
 
+There is a Linux equivalent, `scripts/ci-check-linux.sh`, added for the same
+reason after the Linux job broke three times in one day.
+
 So: compile errors and lints for Windows can be caught on the Mac. What
 still needs the Windows machine is *behaviour* -- whether UIA actually reads
 that field, whether the paste lands, whether the hotkey fires.
+
+If you change shared code on the Windows box, running these two on the Mac
+(or asking for them to be run) is much faster than a CI round trip, and they
+catch the entire class of "compiles on my platform, not on yours".
 
 ## One bug worth understanding before touching the undo path
 
