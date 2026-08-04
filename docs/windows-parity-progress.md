@@ -1,3 +1,12 @@
+> **Stale.** This is a live snapshot of three audit agents running on
+> 2026-08-01, kept only for the reasoning they recorded. Their "Active"
+> statuses are meaningless now, and at least one conclusion below was
+> superseded: `deliver_via_tiers` DOES consult `accepts()` as of
+> 2026-08-04.
+>
+> For the current state of the Windows build, read
+> [`windows-handoff.md`](windows-handoff.md).
+
 # Windows parity audit: live progress
 
 Generated 2026-08-01 16:44:13 on the Mac.
