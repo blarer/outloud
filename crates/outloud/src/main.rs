@@ -331,6 +331,22 @@ fn report_refusal_to_the_user(_message: &str) {
 }
 
 fn main() -> anyhow::Result<()> {
+    // Runs on EVERY exit path, including the `?` early returns below.
+    //
+    // A clipboard paste hands the pasteboard back ~300ms later on a
+    // background thread, so the user does not wait for it. A process that
+    // exits inside that window leaves the dictated text on the clipboard
+    // and destroys whatever the user had copied. `--once` always exits
+    // inside it. Found by running a one-shot dictation and then checking
+    // `pbpaste`, not by reading the code.
+    struct RestoreClipboardOnExit;
+    impl Drop for RestoreClipboardOnExit {
+        fn drop(&mut self) {
+            outloud::inject::drain_pending_restores();
+        }
+    }
+    let _restore_guard = RestoreClipboardOnExit;
+
     let mut args = parse_args()?;
 
     // Refuse to be the second daemon. Two copies both bind the hotkey and

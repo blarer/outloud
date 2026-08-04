@@ -103,6 +103,46 @@ pub fn snapshot_and_mode_at_keydown() -> (Mode, Option<TextSnapshot>) {
     }
 }
 
+/// Clipboard restores still waiting out their settle delay.
+///
+/// The restore is deliberately off the hot path (the user should not wait
+/// 300ms to see their text), but "not on the hot path" is not the same as
+/// "safe to abandon". A process that exits first leaves the dictated text
+/// on the clipboard, destroying whatever the user had copied.
+static PENDING_RESTORES: std::sync::Mutex<Vec<std::thread::JoinHandle<()>>> =
+    std::sync::Mutex::new(Vec::new());
+
+/// Track a restore thread so [`drain_pending_restores`] can wait for it.
+///
+/// `pub` rather than private because the only in-tree caller sits behind the
+/// `display` feature, and a headless build would otherwise fail on an unused
+/// function. The pairing matters more than the visibility: anything that
+/// spawns a deferred clipboard restore must register it, or a short-lived
+/// process will exit while the user's clipboard is still held hostage.
+pub fn register_pending_restore(handle: std::thread::JoinHandle<()>) {
+    let mut guard = PENDING_RESTORES.lock().unwrap_or_else(|p| p.into_inner());
+    // Drop already-finished handles so a long daemon session does not
+    // accumulate one per utterance.
+    guard.retain(|h| !h.is_finished());
+    guard.push(handle);
+}
+
+/// Wait for every outstanding clipboard restore. Call before exiting.
+///
+/// Bounded by the 300ms settle delay each thread sleeps, so this cannot
+/// hang a shutdown: the work is a sleep and a pasteboard write.
+pub fn drain_pending_restores() {
+    let handles: Vec<_> = {
+        let mut guard = PENDING_RESTORES.lock().unwrap_or_else(|p| p.into_inner());
+        std::mem::take(&mut *guard)
+    };
+    for h in handles {
+        // A panicked restore thread must not stop us joining the rest, and
+        // must not abort a shutdown that is otherwise fine.
+        let _ = h.join();
+    }
+}
+
 /// What an edit-mode utterance should do, decided without touching the
 /// accessibility tree, the clipboard, or the undo ring's contents.
 ///
@@ -1436,10 +1476,19 @@ fn deliver_without_ax(
                     // 300ms rather than the old inline 150ms because a
                     // busy app reading the pasteboard late now costs
                     // nothing visible.
-                    std::thread::spawn(move || {
+                    let handle = std::thread::spawn(move || {
                         std::thread::sleep(std::time::Duration::from_millis(300));
                         let _ = clip.restore();
                     });
+                    // Hand the thread to a registry the process can drain
+                    // before exiting. Detaching it outright meant a
+                    // short-lived run (`--once`, and any measurement
+                    // script) returned and exited inside the 300ms window,
+                    // so the restore never ran and the user's clipboard
+                    // was left holding the dictated text. The daemon never
+                    // showed this because it stays alive; every one-shot
+                    // invocation silently ate the clipboard.
+                    register_pending_restore(handle);
                     Outcome::Wrote {
                         text: text.to_string(),
                         via: "clipboard-paste".into(),
@@ -2104,5 +2153,54 @@ mod tier_tests {
             ),
             other => panic!("expected suppression, got {other:?}"),
         }
+    }
+
+    /// Exiting must not abandon a pending clipboard restore.
+    ///
+    /// The restore runs ~300ms after the paste so the user never waits for
+    /// it. That is correct, but "off the hot path" is not "safe to
+    /// abandon": a `--once` run returns and exits well inside that window,
+    /// so the restore never happened and the dictated text was left on the
+    /// clipboard, destroying whatever the user had copied.
+    ///
+    /// Found by accident, by running a one-shot dictation and then checking
+    /// `pbpaste`. Nothing in the suite covered it, because every test
+    /// asserted on the Outcome, which is returned BEFORE the restore is
+    /// due. The observable damage happened after the value under test was
+    /// already correct.
+    #[test]
+    fn exiting_waits_for_a_pending_clipboard_restore() {
+        use std::sync::atomic::{AtomicBool, Ordering};
+        use std::sync::Arc;
+
+        let restored = Arc::new(AtomicBool::new(false));
+        let flag = Arc::clone(&restored);
+        // Stands in for the real restore: sleeps past the point a
+        // short-lived process would have exited, then does its work.
+        register_pending_restore(std::thread::spawn(move || {
+            std::thread::sleep(std::time::Duration::from_millis(120));
+            flag.store(true, Ordering::SeqCst);
+        }));
+
+        assert!(
+            !restored.load(Ordering::SeqCst),
+            "the restore should still be pending; the test proves nothing otherwise"
+        );
+
+        drain_pending_restores();
+
+        assert!(
+            restored.load(Ordering::SeqCst),
+            "drain must WAIT for the restore, not merely forget it"
+        );
+    }
+
+    /// Draining twice, or with nothing pending, must not panic or hang.
+    /// It runs from a Drop guard on every exit path, including error
+    /// returns, so it has to be safe to call unconditionally.
+    #[test]
+    fn draining_nothing_is_harmless() {
+        drain_pending_restores();
+        drain_pending_restores();
     }
 }
