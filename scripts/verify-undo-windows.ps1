@@ -1,4 +1,4 @@
-# Exercise the Windows undo path end to end against a real Notepad window.
+﻿# Exercise the Windows undo path end to end against a real Notepad window.
 #
 # Undo cannot be unit-tested: `UiaTarget::read()` reads whatever UIA reports
 # as the FOCUSED element, and the dictate-vs-edit decision is made at
@@ -27,6 +27,16 @@ param(
 $ErrorActionPreference = 'Stop'
 $root = Split-Path -Parent $PSScriptRoot
 
+# Tee everything to a file as well as the console. SendKeys steals focus
+# while this runs, so a console redirect can end up mangled or lost; the
+# result of a verification run must survive being run unattended.
+$resultLog = Join-Path $env:TEMP 'outloud-undo-result.txt'
+Set-Content -Path $resultLog -Value '' -Encoding UTF8
+function Say([string]$line) {
+    Write-Output $line
+    Add-Content -Path $resultLog -Value $line -Encoding UTF8
+}
+
 $path = Join-Path $env:TEMP ("outloud-undo-{0}.txt" -f (Get-Date -Format 'HHmmssfff'))
 Set-Content -Path $path -Value $Text -NoNewline -Encoding UTF8
 
@@ -49,7 +59,7 @@ while ((Get-Date) -lt $deadline -and -not $window) {
     if (-not $window) { Start-Sleep -Milliseconds 300 }
 }
 if (-not $window) { throw "no Notepad window showing $leaf" }
-Write-Output "notepad window pid=$($window.Id) title='$($window.MainWindowTitle)'"
+Say "notepad window pid=$($window.Id) title='$($window.MainWindowTitle)'"
 
 $env:OUTLOUD_WHISPER_MODEL = Join-Path $root 'ggml-base.en.bin'
 $env:OUTLOUD_REPLAY_DELAY_MS = "$DelayMs"
@@ -73,10 +83,10 @@ Start-Sleep -Milliseconds 600
 
 $outloud.WaitForExit(120000) | Out-Null
 
-Write-Output '--- stdout ---'
-if (Test-Path $log) { Get-Content $log }
-Write-Output '--- stderr ---'
-if (Test-Path "$log.err") { Get-Content "$log.err" }
+Say '--- stdout ---'
+if (Test-Path $log) { Get-Content $log | ForEach-Object { Say $_ } }
+Say '--- stderr ---'
+if (Test-Path "$log.err") { Get-Content "$log.err" | ForEach-Object { Say $_ } }
 
 # Read the buffer back through UIA rather than the file: Notepad has not
 # saved, so the file on disk still holds the ORIGINAL text and would report
@@ -99,19 +109,19 @@ if ([string]::IsNullOrEmpty($savedClipboard)) {
     Set-Clipboard -Value $savedClipboard
 }
 
-Write-Output '--- result ---'
-Write-Output "original: '$Text'"
-Write-Output "final:    '$final'"
+Say '--- result ---'
+Say "original: '$Text'"
+Say "final:    '$final'"
 # A mismatch is only meaningful if the field held the expected text to begin
 # with. SendKeys goes to whatever is focused at that instant, so a stray
 # keystroke landing in Notepad corrupts the fixture and the run then reports
 # a product failure that is really a harness failure. Distinguish the two.
 if ($final -eq $Text) {
-    Write-Output 'PASS: undo restored the original text'
+    Say 'PASS: undo restored the original text'
 } elseif ($final -like "*$Text*") {
-    Write-Output "INCONCLUSIVE: field contains the original plus stray input ('$final'); the harness leaked keystrokes, rerun"
+    Say "INCONCLUSIVE: field contains the original plus stray input ('$final'); the harness leaked keystrokes, rerun"
 } else {
-    Write-Output 'FAIL: field does not match the original'
+    Say 'FAIL: field does not match the original'
 }
 
 # Close OUR tab, rather than killing the process: the window we found may be
