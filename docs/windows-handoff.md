@@ -28,6 +28,7 @@ item found something, and the two most serious were invisible from macOS:
 | `--say` is repeatable | Works. Two utterances, one process, whisper via CUDA. |
 | Per-app transport rules (`accepts`) on the tier path | Correct for all three tiers, checked with `--route`. |
 | Single-instance guard | Refuses correctly, but the mutex was mis-scoped and leaked. Fixed. |
+| The hotkey path itself (not on the original list) | Works: a real chord drives listening -> transcribing -> idle. |
 
 What the run actually turned up, worst first:
 
@@ -76,9 +77,18 @@ The workspace now passes on Windows: 0 failures, `clippy -D warnings` clean.
 powershell -File scripts\verify-undo-windows.ps1 -DryRun  # routing only, writes nothing
 powershell -File scripts\verify-undo-windows.ps1          # real writes into Notepad
 powershell -File scripts\verify-single-instance.ps1       # second daemon must refuse
+powershell -File scripts\verify-hotkey-windows.ps1        # the real hotkey path
 outloud --route discord                                   # a named app's transport
 outloud --route 5                                         # or whatever you focus in 5s
 ```
+
+`verify-hotkey-windows.ps1` is the only one that exercises the product's
+actual entry point. Everything built on `--say` enters the pipeline BELOW the
+hotkey and the microphone, so a hook that never fires would pass every other
+check here. It sends the real `VK_RMENU` chord and asserts the daemon reached
+`state listening`, which means the hook received the key-down, the matcher
+recognised the chord, and capture opened. Confirmed on this machine:
+`listening -> transcribing -> idle` from a synthetic keypress.
 
 `--route NAME` answers without focusing the app, which matters because
 Windows refuses programmatic foreground changes and because the alternative
