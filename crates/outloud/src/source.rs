@@ -238,7 +238,9 @@ pub fn spawn_wav_sequence(
             .ok()
             .and_then(|v| v.trim().parse::<u64>().ok())
         {
-            eprintln!("outloud: waiting {ms}ms before replaying, focus your target now (test knob)");
+            eprintln!(
+                "outloud: waiting {ms}ms before replaying, focus your target now (test knob)"
+            );
             tokio::time::sleep(std::time::Duration::from_millis(ms)).await;
         }
         for (i, samples) in utterances.into_iter().enumerate() {

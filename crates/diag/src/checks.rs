@@ -1120,17 +1120,22 @@ mod tests {
     fn wayland_beats_x11_when_both_present() {
         // XWayland sets DISPLAY too; WAYLAND_DISPLAY is the real session type.
         let env = Env::from_pairs(&[("WAYLAND_DISPLAY", "wayland-0"), ("DISPLAY", ":0")]);
-        assert_eq!(detect_display(&env, false), DisplayKind::Wayland);
+        // `detect_display_on(.., is_macos, is_windows)` rather than the
+        // ambient wrapper: these assert LINUX session detection, and on a
+        // Windows host the wrapper correctly answers WindowsDesktop, so the
+        // test failed for being run on the wrong platform rather than for
+        // anything being wrong.
+        assert_eq!(detect_display_on(&env, false, false), DisplayKind::Wayland);
     }
 
     #[test]
     fn bare_display_is_x11_and_nothing_is_headless() {
         assert_eq!(
-            detect_display(&Env::from_pairs(&[("DISPLAY", ":0")]), false),
+            detect_display_on(&Env::from_pairs(&[("DISPLAY", ":0")]), false, false),
             DisplayKind::X11
         );
         assert_eq!(
-            detect_display(&Env::from_pairs(&[]), false),
+            detect_display_on(&Env::from_pairs(&[]), false, false),
             DisplayKind::HeadlessOrSsh
         );
     }

@@ -242,21 +242,18 @@ type PlatformLock = ();
 /// Windows has no `flock`, so the guard is a named mutex.
 ///
 /// This returned `true` unconditionally until the Windows backends were run
-/// on real hardware, which made the guard a no-op on the one platform where
-/// double-launching is most likely: there is no tray icon yet, so nothing
-/// tells a user a daemon is already running. Two daemons both bind the
-/// hotkey and both open the microphone, so one keypress records twice and
-/// types twice, which is exactly what this module exists to prevent.
+/// on real hardware, which made the guard a no-op on the platform where
+/// double-launching is most likely. Two daemons both bind the hotkey and
+/// both open the microphone, so one keypress records twice and types twice,
+/// which is exactly what this module exists to prevent.
 ///
 /// `Global\` scope rather than `Local\`: session-local would still allow one
 /// daemon per terminal-services session, and the microphone is not
-/// per-session. The handle is deliberately leaked, because the mutex must
-/// live as long as the process and Windows releases it on exit.
+/// per-session. The handle is owned by the returned [`InstanceLock`] and
+/// released on drop, so quitting and relaunching within one process works;
+/// it was previously leaked, which meant only process exit freed the lock.
 #[cfg(windows)]
-fn try_lock_exclusive(
-    _file: &std::fs::File,
-    path: &std::path::Path,
-) -> Option<PlatformLock> {
+fn try_lock_exclusive(_file: &std::fs::File, path: &std::path::Path) -> Option<PlatformLock> {
     use windows::Win32::Foundation::{GetLastError, ERROR_ALREADY_EXISTS};
     use windows::Win32::System::Threading::CreateMutexW;
 

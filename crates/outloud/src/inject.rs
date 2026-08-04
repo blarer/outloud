@@ -451,8 +451,7 @@ pub fn deliver(mode: &Mode, transcript: &str) -> Outcome {
     // because the damage lands outside anything a test asserts on. Fixing
     // those two by hand would not stop the third.
     #[cfg(test)]
-    let suppressed = crate::testenv::delivery_suppressed_by_default()
-        || no_inject_requested();
+    let suppressed = crate::testenv::delivery_suppressed_by_default() || no_inject_requested();
     #[cfg(not(test))]
     let suppressed = no_inject_requested();
 

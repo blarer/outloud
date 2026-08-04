@@ -87,6 +87,33 @@ fn accessibility_permission_line() -> String {
     }
 }
 
+/// What `--route` reports: the focused app and the transport it would get.
+///
+/// Names the app as the rules see it, not as the title bar spells it: the
+/// lists match on the process name, so "which app is this" and "which name
+/// did the rule match" have to be the same string or the answer is
+/// unfalsifiable.
+#[cfg(all(target_os = "windows", feature = "display"))]
+fn route_probe_line() -> String {
+    use text_target::targets::keys::{accepts, Acceptance};
+    let app = text_target::targets::keys::foreground_process_name();
+    let acceptance = accepts(app.as_deref());
+    let transport = match acceptance {
+        Acceptance::AxAndTyping => "UI Automation, then synthetic keys, then clipboard",
+        Acceptance::TypingOnly => "synthetic keys, then clipboard (ignores accessibility writes)",
+        Acceptance::ClipboardOnly => "clipboard only (discards both accessibility writes and keys)",
+    };
+    format!(
+        "foreground app: {}\ntransport:      {transport}",
+        app.as_deref().unwrap_or("<unknown> (treated as ordinary)")
+    )
+}
+
+#[cfg(not(all(target_os = "windows", feature = "display")))]
+fn route_probe_line() -> String {
+    "--route is implemented on Windows display builds only".into()
+}
+
 fn parse_args() -> anyhow::Result<Args> {
     let mut args = Args {
         once: false,
@@ -148,16 +175,31 @@ fn parse_args() -> anyhow::Result<Args> {
                         "MISSING (hotkey cannot fire)"
                     }
                 );
-                println!(
-                    "accessibility:    {}",
-                    accessibility_permission_line()
-                );
+                println!("accessibility:    {}", accessibility_permission_line());
                 println!(
                     "bundle:           {}",
                     std::env::current_exe()
                         .map(|p| p.display().to_string())
                         .unwrap_or_else(|_| "?".into())
                 );
+                std::process::exit(0);
+            }
+            // `--route`: which transport the CURRENTLY focused app would get.
+            //
+            // The per-app rules (`accepts`) decide whether a write goes by
+            // accessibility, synthetic keys, or clipboard, and until now the
+            // only way to observe that choice was to dictate into the app and
+            // infer it from the result. When the answer is wrong the symptom
+            // is "my text vanished a second after it appeared", which does
+            // not point at a routing table.
+            //
+            // Sleeps first so the app under test can be focused: run it, then
+            // click the window in question.
+            "--route" => {
+                let secs: u64 = it.next().and_then(|v| v.trim().parse().ok()).unwrap_or(5);
+                eprintln!("focus the app to probe; reading in {secs}s...");
+                std::thread::sleep(std::time::Duration::from_secs(secs));
+                println!("{}", route_probe_line());
                 std::process::exit(0);
             }
             "--version" | "-V" => {

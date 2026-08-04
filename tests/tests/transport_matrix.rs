@@ -22,12 +22,37 @@ struct Row {
     expect: &'static str,
 }
 
+/// The accessibility tier of the platform running this test.
+///
+/// The rows below describe SESSIONS (a trusted desktop, a tmux pane, an SSH
+/// hop), and every terminal row is platform-neutral. The desktop rows are
+/// not: the accessibility tier is `macos-ax` on macOS and `windows-uia` on
+/// Windows, where UI Automation needs no trust grant at all. Hardcoding the
+/// macOS names made the whole matrix fail on Windows for a reason unrelated
+/// to what it checks.
+const DESKTOP_AX: &str = if cfg!(target_os = "windows") {
+    "windows-uia"
+} else {
+    "macos-ax"
+};
+
+/// What an untrusted desktop falls back to.
+///
+/// Windows has no trust to lack, so it stays on the accessibility tier; its
+/// clipboard fallback is a RUNTIME one (UIA construction or the write
+/// failing), which environment-level selection cannot express.
+const DESKTOP_UNTRUSTED: &str = if cfg!(target_os = "windows") {
+    "windows-uia"
+} else {
+    "clipboard-paste"
+};
+
 fn matrix() -> Vec<Row> {
-    vec![
+    let mut rows = vec![
         Row {
             name: "macOS desktop, trusted, editing a GUI app",
             env: SimEnv::desktop_trusted(),
-            expect: "macos-ax",
+            expect: DESKTOP_AX,
         },
         Row {
             // THE bug this file exists for. A GUI daemon started from a
@@ -41,7 +66,7 @@ fn matrix() -> Vec<Row> {
                 .with_var("TERM", "xterm-256color")
                 .with_command("tmux")
                 .with_command("wezterm"),
-            expect: "macos-ax",
+            expect: DESKTOP_AX,
         },
         Row {
             name: "desktop without accessibility trust",
@@ -49,7 +74,7 @@ fn matrix() -> Vec<Row> {
                 ax_trusted: false,
                 ..SimEnv::desktop_trusted()
             },
-            expect: "clipboard-paste",
+            expect: DESKTOP_UNTRUSTED,
         },
         Row {
             name: "editing inside a tmux pane",
@@ -70,7 +95,7 @@ fn matrix() -> Vec<Row> {
                 ..SimEnv::desktop_trusted()
             }
             .with_var("TMUX", "stale"),
-            expect: "macos-ax",
+            expect: DESKTOP_AX,
         },
         Row {
             name: "SSH session, no display, no multiplexer",
@@ -127,6 +152,21 @@ fn matrix() -> Vec<Row> {
             expect: "kitty-remote-control",
         },
         Row {
+            name: "headless CI container, nothing available",
+            env: SimEnv::default(),
+            expect: "daemon-socket",
+        },
+    ];
+
+    // Rows describing a LINUX graphical session. They are meaningless on a
+    // Windows host, where `select` answers "windows-uia" for any display and
+    // is right to: a Wayland socket cannot exist there, so asserting the
+    // Linux degradation would be asserting about an environment the platform
+    // cannot be in. Dropped rather than reinterpreted, because the fact each
+    // one pins (Wayland forbids synthetic input; X11 without a clipboard
+    // helper has no usable display tier) has no Windows counterpart.
+    if !cfg!(target_os = "windows") {
+        rows.push(Row {
             // Wayland forbids synthetic input; with no AX trust the
             // clipboard is the only display-tier path that works there.
             name: "Wayland desktop, no accessibility trust",
@@ -139,13 +179,8 @@ fn matrix() -> Vec<Row> {
             .with_var("XDG_SESSION_TYPE", "wayland")
             .with_command("wl-copy"),
             expect: "clipboard-paste",
-        },
-        Row {
-            name: "headless CI container, nothing available",
-            env: SimEnv::default(),
-            expect: "daemon-socket",
-        },
-        Row {
+        });
+        rows.push(Row {
             // Display but no clipboard helper and no trust: the display
             // tiers are all unusable, so this must degrade to the daemon
             // rather than pretending clipboard works.
@@ -156,8 +191,9 @@ fn matrix() -> Vec<Row> {
             }
             .with_var("DISPLAY", ":0"),
             expect: "daemon-socket",
-        },
-    ]
+        });
+    }
+    rows
 }
 
 #[test]
