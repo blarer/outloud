@@ -307,8 +307,29 @@ fn synthesize(text: &str) -> anyhow::Result<std::path::PathBuf> {
     // rather than as two processes colliding.
     let dir = std::env::temp_dir().join(format!("outloud-say-{}", std::process::id()));
     std::fs::create_dir_all(&dir)?;
-    let aiff = dir.join("utterance.aiff");
     let wav = dir.join("utterance.wav");
+    synthesize_to(text, &wav)?;
+    // Lead-in silence before the speech.
+    //
+    // Synthesizers start the first phoneme at sample zero. A recognizer needs
+    // a moment of silence to lock on, so without this the first word is
+    // unreliable: "add a period at the end" came back as "a period at the
+    // end", "At a period at the end", and "" across three consecutive runs.
+    // That turns a valid edit command into an unparseable one, and the
+    // resulting text then REPLACES the user's selection, so a test harness
+    // artifact looks exactly like a parser bug.
+    //
+    // Real dictation does not have this problem: a human holds the key, then
+    // speaks. This makes --say match that shape rather than testing a
+    // condition the product never encounters.
+    prepend_silence(&wav, LEAD_IN)?;
+    Ok(wav)
+}
+
+/// macOS: `say` writes AIFF, `afconvert` lands it at 16kHz mono.
+#[cfg(target_os = "macos")]
+fn synthesize_to(text: &str, wav: &std::path::Path) -> anyhow::Result<()> {
+    let aiff = wav.with_extension("aiff");
     let ok = |st: std::process::ExitStatus, what: &str| {
         anyhow::ensure!(st.success(), "{what} failed");
         Ok(())
@@ -321,29 +342,49 @@ fn synthesize(text: &str) -> anyhow::Result<std::path::PathBuf> {
             .status()?,
         "say",
     )?;
-    // Lead-in silence before the speech.
-    //
-    // `say` starts the first phoneme at sample zero. A recognizer needs a
-    // moment of silence to lock on, so without this the first word is
-    // unreliable: "add a period at the end" came back as "a period at the
-    // end", "At a period at the end", and "" across three consecutive
-    // runs. That turns a valid edit command into an unparseable one, and
-    // the resulting text then REPLACES the user's selection, so a test
-    // harness artifact looks exactly like a parser bug.
-    //
-    // Real dictation does not have this problem: a human holds the key,
-    // then speaks. This makes --say match that shape rather than testing a
-    // condition the product never encounters.
     ok(
         std::process::Command::new("afconvert")
             .args(["-f", "WAVE", "-d", "LEI16@16000", "-c", "1"])
             .arg(&aiff)
-            .arg(&wav)
+            .arg(wav)
             .status()?,
         "afconvert",
-    )?;
-    prepend_silence(&wav, LEAD_IN)?;
-    Ok(wav)
+    )
+}
+
+/// Windows: `System.Speech` writes 16kHz mono WAV directly, so there is no
+/// convert step. Driven through PowerShell because the synthesizer is a .NET
+/// API with no command-line front end, the way `say` is on macOS.
+///
+/// `--say` existing on only one platform is not cosmetic: the undo, repeated
+/// utterance, and routing checks in `docs/windows-handoff.md` are all written
+/// in terms of it, so without this the documented way to exercise the Windows
+/// paths fails with `program not found` before reaching any of them.
+#[cfg(target_os = "windows")]
+fn synthesize_to(text: &str, wav: &std::path::Path) -> anyhow::Result<()> {
+    let script = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../scripts/sapi-say.ps1")
+        .canonicalize()
+        .unwrap_or_else(|_| std::path::PathBuf::from("scripts/sapi-say.ps1"));
+    let out = std::process::Command::new("powershell")
+        .args(["-NoProfile", "-ExecutionPolicy", "Bypass", "-File"])
+        .arg(&script)
+        .arg("-Text")
+        .arg(text)
+        .arg("-Out")
+        .arg(wav)
+        .output()?;
+    anyhow::ensure!(
+        out.status.success(),
+        "SAPI synthesis failed: {}",
+        String::from_utf8_lossy(&out.stderr).trim()
+    );
+    Ok(())
+}
+
+#[cfg(not(any(target_os = "macos", target_os = "windows")))]
+fn synthesize_to(_text: &str, _wav: &std::path::Path) -> anyhow::Result<()> {
+    anyhow::bail!("--say has no speech synthesizer on this platform; use --wav")
 }
 
 /// Show a startup refusal to a user who has no terminal.

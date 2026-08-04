@@ -374,6 +374,34 @@ pub fn app_identity(snap: Option<&TextSnapshot>) -> Option<config::AppIdentity> 
 }
 
 /// How one utterance ended, for the overlay and the log.
+/// Whether the environment asked for delivery to be suppressed.
+///
+/// Deliberately forgiving about the value, because the cost of the two
+/// mistakes is wildly asymmetric: reading a stray value as "suppress" wastes
+/// a dry run, while failing to read one types the transcript into whatever
+/// window the user has focused.
+///
+/// The specific trap this exists for is cmd.exe. `set OUTLOUD_NO_INJECT=1 &&
+/// outloud ...` assigns `"1 "`, INCLUDING the trailing space before the `&&`,
+/// so an exact `== "1"` test silently fails and the "safe" command is the one
+/// that types into your terminal. That happened while verifying this file.
+/// Trimming also covers `1\r` from a CRLF-authored script and `"1"` from a
+/// shell that keeps the quotes.
+///
+/// An explicit off value is still honoured so `OUTLOUD_NO_INJECT=0` means
+/// what it looks like rather than being surprisingly truthy.
+fn no_inject_requested() -> bool {
+    match std::env::var("OUTLOUD_NO_INJECT") {
+        Ok(v) => {
+            let v = v.trim().trim_matches(['"', '\'']);
+            !matches!(v, "" | "0" | "false" | "no" | "off")
+        }
+        // Non-UTF8 is still a deliberate set: suppress.
+        Err(std::env::VarError::NotUnicode(_)) => true,
+        Err(std::env::VarError::NotPresent) => false,
+    }
+}
+
 #[derive(Debug)]
 pub enum Outcome {
     /// Text landed. `via` names the transport/strategy for diagnostics.
@@ -424,9 +452,9 @@ pub fn deliver(mode: &Mode, transcript: &str) -> Outcome {
     // those two by hand would not stop the third.
     #[cfg(test)]
     let suppressed = crate::testenv::delivery_suppressed_by_default()
-        || std::env::var_os("OUTLOUD_NO_INJECT").is_some_and(|v| v == "1");
+        || no_inject_requested();
     #[cfg(not(test))]
-    let suppressed = std::env::var_os("OUTLOUD_NO_INJECT").is_some_and(|v| v == "1");
+    let suppressed = no_inject_requested();
 
     if suppressed {
         // Report the ROUTE an edit would take, not just the transcript.
@@ -2333,6 +2361,46 @@ mod tier_tests {
             ),
             other => panic!("expected suppression, got {other:?}"),
         }
+    }
+
+    /// The suppression switch must survive the shell's mangling of its value.
+    ///
+    /// `set OUTLOUD_NO_INJECT=1 && outloud ...` on cmd.exe assigns `"1 "`,
+    /// with the space before the `&&` included. Against an exact `== "1"`
+    /// test that reads as "not set", so the command a developer runs
+    /// specifically to avoid typing into their own windows is the one that
+    /// types into their own windows. It pasted into a live terminal during
+    /// the Windows verification pass.
+    ///
+    /// Asserted on the predicate rather than through `deliver`, because the
+    /// failure being guarded against is a REAL delivery: a test that got this
+    /// wrong would type its fixture into the developer running the suite.
+    #[test]
+    fn the_suppression_switch_tolerates_shell_mangled_values() {
+        let _guard = crate::testenv::deliver_lock();
+        // SAFETY: the lock makes this the only thread touching the
+        // environment, and every branch below restores it before returning.
+        for set in ["1", "1 ", " 1", "1\r", "\"1\"", "true", "yes"] {
+            unsafe { std::env::set_var("OUTLOUD_NO_INJECT", set) };
+            assert!(
+                no_inject_requested(),
+                "{set:?} must suppress delivery: guessing wrong types into \
+                 whatever window is focused"
+            );
+        }
+        for off in ["0", "false", "no", "off", ""] {
+            unsafe { std::env::set_var("OUTLOUD_NO_INJECT", off) };
+            assert!(
+                !no_inject_requested(),
+                "{off:?} must NOT suppress: an explicit off value has to mean \
+                 what it says"
+            );
+        }
+        unsafe { std::env::remove_var("OUTLOUD_NO_INJECT") };
+        assert!(
+            !no_inject_requested(),
+            "unset must not suppress, or normal dictation would never deliver"
+        );
     }
 
     /// Exiting must not abandon a pending clipboard restore.
