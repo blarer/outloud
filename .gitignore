@@ -5,3 +5,16 @@
 # artifacts are collected into dist/sbom/. Tracking one of them meant every
 # compliance run re-dirtied the tree with a new UUID and timestamp.
 sbom.json
+
+# Recognizer model weights. 142MiB to 1.6GiB, downloaded per machine and
+# pointed at with OUTLOUD_WHISPER_MODEL; committing one would dwarf the
+# entire history.
+#
+# Root-anchored, so a deliberate test fixture under crates/ or tests/ is
+# still trackable rather than silently invisible.
+/*.bin
+
+# Scratch audio and logs from verification runs on a real machine. The
+# harnesses write these next to the repo, and they are per-run noise.
+/*.wav
+/outloud.log
