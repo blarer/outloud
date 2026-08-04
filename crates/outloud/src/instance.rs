@@ -50,6 +50,17 @@ use std::path::PathBuf;
 pub struct InstanceLock {
     _file: std::fs::File,
     path: PathBuf,
+    /// The named mutex standing in for `flock` on Windows.
+    ///
+    /// Held here rather than leaked so it is released when the lock is
+    /// dropped, not merely when the process exits. Leaking it meant
+    /// `drop(lock)` did not let the next acquisition in, which is the
+    /// contract that makes quit-then-relaunch work.
+    #[cfg(windows)]
+    mutex: Option<WindowsMutex>,
+    /// Nothing on unix: there the file descriptor itself is the lock.
+    #[cfg(not(windows))]
+    _platform: PlatformLock,
 }
 
 impl InstanceLock {
@@ -61,12 +72,44 @@ impl InstanceLock {
 
 impl Drop for InstanceLock {
     fn drop(&mut self) {
+        // Release the mutex before removing the file, so a waiter that sees
+        // the file gone also finds the mutex free.
+        #[cfg(windows)]
+        self.mutex.take();
         // Remove the file so a `ls` of the runtime directory reflects
         // reality. Best-effort: the kernel has already released the lock by
         // the time the descriptor closes, so a failure here costs nothing
         // but a stray empty file, and racing another daemon that has just
         // created its own must not produce an error on this path.
         let _ = std::fs::remove_file(&self.path);
+    }
+}
+
+/// An owned `CreateMutexW` handle that releases and closes on drop.
+#[cfg(windows)]
+#[derive(Debug)]
+struct WindowsMutex(windows::Win32::Foundation::HANDLE);
+
+// SAFETY: a Windows mutex HANDLE is not thread-affine; releasing it from a
+// thread other than the creator is supported, and `InstanceLock` is moved
+// between threads.
+#[cfg(windows)]
+unsafe impl Send for WindowsMutex {}
+#[cfg(windows)]
+unsafe impl Sync for WindowsMutex {}
+
+#[cfg(windows)]
+impl Drop for WindowsMutex {
+    fn drop(&mut self) {
+        use windows::Win32::Foundation::CloseHandle;
+        use windows::Win32::System::Threading::ReleaseMutex;
+        // Both are best-effort: this runs on the way out, and there is
+        // nothing to do about a failure except leak, which process exit
+        // cleans up anyway.
+        unsafe {
+            let _ = ReleaseMutex(self.0);
+            let _ = CloseHandle(self.0);
+        }
     }
 }
 
@@ -137,7 +180,7 @@ pub fn acquire_at(path: PathBuf) -> Result<InstanceLock, Error> {
         .open(&path)
         .map_err(Error::Io)?;
 
-    if !try_lock_exclusive(&file) {
+    let Some(platform) = try_lock_exclusive(&file, &path) else {
         // Held by someone else. Read their pid for the message, but never
         // depend on it: the holder may not have written it yet.
         let mut text = String::new();
@@ -146,7 +189,7 @@ pub fn acquire_at(path: PathBuf) -> Result<InstanceLock, Error> {
             .ok()
             .and_then(|_| text.trim().parse::<u32>().ok());
         return Err(Error::AlreadyRunning { pid });
-    }
+    };
 
     // Ours. Record the pid so the next process can name us in its error.
     // Truncate first: the previous holder's pid is longer than ours if it
@@ -156,21 +199,45 @@ pub fn acquire_at(path: PathBuf) -> Result<InstanceLock, Error> {
     write!(file, "{}", std::process::id()).map_err(Error::Io)?;
     file.flush().map_err(Error::Io)?;
 
-    Ok(InstanceLock { _file: file, path })
+    Ok(InstanceLock {
+        _file: file,
+        path,
+        #[cfg(windows)]
+        mutex: Some(platform),
+        #[cfg(not(windows))]
+        _platform: platform,
+    })
 }
 
-/// `flock(LOCK_EX | LOCK_NB)`. True when the lock was taken.
+/// `flock(LOCK_EX | LOCK_NB)`. `Some` when the lock was taken.
 ///
 /// Hand-written rather than pulling in a crate: this is one libc call, and
 /// the daemon already links libc. `EWOULDBLOCK` means someone else holds it,
 /// which is the expected answer rather than an error.
+///
+/// `path` is unused here because the descriptor IS the lock; it exists for
+/// the Windows implementation, whose named mutex has to be derived from
+/// something.
 #[cfg(unix)]
-fn try_lock_exclusive(file: &std::fs::File) -> bool {
+fn try_lock_exclusive(file: &std::fs::File, _path: &std::path::Path) -> Option<PlatformLock> {
     use std::os::unix::io::AsRawFd;
     // SAFETY: `fd` is valid for as long as `file` is borrowed, and `flock`
     // only reads it.
-    unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) == 0 }
+    if unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) == 0 } {
+        Some(())
+    } else {
+        None
+    }
 }
+
+/// What a successful lock hands back: nothing on unix (the descriptor IS the
+/// lock), the owned mutex on Windows.
+#[cfg(unix)]
+type PlatformLock = ();
+#[cfg(windows)]
+type PlatformLock = WindowsMutex;
+#[cfg(not(any(unix, windows)))]
+type PlatformLock = ();
 
 /// Windows has no `flock`, so the guard is a named mutex.
 ///
@@ -186,42 +253,59 @@ fn try_lock_exclusive(file: &std::fs::File) -> bool {
 /// per-session. The handle is deliberately leaked, because the mutex must
 /// live as long as the process and Windows releases it on exit.
 #[cfg(windows)]
-fn try_lock_exclusive(_file: &std::fs::File) -> bool {
-    use windows::core::w;
+fn try_lock_exclusive(
+    _file: &std::fs::File,
+    path: &std::path::Path,
+) -> Option<PlatformLock> {
     use windows::Win32::Foundation::{GetLastError, ERROR_ALREADY_EXISTS};
     use windows::Win32::System::Threading::CreateMutexW;
 
+    // Derived from the lock PATH rather than fixed, so this matches what
+    // `flock` does on unix: there the lock is a property of the file, and
+    // `acquire_at` exists so callers can hold independent locks. One
+    // hardcoded name made every path share a single mutex, so the
+    // `acquire_at` tests contended with each other rather than with the
+    // thing under test, and had never passed on Windows. Two real daemons
+    // still exclude each other because they resolve the same `lock_path()`.
+    //
+    // Hashed rather than embedded: a mutex name cannot contain a backslash
+    // beyond its namespace prefix, and is capped at MAX_PATH.
+    let mut hash: u64 = 0xcbf2_9ce4_8422_2325;
+    for b in path.to_string_lossy().as_bytes() {
+        hash ^= *b as u64;
+        hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
+    }
+    let name: Vec<u16> = format!("Global\\dev.outloud.outloud.single.{hash:016x}\0")
+        .encode_utf16()
+        .collect();
+
     unsafe {
-        let handle = match CreateMutexW(None, true, w!("Global\\dev.outloud.outloud.single")) {
+        let handle = match CreateMutexW(None, true, windows::core::PCWSTR(name.as_ptr())) {
             Ok(h) => h,
             // Cannot create the mutex at all (a sandbox denying Global\, say).
             // Allow the launch: refusing to start over a guard we could not
             // evaluate is worse than the duplicate it was meant to prevent.
-            Err(_) => return true,
+            Err(_) => return Some(WindowsMutex(windows::Win32::Foundation::HANDLE::default())),
         };
         if GetLastError() == ERROR_ALREADY_EXISTS {
-            // Another daemon holds it. Our handle is closed by process exit.
-            return false;
+            // Another daemon holds it. Close our (non-owning) handle rather
+            // than leaking it until process exit.
+            let _ = windows::Win32::Foundation::CloseHandle(handle);
+            return None;
         }
-        // Held for the process lifetime on purpose: not closing it IS the
-        // lock. `HANDLE` is a Copy newtype with no Drop, so simply dropping
-        // the binding leaks it, which is what we want.
-        //
-        // This previously called `std::mem::forget(handle)`, which on a Copy
-        // type forgets a COPY and does nothing at all. Harmless only by
-        // accident, and it stated an intent the code was not carrying out.
-        // Windows-only clippy caught it the first time this crate was ever
-        // linted for a Windows target.
-        let _ = handle;
-        true
+        // Owned by the returned value: releasing it on drop is what lets a
+        // quit-then-relaunch succeed within one process. Previously the
+        // handle was leaked deliberately, so the lock outlived the
+        // `InstanceLock` that supposedly held it.
+        Some(WindowsMutex(handle))
     }
 }
 
 /// Platforms with neither `flock` nor a named mutex keep the daemon working
 /// rather than refusing to start over a guard that is not implemented.
 #[cfg(not(any(unix, windows)))]
-fn try_lock_exclusive(_file: &std::fs::File) -> bool {
-    true
+fn try_lock_exclusive(_file: &std::fs::File, _path: &std::path::Path) -> Option<PlatformLock> {
+    Some(())
 }
 
 /// Kill speech helpers left over from a previous daemon, and report how many.
@@ -328,6 +412,34 @@ mod tests {
             std::process::id(),
             "the lock file must name the holder so the next process can report it"
         );
+    }
+
+    /// A HELD lock must refuse a second acquisition of the same path.
+    ///
+    /// The other direction from `releasing_the_lock_lets_the_next_one_in`,
+    /// and the half that actually prevents two daemons. Worth asserting in
+    /// the same process because the Windows guard is a named mutex whose
+    /// name was once fixed rather than derived from the path: every path
+    /// shared one mutex, so the per-path tests fought each other and none of
+    /// them had ever passed on Windows.
+    ///
+    /// Holds on unix too: `flock` treats each `open` as an independent file
+    /// description, and a lock taken through one denies another, even within
+    /// the same process.
+    #[test]
+    fn a_held_lock_refuses_a_second_acquisition() {
+        let path = temp_lock("exclusion");
+        let _ = std::fs::remove_file(&path);
+
+        let _held = acquire_at(path.clone()).expect("first acquisition");
+        match acquire_at(path.clone()) {
+            Err(Error::AlreadyRunning { .. }) => {}
+            Ok(_) => panic!(
+                "a second acquisition succeeded while the first was held: \
+                 two daemons would bind the hotkey and both type what was said"
+            ),
+            Err(e) => panic!("expected AlreadyRunning, got {e:?}"),
+        }
     }
 
     #[test]
