@@ -1034,4 +1034,32 @@ mod sendinput_tests {
             assert_eq!(accepts(Some(app)), Acceptance::ClipboardOnly, "{app}");
         }
     }
+
+    /// The rules must match the names WINDOWS actually reports.
+    ///
+    /// macOS supplies an accessibility title ("Discord"); Windows supplies a
+    /// process name, which real code paths hand over with the platform's
+    /// capitalisation and sometimes with `.exe` still attached. The lists are
+    /// lowercase substrings, so this holds, but nothing pinned it: a future
+    /// entry written as "Discord" would quietly stop matching, and the
+    /// symptom is an app that discards our text getting typed into anyway.
+    ///
+    /// Verified against the real values on Windows with `outloud --route`.
+    #[test]
+    fn windows_process_names_match_the_per_app_rules() {
+        for name in ["Discord.exe", "discord", "DISCORD", "Discord"] {
+            assert_eq!(
+                accepts(Some(name)),
+                Acceptance::ClipboardOnly,
+                "{name} must reach the clipboard rule: Discord accepts a write, \
+                 reports success, and reverts it a moment later"
+            );
+        }
+        for name in ["Slack.exe", "slack", "Slack"] {
+            assert_eq!(accepts(Some(name)), Acceptance::TypingOnly, "{name}");
+        }
+        for name in ["notepad.exe", "Notepad", "Code.exe"] {
+            assert_eq!(accepts(Some(name)), Acceptance::AxAndTyping, "{name}");
+        }
+    }
 }

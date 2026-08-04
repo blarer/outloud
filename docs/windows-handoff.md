@@ -26,7 +26,7 @@ item found something, and the two most serious were invisible from macOS:
 |---|---|
 | Undo (`"scratch that"`) wired to the ring | **Was broken.** Typed the words into the document. Fixed and verified. |
 | `--say` is repeatable | Works. Two utterances, one process, whisper via CUDA. |
-| Per-app transport rules (`accepts`) on the tier path | Reachable; `--route` reports the decision. |
+| Per-app transport rules (`accepts`) on the tier path | Correct for all three tiers, checked with `--route`. |
 | Single-instance guard | Refuses correctly, but the mutex was mis-scoped and leaked. Fixed. |
 
 What the run actually turned up, worst first:
@@ -60,10 +60,13 @@ The workspace now passes on Windows: 0 failures, `clippy -D warnings` clean.
 
 - **How the overlay looks.** Unchanged from `docs/plans/windows-overlay.md`:
   CI proves the Direct2D path executes, not that the pixels are right.
-- **`ClipboardOnly` routing against Discord end to end.** `--route` reports
-  the decision correctly for an app it can see, but Windows refuses
-  programmatic foreground changes, so the probe could not be pointed at
-  Discord unattended. Focus it by hand and run `outloud --route`.
+- **A real dictation into Discord since these changes.** The ROUTING is
+  verified (`outloud --route discord` answers clipboard-only on this
+  machine, and the same for Slack and Notepad), and dictation into Discord
+  worked before them, but nobody has spoken into Discord since. Deliberately
+  not tested by script: a run that writes goes into a live chat box, which
+  happened once here by accident and is why the undo harness now aborts when
+  focus moves.
 - **Whether `ValuePattern::SetValue` preserves the app's own undo stack.**
   Still expected not to; still a known design gap.
 
@@ -73,8 +76,13 @@ The workspace now passes on Windows: 0 failures, `clippy -D warnings` clean.
 powershell -File scripts\verify-undo-windows.ps1 -DryRun  # routing only, writes nothing
 powershell -File scripts\verify-undo-windows.ps1          # real writes into Notepad
 powershell -File scripts\verify-single-instance.ps1       # second daemon must refuse
-outloud --route                                           # focus an app, see its transport
+outloud --route discord                                   # a named app's transport
+outloud --route 5                                         # or whatever you focus in 5s
 ```
+
+`--route NAME` answers without focusing the app, which matters because
+Windows refuses programmatic foreground changes and because the alternative
+way to find out is dictating into someone's chat window.
 
 `verify-undo-windows.ps1` asserts on the FIELD CONTENTS, read back through the
 clipboard, not on log lines: a log proves a value was computed, which is

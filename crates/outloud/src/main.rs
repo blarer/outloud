@@ -87,16 +87,24 @@ fn accessibility_permission_line() -> String {
     }
 }
 
-/// What `--route` reports: the focused app and the transport it would get.
+/// What `--route` reports: an app and the transport it would get.
 ///
 /// Names the app as the rules see it, not as the title bar spells it: the
 /// lists match on the process name, so "which app is this" and "which name
 /// did the rule match" have to be the same string or the answer is
 /// unfalsifiable.
+///
+/// `app: None` asks about whatever is frontmost right now.
 #[cfg(all(target_os = "windows", feature = "display"))]
-fn route_probe_line() -> String {
+fn route_probe_line(app: Option<&str>) -> String {
     use text_target::targets::keys::{accepts, Acceptance};
-    let app = text_target::targets::keys::foreground_process_name();
+    let (label, app) = match app {
+        Some(a) => ("app:           ", Some(a.to_string())),
+        None => (
+            "foreground app:",
+            text_target::targets::keys::foreground_process_name(),
+        ),
+    };
     let acceptance = accepts(app.as_deref());
     let transport = match acceptance {
         Acceptance::AxAndTyping => "UI Automation, then synthetic keys, then clipboard",
@@ -104,13 +112,13 @@ fn route_probe_line() -> String {
         Acceptance::ClipboardOnly => "clipboard only (discards both accessibility writes and keys)",
     };
     format!(
-        "foreground app: {}\ntransport:      {transport}",
+        "{label} {}\ntransport:      {transport}",
         app.as_deref().unwrap_or("<unknown> (treated as ordinary)")
     )
 }
 
 #[cfg(not(all(target_os = "windows", feature = "display")))]
-fn route_probe_line() -> String {
+fn route_probe_line(_app: Option<&str>) -> String {
     "--route is implemented on Windows display builds only".into()
 }
 
@@ -184,7 +192,7 @@ fn parse_args() -> anyhow::Result<Args> {
                 );
                 std::process::exit(0);
             }
-            // `--route`: which transport the CURRENTLY focused app would get.
+            // `--route [APP|SECONDS]`: which transport an app would get.
             //
             // The per-app rules (`accepts`) decide whether a write goes by
             // accessibility, synthetic keys, or clipboard, and until now the
@@ -193,13 +201,31 @@ fn parse_args() -> anyhow::Result<Args> {
             // is "my text vanished a second after it appeared", which does
             // not point at a routing table.
             //
-            // Sleeps first so the app under test can be focused: run it, then
-            // click the window in question.
+            // Given a NAME, answers for that app without focusing it. That
+            // matters because Windows refuses programmatic foreground changes
+            // (anti-focus-stealing policy), so a harness cannot point this at
+            // Discord by itself, and dictating into Discord to find out is
+            // how test text ends up in someone's chat. Given a NUMBER (or
+            // nothing), waits that many seconds and reads whatever is
+            // frontmost, for checking an app whose process name you do not
+            // know.
             "--route" => {
-                let secs: u64 = it.next().and_then(|v| v.trim().parse().ok()).unwrap_or(5);
-                eprintln!("focus the app to probe; reading in {secs}s...");
-                std::thread::sleep(std::time::Duration::from_secs(secs));
-                println!("{}", route_probe_line());
+                let arg = it.next();
+                match arg.as_deref().map(str::trim) {
+                    // A number is a countdown, not an app called "5".
+                    Some(a) if a.parse::<u64>().is_ok() => {
+                        let secs: u64 = a.parse().unwrap();
+                        eprintln!("focus the app to probe; reading in {secs}s...");
+                        std::thread::sleep(std::time::Duration::from_secs(secs));
+                        println!("{}", route_probe_line(None));
+                    }
+                    Some(app) => println!("{}", route_probe_line(Some(app))),
+                    None => {
+                        eprintln!("focus the app to probe; reading in 5s...");
+                        std::thread::sleep(std::time::Duration::from_secs(5));
+                        println!("{}", route_probe_line(None));
+                    }
+                }
                 std::process::exit(0);
             }
             "--version" | "-V" => {
@@ -217,11 +243,14 @@ fn parse_args() -> anyhow::Result<Args> {
                                       the flag to replay several utterances\n\
                                       through one process (needed for undo)\n\
                      --wav FILE       feed FILE instead of the microphone (with --once)\n\
-                     --say TEXT       synthesize TEXT with `say` and feed it (with --once)\n\
                      --asr BACKEND    apple (default), whisper, or mock\n\
                      --chord CHORD    hotkey (default right-option)\n\
                      --no-overlay     log state changes instead of drawing the panel\n\
                      --realtime       pace file audio like live speech\n\
+                     --sensitivity N  override microphone.sensitivity (1-100)\n\
+                     --permissions    report this build's grants and exit\n\
+                     --route [APP|N]  which transport APP would get, or whatever\n\
+                                      you focus within N seconds (Windows)\n\
                      --version        print the version and exit"
                 );
                 std::process::exit(0);
