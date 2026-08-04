@@ -505,6 +505,24 @@ pub fn deliver(mode: &Mode, transcript: &str) -> Outcome {
 
     #[cfg(target_os = "macos")]
     match mode {
+        // Undo first, and deliberately NOT gated on there being a selection.
+        //
+        // Our own write REPLACES the selection, so by the time the user says
+        // "scratch that" the field holds a caret and nothing is selected. A
+        // `Mode::Dictate` arm that goes straight to insertion therefore types
+        // the words "scratch that" into their document in exactly the
+        // sequence undo exists for. Found and fixed on the Windows tier path
+        // by running it against a real window; the same hole is here, and
+        // `route_edit` already states the rule both paths must follow:
+        // "undo resolves against the ring, not the selection".
+        Mode::Dictate
+            if matches!(
+                edit_intent::parse(text.trim_end_matches(['.', '!', '?', ','])),
+                EditIntent::Undo(_)
+            ) =>
+        {
+            apply_undo()
+        }
         Mode::Dictate => insert_with_fallback(text),
         Mode::Edit { selected } => match route_edit(text, selected) {
             // Every route is dispatched here and nowhere else. An enum
