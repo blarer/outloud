@@ -907,21 +907,7 @@ impl Check for PlatformVersion {
         match out {
             Ok(o) if o.status.success() => {
                 let ver = String::from_utf8_lossy(&o.stdout).trim().to_string();
-                match macos_major(&ver) {
-                    Some(major) if major >= 13 => {
-                        CheckOutcome::pass(format!("macOS {ver} (validated on 13+)"))
-                    }
-                    Some(_) => CheckOutcome::fail(
-                        format!("macOS {ver} is older than the validated floor (13.0)"),
-                        ErrorClass::Environment,
-                        "upgrade to macOS 13 or newer; TCC and AX behavior differ below that",
-                    ),
-                    None => CheckOutcome::warn(
-                        format!("unparseable macOS version '{ver}'"),
-                        ErrorClass::Bug,
-                        "file a GitHub issue including this doctor output",
-                    ),
-                }
+                judge_macos_version(&ver)
             }
             _ => CheckOutcome::warn(
                 "sw_vers not runnable",
@@ -929,6 +915,43 @@ impl Check for PlatformVersion {
                 "check `sw_vers -productVersion` manually",
             ),
         }
+    }
+}
+
+/// What a macOS version means for dictation.
+///
+/// Split from the `sw_vers` probe so every branch is reachable in a test.
+/// Only the branch matching the developer's own machine was previously
+/// observable, and the branch that matters most is the one they are least
+/// likely to be running.
+pub fn judge_macos_version(ver: &str) -> CheckOutcome {
+    match macos_major(ver) {
+        // 26 brought SpeechTranscriber: the default recognizer, no download.
+        Some(major) if major >= 26 => {
+            CheckOutcome::pass(format!("macOS {ver}: bundled SpeechTranscriber available"))
+        }
+        // 13..26 is supported, but NOT with the default backend. Warn rather
+        // than pass: a pass here is what let someone grant Accessibility,
+        // press the hotkey, get silence, and see every check report fine.
+        Some(major) if major >= 13 => CheckOutcome::warn(
+            format!("macOS {ver} has no bundled recognizer (SpeechTranscriber needs 26+)"),
+            ErrorClass::Configuration,
+            "dictation works here with the whisper backend: download a ggml model \
+             from https://huggingface.co/ggerganov/whisper.cpp, set \
+             OUTLOUD_WHISPER_MODEL to it, and run with `--asr whisper`. Without \
+             that the recognizer never becomes ready and the hotkey appears to \
+             do nothing.",
+        ),
+        Some(_) => CheckOutcome::fail(
+            format!("macOS {ver} is older than the validated floor (13.0)"),
+            ErrorClass::Environment,
+            "upgrade to macOS 13 or newer; TCC and AX behavior differ below that",
+        ),
+        None => CheckOutcome::warn(
+            format!("unparseable macOS version '{ver}'"),
+            ErrorClass::Bug,
+            "file a GitHub issue including this doctor output",
+        ),
     }
 }
 
@@ -1308,5 +1331,54 @@ mod tests {
                 line.trim()
             );
         }
+    }
+
+    // -- macOS version judgement --------------------------------------------
+
+    /// The branch that shipped wrong: macOS 13..26 passed silently.
+    ///
+    /// SpeechTranscriber is the default recognizer and needs macOS 26. Below
+    /// that it never becomes ready, so the hotkey appears to do nothing. The
+    /// version row said PASS on the way past, which is worse than saying
+    /// nothing: a user who has just granted Accessibility permission and then
+    /// gets silence, with every check green, concludes the app is broken.
+    #[test]
+    fn macos_below_26_warns_and_names_the_working_backend() {
+        for ver in ["13.0", "14.6.1", "15.2", "25.9"] {
+            let outcome = judge_macos_version(ver);
+            assert_eq!(
+                outcome.status,
+                Status::Warn,
+                "macOS {ver} must not pass silently: {outcome:?}"
+            );
+            let remedy = outcome.remedy.unwrap_or_default();
+            assert!(
+                remedy.contains("--asr whisper"),
+                "the remedy must name the backend that works: {remedy}"
+            );
+            assert!(
+                remedy.contains("OUTLOUD_WHISPER_MODEL"),
+                "and the variable that points at the model: {remedy}"
+            );
+        }
+    }
+
+    /// 26+ has the bundled recognizer, so nothing needs configuring.
+    #[test]
+    fn macos_26_and_later_passes() {
+        for ver in ["26.0", "26.5.2", "27.0"] {
+            assert_eq!(
+                judge_macos_version(ver).status,
+                Status::Pass,
+                "macOS {ver} has SpeechTranscriber"
+            );
+        }
+    }
+
+    /// Below 13 the doctor's own remedies are wrong (different TCC layout),
+    /// so this stays a hard failure rather than a warning.
+    #[test]
+    fn macos_below_the_validated_floor_still_fails() {
+        assert_eq!(judge_macos_version("12.7").status, Status::Fail);
     }
 }
