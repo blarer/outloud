@@ -1,7 +1,7 @@
-//! The macOS overlay: an animated skull pinned to the bottom of the screen
-//! with a rolling window of transcribed words above it, drawn in a
+//! The macOS overlay: an animated cat mascot pinned to the bottom of the
+//! screen with a rolling window of transcribed words above it, drawn in a
 //! borderless, non-activating `NSPanel` (design: `docs/overlay-redesign.md`;
-//! skull geometry/motion: [`crate::skull`]).
+//! cat geometry/motion: [`crate::cat`]).
 //!
 //! The four properties that make this correct, in one place so they can be
 //! audited together:
@@ -45,8 +45,8 @@
 //! not estimate (`docs/latency.md`).
 //!
 //! The rolling-window model itself ([`crate::text_window::TextWindow`]) is
-//! pure Rust in `layout.rs`, unit-tested headlessly, and the skull's
-//! geometry and animator are pure Rust in `skull.rs`; this file only
+//! pure Rust in `layout.rs`, unit-tested headlessly, and the cat's
+//! geometry and animator are pure Rust in `cat.rs`; this file only
 //! measures text, feeds the models, and paints them.
 
 use std::cell::RefCell;
@@ -67,8 +67,8 @@ use objc2_foundation::{
     NSDictionary, NSPoint, NSRect, NSRunLoop, NSRunLoopCommonModes, NSSize, NSString, NSTimer,
 };
 
+use crate::cat::{self, CatAnimator, CatPose};
 use crate::layout::{self, Size};
-use crate::skull::{self, SkullAnimator, SkullPose};
 use crate::state::OverlayState;
 use crate::text_window::TextWindow;
 use crate::theme;
@@ -89,17 +89,17 @@ const ANCHOR_X: f64 = PANEL_SIZE.width / 2.0 + 40.0;
 /// Text lane baseline (top-left/flipped coords) and font size.
 const LANE_Y: f64 = 52.0;
 const WORD_FONT: f64 = 17.0;
-/// The skull's bounding box in panel points: EXACTLY the orb's box. The
+/// The cat's bounding box in panel points: EXACTLY the orb's box. The
 /// orb was a circle of radius [`ORB_R`] centred at (panel centre,
-/// height-88); the skull occupies that same 42pt square, because this is
+/// height-88); the cat occupies that same 42pt square, because this is
 /// a glanceable status indicator over someone's work, not a focal point.
-/// Legibility at 42pt comes from simplified geometry in [`crate::skull`]
-/// (three wide teeth, bold sockets), not from being bigger.
+/// Legibility at 42pt comes from simplified geometry in [`crate::cat`]
+/// (bold patches, big eyes, one-jag fur), not from being bigger.
 const ORB_R: f64 = 21.0;
-const SKULL_SIZE: f64 = ORB_R * 2.0;
-const SKULL_X: f64 = (PANEL_SIZE.width - SKULL_SIZE) / 2.0;
-const SKULL_Y: f64 = PANEL_SIZE.height - 88.0 - ORB_R;
-/// The glow field behind the skull: the orb's Gaussian-ring aura,
+const CAT_SIZE: f64 = ORB_R * 2.0;
+const CAT_X: f64 = (PANEL_SIZE.width - CAT_SIZE) / 2.0;
+const CAT_Y: f64 = PANEL_SIZE.height - 88.0 - ORB_R;
+/// The glow field behind the cat: the orb's Gaussian-ring aura,
 /// unchanged — same centre, same reach — so the overall footprint is the
 /// one the design already accepted.
 const GLOW_CX: f64 = PANEL_SIZE.width / 2.0;
@@ -125,9 +125,9 @@ struct Model {
     bands: [f32; 4],
     /// The rolling window of words (pure model; see layout.rs).
     words: TextWindow,
-    /// The skull's motion state and its latest pose (pure; see skull.rs).
-    animator: SkullAnimator,
-    pose: SkullPose,
+    /// The cat's motion state and its latest pose (pure; see cat.rs).
+    animator: CatAnimator,
+    pose: CatPose,
     /// State-specific one-liner (an error's situation → action). Rendered
     /// as a single static line in place of the word lane.
     detail: String,
@@ -150,8 +150,8 @@ impl Default for Model {
             target_level: 0.0,
             bands: [0.0; 4],
             words: TextWindow::new(),
-            animator: SkullAnimator::new(),
-            pose: SkullPose::at_rest(),
+            animator: CatAnimator::new(),
+            pose: CatPose::at_rest(),
             detail: String::new(),
             now: 0.0,
             last_tick: 0.0,
@@ -302,7 +302,7 @@ fn poly_path(poly: &[crate::layout::Point]) -> Option<Retained<NSBezierPath>> {
         return None;
     }
     let map = |p: &crate::layout::Point| {
-        NSPoint::new(SKULL_X + p.x * SKULL_SIZE, SKULL_Y + p.y * SKULL_SIZE)
+        NSPoint::new(CAT_X + p.x * CAT_SIZE, CAT_Y + p.y * CAT_SIZE)
     };
     let path = NSBezierPath::bezierPath();
     path.moveToPoint(map(&poly[0]));
@@ -313,8 +313,8 @@ fn poly_path(poly: &[crate::layout::Point]) -> Option<Retained<NSBezierPath>> {
     Some(path)
 }
 
-/// Fill one skull polygon, mapping the unit-square geometry into the
-/// panel's SKULL box. The mapping lives here — not in `skull.rs` — so the
+/// Fill one cat polygon, mapping the unit-square geometry into the
+/// panel's CAT box. The mapping lives here — not in `cat.rs` — so the
 /// pure geometry stays resolution-free and the same points serve any panel
 /// size or Retina factor (NSBezierPath is drawn in points; AppKit handles
 /// the backing scale).
@@ -329,7 +329,7 @@ fn fill_poly(poly: &[crate::layout::Point], color: &NSColor) {
 /// Fill a polygon with a vertical gradient instead of one flat tone.
 ///
 /// A single flat fill is what makes a shape read as a sticker. Giving the
-/// bone a lit top and a shaded underside is the cheapest possible cue that
+/// fur a lit top and a shaded underside is the cheapest possible cue that
 /// it is a solid object, and it costs one extra draw rather than a blur.
 fn fill_poly_lit(poly: &[crate::layout::Point], lit: &NSColor, shade: &NSColor) {
     let Some(path) = poly_path(poly) else {
@@ -425,7 +425,7 @@ impl OverlayView {
 
     fn draw(&self) {
         let model = self.ivars().borrow();
-        self.draw_skull(&model);
+        self.draw_cat(&model);
         if model.detail.is_empty() {
             self.draw_words(&model);
         } else {
@@ -489,14 +489,14 @@ impl OverlayView {
         }
     }
 
-    /// The skull: pure posed geometry from [`crate::skull`], mapped into
-    /// the panel's SKULL box and filled with NSBezierPath polygons. Behind
-    /// it, the orb's old Gaussian-ring glow survives as the skull's aura —
+    /// The cat: pure posed geometry from [`crate::cat`], mapped into the
+    /// panel's CAT box and filled with NSBezierPath polygons. Behind it,
+    /// the orb's old Gaussian-ring glow survives as the cat's aura —
     /// still a radial gradient without a quartz-core dependency.
-    fn draw_skull(&self, model: &Model) {
+    fn draw_cat(&self, model: &Model) {
         let accent = theme::accent(model.state);
-        let geo = skull::posed_geometry(&model.pose);
-        // Aura first, so the skull draws over it. Reduced motion drops the
+        let geo = cat::posed_geometry(&model.pose);
+        // Aura first, so the cat draws over it. Reduced motion drops the
         // aura entirely: it exists to flicker with the voice.
         if !model.reduce_motion {
             let gain = model.pose.eye_glow;
@@ -516,64 +516,91 @@ impl OverlayView {
             }
         }
 
-        // Bone: near-paper white with a hint of the accent, dark features.
-        // The skull reads on light and dark desktops because bone is light
-        // and every feature is a dark cutout — self-contrast, no theme
-        // branch needed.
+        // Coat: her sampled colours (see theme::palette), dark features.
+        // The cat reads on light and dark desktops the same way the skull
+        // did: the face is light and every feature is a dark or saturated
+        // cutout — self-contrast, no theme branch needed.
         //
         // Every alpha is scaled by the pose's opacity, which is below 1.0
-        // only during the entry animation. Fading the whole skull as one
+        // only during the entry animation. Fading the whole cat as one
         // object keeps the features from appearing to float in separately.
         let fade = model.pose.opacity;
-        // Three bone tones instead of one, so a lit top can meet a shaded
-        // underside. A single flat fill is what made this read as a sticker
-        // rather than an object.
-        let bone_lit = ns_color(theme::palette::PAPER, 0.99 * fade);
-        let bone = ns_color(theme::palette::PAPER.alpha(0.86), 0.96 * fade);
-        let bone_shade = ns_color(theme::palette::PAPER.alpha(0.66), 0.96 * fade);
+        // Lit and shaded tones per fur colour, so a lit top can meet a
+        // shaded underside. A single flat fill is what made the skull read
+        // as a sticker rather than an object, and fur is no different.
+        let white_lit = ns_color(theme::palette::CAT_WHITE, 0.99 * fade);
+        let white = ns_color(theme::palette::CAT_WHITE.alpha(0.88), 0.96 * fade);
+        let white_shade = ns_color(theme::palette::CAT_WHITE.alpha(0.68), 0.96 * fade);
+        let grey = ns_color(theme::palette::CAT_GREY, 0.96 * fade);
+        let grey_shade = ns_color(theme::palette::CAT_GREY.alpha(0.72), 0.96 * fade);
+        let cream = ns_color(theme::palette::CAT_CREAM, 0.9 * fade);
+        let pink = ns_color(theme::palette::CAT_PINK, 0.95 * fade);
+        let moss = ns_color(theme::palette::CAT_MOSS, 0.97 * fade);
         let dark = ns_color(theme::palette::INK, 0.94 * fade);
+        let whisker = ns_color(theme::palette::CAT_WHITE.alpha(0.55), 0.9 * fade);
 
-        // Cast the whole skull onto the desktop behind it. One shadow for
-        // the silhouette, not one per polygon: the parts are a single solid
-        // object, and shadowing them individually would advertise that they
-        // are separate shapes, which is precisely the flatness being fixed.
+        // Cast the whole cat onto the desktop behind it. One shadow for
+        // the silhouette (ears + head + ruff), not one per polygon: the
+        // parts are a single animal, and shadowing them individually would
+        // advertise that they are separate shapes.
         //
         // Reduced motion keeps the shadow. It is depth, not animation, and
         // removing it would flatten the object for the users who most need
         // to find it quickly.
         let shadow_alpha = 0.42 * fade;
         with_drop_shadow(2.0, 5.0, shadow_alpha, || {
-            fill_poly(&geo.cranium, &bone);
-            fill_poly(&geo.jaw, &bone_shade);
+            for ear in &geo.ears {
+                fill_poly(ear, &grey);
+            }
+            fill_poly(&geo.ruff, &white_shade);
+            fill_poly(&geo.head, &white);
         });
 
         // Now the lit passes, drawn over the shadowed silhouette so the
-        // shadow reads as cast by the whole head.
-        fill_poly(&geo.mouth, &dark);
-        fill_poly_lit(&geo.cranium, &bone_lit, &bone_shade);
-        // The jaw sits under the cranium, so it never catches the top light:
-        // its own gradient runs darker at both ends. This is what stops the
-        // two pieces looking like one flat outline.
-        fill_poly_lit(&geo.jaw, &bone, &bone_shade);
-
-        // Sockets last among the dark features, and with an inner shadow, so
-        // they read as holes in a solid rather than black paint on a
-        // surface. Cheapest possible cue that the bone has thickness.
-        with_drop_shadow(-1.0, 2.0, 0.5 * fade, || {
-            for socket in &geo.sockets {
-                fill_poly(socket, &dark);
-            }
-        });
-        // Eye glow: the state's accent inside the sockets, alpha from the
-        // pose (listening brightens with the voice, transcribing shimmers,
-        // loading pulses, errors stare).
-        let glow = ns_color(accent, (0.25 + 0.75 * model.pose.eye_glow) * fade);
-        for eye in &geo.eyes {
-            fill_poly(eye, &glow);
+        // shadow reads as cast by the whole animal. Back-to-front: ruff,
+        // ears, head, then the face.
+        fill_poly_lit(&geo.ruff, &white, &white_shade);
+        for (ear, inner) in geo.ears.iter().zip(&geo.ear_inners) {
+            fill_poly_lit(ear, &grey, &grey_shade);
+            fill_poly(inner, &pink);
         }
-        fill_poly(&geo.nose, &dark);
-        for tooth in &geo.teeth {
-            fill_poly(tooth, &bone);
+        fill_poly_lit(&geo.head, &white_lit, &white_shade);
+
+        // The dilute-calico mask: cream over the left eye, grey over the
+        // right temple, the smudge by the nose. These are what make the
+        // mascot HER rather than a generic white cat, so they draw before
+        // the eyes and never over them.
+        fill_poly(&geo.patch_cream, &cream);
+        fill_poly(&geo.patch_grey, &grey);
+        fill_poly(&geo.smudge, &grey);
+
+        // Mouth cavity with an inner shadow so it reads as a mouth in a
+        // solid head rather than dark paint on a surface, then the fangs
+        // over it (they only have length while the mouth is open).
+        with_drop_shadow(-1.0, 2.0, 0.5 * fade, || {
+            fill_poly(&geo.mouth, &dark);
+        });
+        for fang in &geo.fangs {
+            fill_poly(fang, &white_lit);
+        }
+        fill_poly(&geo.nose, &pink);
+        for w in &geo.whiskers {
+            fill_poly(w, &whisker);
+        }
+
+        // Eyes last, over the grey patch: moss iris, dark pupil (width
+        // carries the dilation), then the glint in the state's accent —
+        // alpha from the pose (listening brightens with the voice,
+        // transcribing shimmers, loading pulses, errors stare).
+        for eye in &geo.eyes {
+            fill_poly(eye, &moss);
+        }
+        for pupil in &geo.pupils {
+            fill_poly(pupil, &dark);
+        }
+        let glint = ns_color(accent, (0.25 + 0.75 * model.pose.eye_glow) * fade);
+        for g in &geo.glints {
+            fill_poly(g, &glint);
         }
     }
 
