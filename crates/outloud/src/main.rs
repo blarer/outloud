@@ -552,6 +552,21 @@ fn main() -> anyhow::Result<()> {
 
     let (engine, shared) = Engine::new();
 
+    // Walk a first-time user through the two permissions BEFORE anything is
+    // bound. Both grants fail silently: without them the app starts, shows its
+    // icon, and does nothing when the key is held. Doing this after the bind
+    // would mean the first keypress is the thing that teaches them something is
+    // wrong, and it teaches them the app is broken.
+    //
+    // Skipped for --once (a measurement, not a session) and, inside the
+    // walkthrough itself, for terminal launches.
+    if !args.once {
+        outloud::welcome::run_if_needed(|| outloud::welcome::Grants {
+            input_monitoring: hotkey::has_input_monitoring(),
+            accessibility: ax_edit::is_trusted(false),
+        });
+    }
+
     // What the daemon actually bound and opened, plus the live switches the
     // pipeline reads. Created first because the menu host writes the master
     // switch into it as soon as it loads the config.

@@ -50,6 +50,7 @@ pub mod streamer;
 #[cfg(test)]
 pub(crate) mod testenv;
 pub mod wav;
+pub mod welcome;
 
 /// Convert a UTF-16 code-unit offset (the unit the accessibility API
 /// reports selections in) to a byte offset into `s`.
