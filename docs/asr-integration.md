@@ -41,11 +41,21 @@ merging is where duplicated and dropped words come from (backlog R-06).
 | Speech onset -> first partial | ≤ 250ms | Moonshine 73-107ms incremental + chunking (R-05) |
 | Partial update cadence | ≤ 150ms | R-05 |
 | Endpoint hangover | 300ms | R-02, research §5 |
-| Endpoint -> final transcript | ≤ 200ms for 5s audio | Parakeet RTFx 30-60 on M-series (R-03) |
+| Endpoint -> final transcript | ≤ 200ms, and it is a floor not a rate | Parakeet RTFx 30-60 on M-series (R-03); whisper measured flat, below |
 | Speech end -> committed text | ≤ 550ms | 300 + 200 + 50 slack |
 
 These constants are also in code (`asr::pipeline::budget`) so instrumentation
 can compare measured numbers against them.
+
+One correction from measurement, because the phrasing above misled once
+already. "≤ 200ms for 5s audio" implies finalize scales with utterance
+length. For whisper it does not: the encoder always processes a padded 30s
+window, so the same base.en model finalizes 2.53s of audio in 203-211ms and
+7.19s in 247ms (`investigations/whisper-spike.md`). Realtime factor
+therefore flatters long utterances and slanders short ones, and the number
+to hold a backend to is the floor, not the ratio. Parakeet's chunked encoder
+is expected to behave differently; measure it rather than assuming either
+shape.
 
 ## Backends
 

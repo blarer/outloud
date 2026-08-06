@@ -56,6 +56,15 @@ pub const REQUIRED_SAMPLE_RATE: u32 = 16_000;
 /// hot-mic timeout closes capture well before this in normal use.
 pub const MAX_UTTERANCE_SECS: f32 = 30.0;
 
+/// Number of samples in whisper's encoder window.
+///
+/// A function rather than an inline expression at the one call site so the
+/// truncation point can be asserted without a model, which is the only part
+/// of this backend testable in the default build.
+pub fn window_samples() -> usize {
+    (MAX_UTTERANCE_SECS * REQUIRED_SAMPLE_RATE as f32) as usize
+}
+
 /// Route whisper.cpp's own logging through the `log` crate instead of stderr.
 ///
 /// The `set_print_*` params only govern transcription output. The library
@@ -165,7 +174,7 @@ impl Recognizer for WhisperCppRecognizer {
             // alternative, keeping the end, would silently drop the beginning
             // of a long sentence, and a transcript that begins mid-thought
             // reads as a recognition failure rather than a length limit.
-            let max = (MAX_UTTERANCE_SECS * REQUIRED_SAMPLE_RATE as f32) as usize;
+            let max = window_samples();
             let audio = if audio.len() > max {
                 eprintln!(
                     "asr: utterance is {audio_secs:.1}s, longer than whisper's \
@@ -255,9 +264,10 @@ mod tests {
         assert!((secs(1600) - 0.1).abs() < 1e-6);
         assert!((secs(16_000) - 1.0).abs() < 1e-6);
 
-        // The truncation point the finalizer uses.
-        let max_samples = (MAX_UTTERANCE_SECS * REQUIRED_SAMPLE_RATE as f32) as usize;
-        assert_eq!(max_samples, 480_000, "30s at 16kHz");
+        // The truncation point the finalizer uses. Wrong by a factor of the
+        // sample rate and a 30s cap becomes a 0.03s one, which would look
+        // like catastrophic recognition failure rather than a bad constant.
+        assert_eq!(window_samples(), 480_000, "30s at 16kHz");
     }
 
     /// A missing model must say so with the path, not fail generically.

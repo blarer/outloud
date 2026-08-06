@@ -97,9 +97,13 @@ pub fn fetch(
     std::fs::create_dir_all(cache_dir)?;
     let final_path = cache_dir.join(spec.id);
     if final_path.exists() {
-        // Present implies verified (rename invariant), so a warm cache costs
-        // zero hashing time on startup.
-        return Ok(final_path);
+        // Present implies verified only for files THIS code wrote. A
+        // hand-copied GGUF, a file cached before its hash was pinned, or a
+        // download steered by a bad mirror all land here under the right
+        // name and were previously trusted forever. Mirrors
+        // asr::models::verify_cached, deliberately, for the reason in the
+        // module header.
+        return verify_cached(spec, &final_path).map(|()| final_path);
     }
     let partial_path = cache_dir.join(format!("{}.partial", spec.id));
     let existing = std::fs::metadata(&partial_path)
@@ -168,7 +172,48 @@ pub fn fetch(
         );
     }
     std::fs::rename(&partial_path, &final_path)?;
+    mark_verified(&final_path);
     Ok(final_path)
+}
+
+/// Marker recording that `<model>` matched its pinned hash. A sidecar, so it
+/// lives and dies with the model file; deleting it costs one re-hash.
+fn verified_marker(model_path: &Path) -> PathBuf {
+    let mut name = model_path.file_name().unwrap_or_default().to_os_string();
+    name.push(".verified");
+    model_path.with_file_name(name)
+}
+
+fn mark_verified(model_path: &Path) {
+    // Best effort: an unwritable sidecar must not deny the user a model they
+    // just downloaded and verified.
+    let _ = std::fs::write(verified_marker(model_path), b"sha256-ok\n");
+}
+
+/// Verify a cached file against its pinned hash, at most once per file.
+///
+/// A mismatch deletes it: the next launch would otherwise fail identically,
+/// and the honest state after "this is not the model you asked for" is no
+/// model at all. Unpinned models are accepted, since there is nothing to
+/// check them against.
+pub fn verify_cached(spec: &LlmModelSpec, model_path: &Path) -> Result<(), FetchError> {
+    let Some(expected) = spec.sha256 else {
+        return Ok(());
+    };
+    if verified_marker(model_path).exists() {
+        return Ok(());
+    }
+    let actual = sha256_file(model_path)?;
+    if actual != expected {
+        let _ = std::fs::remove_file(model_path);
+        return Err(FetchError::ChecksumMismatch {
+            id: spec.id.to_string(),
+            expected: expected.to_string(),
+            actual,
+        });
+    }
+    mark_verified(model_path);
+    Ok(())
 }
 
 /// SHA256 of a file, streamed so gigabyte models need constant RAM.
@@ -192,7 +237,7 @@ mod tests {
 
     #[test]
     fn sha256_matches_known_vector() {
-        let dir = std::env::temp_dir().join("aqua-llm-test-sha");
+        let dir = std::env::temp_dir().join("outloud-llm-test-sha");
         std::fs::create_dir_all(&dir).unwrap();
         let p = dir.join("abc.txt");
         std::fs::write(&p, b"abc").unwrap();
@@ -203,9 +248,75 @@ mod tests {
         );
     }
 
+    /// A GGUF that arrived outside `fetch` must not be trusted for being
+    /// present under the right name. Same guarantee as crates/asr.
+    #[test]
+    fn a_cached_file_that_fails_its_pin_is_rejected_and_removed() {
+        let dir = std::env::temp_dir().join("outloud-llm-test-tampered");
+        std::fs::create_dir_all(&dir).unwrap();
+        let spec = LlmModelSpec {
+            id: "pinned-gguf",
+            // Unroutable: a rejection must not fall back to downloading.
+            url: "http://192.0.2.1/never",
+            // sha256 of "abc"; the file below is not "abc".
+            sha256: Some("ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"),
+            approx_bytes: 3,
+            license: "Apache-2.0",
+            approx_ram_bytes: 3,
+        };
+        let path = dir.join(spec.id);
+        let _ = std::fs::remove_file(dir.join("pinned-gguf.verified"));
+        std::fs::write(&path, b"not abc").unwrap();
+
+        let err = fetch(&spec, &dir, |_| {}).unwrap_err();
+        assert!(
+            matches!(err, FetchError::ChecksumMismatch { .. }),
+            "got {err}"
+        );
+        assert!(!path.exists(), "a file that failed its pin must not linger");
+    }
+
+    /// One hash, then a marker: verification must not cost a re-hash of
+    /// 1.28GB at every launch.
+    #[test]
+    fn a_matching_cached_file_is_verified_once_then_marked() {
+        let dir = std::env::temp_dir().join("outloud-llm-test-verified");
+        std::fs::create_dir_all(&dir).unwrap();
+        let spec = LlmModelSpec {
+            id: "good-gguf",
+            url: "http://192.0.2.1/never",
+            sha256: Some("ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"),
+            approx_bytes: 3,
+            license: "Apache-2.0",
+            approx_ram_bytes: 3,
+        };
+        let path = dir.join(spec.id);
+        std::fs::write(&path, b"abc").unwrap();
+        let marker = dir.join("good-gguf.verified");
+        let _ = std::fs::remove_file(&marker);
+
+        assert_eq!(fetch(&spec, &dir, |_| {}).unwrap(), path);
+        assert!(marker.exists(), "verification verdict was not recorded");
+
+        std::fs::write(&path, b"changed after verification").unwrap();
+        assert_eq!(fetch(&spec, &dir, |_| {}).unwrap(), path);
+    }
+
+    /// Every registry entry must be pinned. An unpinned model downloads with
+    /// a warning nobody reads, which is how the whisper and parakeet entries
+    /// stayed unverified for months.
+    #[test]
+    fn every_registry_entry_is_pinned() {
+        for spec in registry() {
+            assert!(spec.sha256.is_some(), "{} has no pinned sha256", spec.id);
+            assert!(spec.approx_bytes > 0, "{}", spec.id);
+            assert!(!spec.license.is_empty(), "{}", spec.id);
+        }
+    }
+
     #[test]
     fn cached_file_short_circuits_network() {
-        let dir = std::env::temp_dir().join("aqua-llm-test-cache");
+        let dir = std::env::temp_dir().join("outloud-llm-test-cache");
         std::fs::create_dir_all(&dir).unwrap();
         let spec = LlmModelSpec {
             id: "already-here",

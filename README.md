@@ -20,11 +20,21 @@ That is a real limitation and it is stated here rather than in a footnote:
 
 - The recognizer runs **on your device**, so "nothing leaves your machine"
   holds. It is local, and it is not open.
-- It requires **macOS 26 or newer**. On macOS 13-25 the app installs, runs, and
-  shows its menu bar icon, but **cannot transcribe a word**.
-- The open-weights backends (Parakeet TDT, whisper.cpp) are **stubs**, not
-  implementations. Until one lands, there is no fully-open path end to end, and
-  no working recognizer on Windows or Linux at all.
+- The **default** recognizer requires **macOS 26 or newer**, because
+  `SpeechTranscriber` is a macOS 26 API. On macOS 13-25 the app installs and
+  runs, and dictation works only once you point it at a whisper model:
+
+  ```bash
+  # a ggml model from https://huggingface.co/ggerganov/whisper.cpp
+  export OUTLOUD_WHISPER_MODEL=~/.outloud/models/ggml-base.en.bin
+  outloud --asr whisper
+  ```
+
+  Without that the recognizer never becomes ready and the hotkey appears to do
+  nothing. `doctor` says so on those versions rather than reporting a clean
+  bill of health.
+- **whisper.cpp is implemented** and is the open-weights path. Parakeet TDT is
+  still a stub. Windows and Linux have no working recognizer yet.
 
 If a fully open stack is what you need today, this is not yet that. It is the
 rest of the machine built around one, and the recognizer is a seam designed to
@@ -132,7 +142,8 @@ while an admin app has focus and recovers when focus moves. Details in
 
 ## Install
 
-Requires macOS 13 or newer (26+ for the zero-install recognizer), a Rust
+Requires macOS 13 or newer. On 26+ the recognizer is built in and needs no
+download; on 13-25 it needs a whisper model (see above). Also needs a Rust
 toolchain, and Xcode Command Line Tools for `swiftc`. Windows builds and
 installs (`scripts/build-windows.sh` ships `outloud.exe` and `outloud-spike.exe`)
 but is untested on hardware; Linux does not work yet.
@@ -379,7 +390,7 @@ evidence in [`docs/beta-readiness.md`](docs/beta-readiness.md).
 | `cargo build` alone is not enough | `recognizer failed to load (speech helper not found...)` | Use `./scripts/bundle-outloud-macos.sh`, which compiles the Swift helper |
 | Only one copy may run | A second launch is refused, naming the pid to quit | Quit the first from the menu bar, or `kill N` |
 | Accessibility grant dies on every rebuild | Toggle reads "on", every call fails. The menu bar glyph turns into a warning triangle within a second | `tccutil reset Accessibility dev.outloud.outloud`, then re-grant |
-| macOS 13-25 has no bundled recognizer | `recognizer never becomes ready` | Only macOS 26+ has `SpeechTranscriber`; other backends are stubbed |
+| macOS 13-25 has no bundled recognizer | `recognizer never becomes ready` | `SpeechTranscriber` needs macOS 26+; set `OUTLOUD_WHISPER_MODEL` and run `--asr whisper` |
 | Most config settings are not read yet | Changing them has no effect and no warning | Only `hotkey`, `enabled`, `microphone.sensitivity`, `microphone.warm-hold-ms`, `silence-timeout-ms`, and `overlay.position` are wired today |
 | Quiet or distant speech is dropped | Words go missing unless you lean in and enunciate | Raise **Microphone Sensitivity** in the menu bar (or `microphone.sensitivity` in config) |
 | Bluetooth clips the first word | The headset needs ~200ms to start capturing; the daemon warns you once per device | Set `microphone.warm-hold-ms = 2000`, or hold the key a beat before speaking |

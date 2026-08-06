@@ -98,6 +98,14 @@ Compared with `docs/latency.md`, the OS-integration path is not the problem:
 a warm `snapshot_focused` is ~155us, three orders of magnitude under this
 backend's floor. The recognizer owns essentially the whole budget.
 
+## Truncation at the 30s window, now asserted
+
+Feeding 40s of audio (the 2.53s fixture plus silence) returns the fixture's
+words, not silence: the backend keeps the START of an over-long utterance.
+That was documented and unasserted until `an_over_long_utterance_keeps_the_beginning`
+in `crates/asr/tests/`. `audio_secs` still reports the full 40s, because it
+describes what the user said; the truncation is a separate fact on stderr.
+
 ## What is still missing for streaming partials
 
 Whisper cannot do them, and the pseudo-streaming workaround (re-decode a
@@ -138,9 +146,10 @@ Also still open, in rough priority order:
 - The 30s encoder window truncates from the start with only a stderr line;
   the daemon's hot-mic timeout should close capture before that, but nothing
   asserts it.
-- `sha256` for `whisper-base.en` is still `None` in the registry, so fetches
-  warn instead of verifying. The file downloaded for this spike is
-  147,964,211 bytes; pin it once a second machine confirms the hash.
+- ~~`sha256` for `whisper-base.en` is still `None`~~ — pinned, along with
+  silero-vad and parakeet, and cached files are now verified once against
+  their pin rather than trusted for existing. CI fetches and verifies the
+  model on every run (`scripts/ci-whisper.sh`).
 - Non-Metal builds are the real latency cliff, not the model size: the
   Windows CPU measurement in `docs/asr-integration.md` is 8970ms for the same
   work. Nothing in the build output warns about it.

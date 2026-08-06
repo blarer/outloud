@@ -259,6 +259,38 @@ jobs:
         run: |
           env -u DISPLAY -u WAYLAND_DISPLAY dist/headless/outloud-spiked-x86_64-unknown-linux-musl dry-run "change hello to goodbye"
 
+  # The whisper backend, against a real model. Every other job builds the
+  # workspace with default features, where whisper is compiled out entirely,
+  # and the transcription test skips when no weights are present. So without
+  # this job a broken whisper backend passes CI in two different ways at
+  # once: not compiled, and not asserted.
+  #
+  # macOS because whisper-rs enables Metal there automatically; a Linux
+  # runner would run the same test 20-30x slower on CPU for no extra signal.
+  # Kept out of ci-check.sh because it is the expensive job: whisper.cpp is
+  # compiled from source and the model is a 142MiB download, cached here
+  # between runs and verified against the registry pin every time.
+  whisper:
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: whisper
+      # Keyed by the pinned hash, not by a date: a re-pin must miss the cache
+      # and fetch the new file, and an unchanged pin must never re-download.
+      - name: Cache the ggml model
+        uses: actions/cache@v4
+        with:
+          path: ~/.outloud/models/whisper-base.en
+          key: whisper-base-en-a03779c86df3323075f5e796cb2ce5029f00ec8869eee3fdfb897afe36c6d002
+      - run: scripts/ci-whisper.sh
+        shell: bash
+      - name: Attribute failure
+        if: failure()
+        run: >-
+          echo "::error title=whisper backend::scripts/ci-whisper.sh failed. Either the backend broke, or the pinned model hash no longer matches what the upstream URL serves (which is the check working, not a flake)."
+
   # Performance tripwire. Every other job answers "is it correct"; this one
   # answers "is it still fast", which no correctness test can see: a change
   # that makes the overlay ten times slower produces exactly the same text
