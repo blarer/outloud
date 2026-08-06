@@ -142,6 +142,10 @@ pub mod palette {
     pub const CAT_PINK: Color = Color::rgb(0xC8, 0x90, 0x93);
     /// `#9BA86A` — her eyes: moss green with a yellow core.
     pub const CAT_MOSS: Color = Color::rgb(0x9B, 0xA8, 0x6A);
+    /// `#B9A5E3` — the lilac of the cat's aura. Owner's choice, replacing
+    /// the skull's brand blues: the blue field belonged to the Aqua-parity
+    /// look, and the cat is deliberately hers rather than theirs.
+    pub const CAT_LILAC: Color = Color::rgb(0xB9, 0xA5, 0xE3);
 }
 
 use crate::state::OverlayState;
@@ -263,6 +267,34 @@ pub fn accent(state: OverlayState) -> Color {
     }
 }
 
+/// The cat mascot's aura and glint colour, per state.
+///
+/// Deliberately NOT [`accent`]: the blue "working" arc is the Aqua-parity
+/// palette, and the owner asked the cat to shine lilac instead — the cat
+/// is hers, not the brand's. The two attention states keep their warm hues
+/// because amber-vs-red is the one signal that must not soften.
+pub fn cat_accent(state: OverlayState) -> Color {
+    match state {
+        OverlayState::Error => EMBER,
+        OverlayState::NoPermission => AMBER,
+        _ => CAT_LILAC,
+    }
+}
+
+/// The cat's pupil glint, or `None` for a plain black pupil.
+///
+/// Only the attention states light the pupils: a real cat's eyes are dark,
+/// and the owner asked for the blue glow to go. Keeping the warm glint on
+/// error/no-permission preserves the "this state wants a human" signal in
+/// the one place the glance lands first.
+pub fn cat_glint(state: OverlayState) -> Option<Color> {
+    match state {
+        OverlayState::Error => Some(EMBER),
+        OverlayState::NoPermission => Some(AMBER),
+        _ => None,
+    }
+}
+
 /// The accent with the loading pulse applied, given seconds since the state
 /// was entered.
 ///
@@ -370,6 +402,43 @@ mod tests {
         for s in [OverlayState::Error, OverlayState::NoPermission] {
             let c = accent(s);
             assert!(c.r > c.b, "{s} must read warm, got {c:?}");
+        }
+    }
+
+    #[test]
+    fn cat_working_states_are_lilac_and_attention_states_stay_warm() {
+        // The owner's palette: the cat shines lilac while working, and only
+        // failure states keep the warm hues. A blue leak here would put the
+        // skull's brand arc back on the cat.
+        for s in [
+            OverlayState::Listening,
+            OverlayState::Transcribing,
+            OverlayState::ModelLoading,
+            OverlayState::Idle,
+        ] {
+            assert_eq!(cat_accent(s).hex(), CAT_LILAC.hex(), "{s} must be lilac");
+        }
+        for s in [OverlayState::Error, OverlayState::NoPermission] {
+            let c = cat_accent(s);
+            assert!(c.r > c.b, "{s} must read warm, got {c:?}");
+        }
+    }
+
+    #[test]
+    fn cat_pupils_glint_only_when_a_state_wants_a_human() {
+        // Working pupils are plain black (a real cat's eyes are dark, and
+        // the level already shows in the dilation); a glint is reserved for
+        // the two states that ask for attention, so it keeps meaning one
+        // thing.
+        for s in OverlayState::ALL {
+            let glint = cat_glint(s);
+            match s {
+                OverlayState::Error | OverlayState::NoPermission => {
+                    let c = glint.expect("attention states must light the pupils");
+                    assert!(c.r > c.b, "{s} glint must be warm, got {c:?}");
+                }
+                _ => assert!(glint.is_none(), "{s} must keep black pupils"),
+            }
         }
     }
 

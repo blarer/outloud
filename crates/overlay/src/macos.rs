@@ -96,14 +96,22 @@ const WORD_FONT: f64 = 17.0;
 /// Legibility at 42pt comes from simplified geometry in [`crate::cat`]
 /// (bold patches, big eyes, one-jag fur), not from being bigger.
 const ORB_R: f64 = 21.0;
-const CAT_SIZE: f64 = ORB_R * 2.0;
+/// The cat draws bigger than the orb box the skull used. The skull's
+/// simplified geometry filled its 42pt square; the cat's silhouette
+/// (perked ears, wide ruff) has more empty corner in the same box and read
+/// visibly smaller on screen, so the box grows 25% while the aura keeps
+/// the orb's footprint. Owner-reviewed at both sizes.
+const CAT_SIZE: f64 = ORB_R * 2.5;
 const CAT_X: f64 = (PANEL_SIZE.width - CAT_SIZE) / 2.0;
-const CAT_Y: f64 = PANEL_SIZE.height - 88.0 - ORB_R;
-/// The glow field behind the cat: the orb's Gaussian-ring aura,
-/// unchanged — same centre, same reach — so the overall footprint is the
-/// one the design already accepted.
+const CAT_Y: f64 = PANEL_SIZE.height - 88.0 - CAT_SIZE / 2.0;
+/// The glow field behind the cat: the orb's Gaussian-ring aura, same reach.
+/// Centred on the HEAD (unit y 0.58 of the cat box), not the box centre:
+/// the box's upper region is mostly empty corner beside thin ear
+/// triangles, so a box-centred glow reads as sitting too high behind the
+/// visible animal. The face is what the glance lands on, so the light
+/// centres there.
 const GLOW_CX: f64 = PANEL_SIZE.width / 2.0;
-const GLOW_CY: f64 = PANEL_SIZE.height - 88.0;
+const GLOW_CY: f64 = CAT_Y + CAT_SIZE * 0.58;
 const GLOW_R: f64 = 78.0;
 /// Gap from the panel's bottom edge to the screen's visible-frame bottom.
 const BOTTOM_GAP: f64 = 8.0;
@@ -493,7 +501,10 @@ impl OverlayView {
     /// the orb's old Gaussian-ring glow survives as the cat's aura —
     /// still a radial gradient without a quartz-core dependency.
     fn draw_cat(&self, model: &Model) {
-        let accent = theme::accent(model.state);
+        // The cat's own accent, not theme::accent: lilac while working,
+        // warm hues only for the states that want a human (see
+        // theme::cat_accent for the rationale).
+        let accent = theme::cat_accent(model.state);
         let geo = cat::posed_geometry(&model.pose);
         // Aura first, so the cat draws over it. Reduced motion drops the
         // aura entirely: it exists to flicker with the voice.
@@ -588,18 +599,21 @@ impl OverlayView {
         }
 
         // Eyes last, over the grey patch: moss iris, dark pupil (width
-        // carries the dilation), then the glint in the state's accent —
-        // alpha from the pose (listening brightens with the voice,
-        // transcribing shimmers, loading pulses, errors stare).
+        // carries the dilation). The pupil stays black in the working
+        // states — a real cat's eyes are dark, and the level already shows
+        // in the dilation — and lights up warm only when a failure state
+        // wants a human (see theme::cat_glint).
         for eye in &geo.eyes {
             fill_poly(eye, &moss);
         }
         for pupil in &geo.pupils {
             fill_poly(pupil, &dark);
         }
-        let glint = ns_color(accent, (0.25 + 0.75 * model.pose.eye_glow) * fade);
-        for g in &geo.glints {
-            fill_poly(g, &glint);
+        if let Some(glint_color) = theme::cat_glint(model.state) {
+            let glint = ns_color(glint_color, (0.25 + 0.75 * model.pose.eye_glow) * fade);
+            for g in &geo.glints {
+                fill_poly(g, &glint);
+            }
         }
     }
 
@@ -612,13 +626,14 @@ impl OverlayView {
             if w.opacity <= 0.01 {
                 continue;
             }
-            // Committed = settled near-white type. In-flight = accent tint:
+            // Committed = settled near-white type. In-flight = lilac tint,
+            // matching the cat's aura rather than the skull-era brand blue:
             // the tinted zone is the only text allowed to change, which
             // makes the commit horizon visible (the redesign's point).
             let color = if w.committed {
                 ns_color(theme::palette::PAPER.alpha(0.95), w.opacity)
             } else {
-                ns_color(theme::palette::AQUA.alpha(0.62), w.opacity)
+                ns_color(theme::palette::CAT_LILAC.alpha(0.85), w.opacity)
             };
             draw_text(
                 &w.text,

@@ -11,6 +11,7 @@
 
 use overlay::cat::{posed_geometry, CatPose};
 use overlay::layout::Point;
+use overlay::state::OverlayState;
 use overlay::theme::{palette, Color};
 
 fn hex(c: Color) -> String {
@@ -29,7 +30,7 @@ fn poly(pts: &[Point], fill: &str, opacity: f64) -> String {
     )
 }
 
-fn render(pose: &CatPose, accent: Color, name: &str) {
+fn render(pose: &CatPose, state: OverlayState, name: &str) {
     let geo = posed_geometry(pose);
     let mut s = String::from(
         "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"420\" height=\"420\" \
@@ -65,8 +66,10 @@ fn render(pose: &CatPose, accent: Color, name: &str) {
     for p in &geo.pupils {
         s += &poly(p, &ink, 1.0);
     }
-    for g in &geo.glints {
-        s += &poly(g, &hex(accent), 0.9);
+    if let Some(glint) = overlay::theme::cat_glint(state) {
+        for g in &geo.glints {
+            s += &poly(g, &hex(glint), 0.9);
+        }
     }
     s += "</svg>";
     let path = format!("/tmp/cat_{name}.svg");
@@ -76,7 +79,7 @@ fn render(pose: &CatPose, accent: Color, name: &str) {
 
 fn main() {
     let rest = CatPose::at_rest();
-    render(&rest, palette::COBALT, "idle");
+    render(&rest, OverlayState::Idle, "idle");
     render(
         &CatPose {
             mouth_open: 0.9,
@@ -85,7 +88,7 @@ fn main() {
             eye_glow: 1.0,
             ..rest
         },
-        palette::COBALT,
+        OverlayState::Listening,
         "listening_loud",
     );
     render(
@@ -94,7 +97,7 @@ fn main() {
             ear_perk: 0.85,
             ..rest
         },
-        palette::AQUA,
+        OverlayState::Transcribing,
         "transcribing",
     );
     render(
@@ -103,7 +106,7 @@ fn main() {
             pupil: 1.0,
             ..rest
         },
-        palette::EMBER,
+        OverlayState::Error,
         "error",
     );
     render(
@@ -112,7 +115,7 @@ fn main() {
             pupil: 0.8,
             ..rest
         },
-        palette::AMBER,
+        OverlayState::NoPermission,
         "no_permission",
     );
     render(
@@ -121,7 +124,7 @@ fn main() {
             eye_glow: 0.5,
             ..rest
         },
-        palette::AQUA_PALE,
+        OverlayState::ModelLoading,
         "model_loading",
     );
     render(
@@ -129,7 +132,7 @@ fn main() {
             eye_open: 0.15,
             ..rest
         },
-        palette::AQUA,
+        OverlayState::Transcribing,
         "slow_blink",
     );
 }
