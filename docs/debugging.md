@@ -23,7 +23,7 @@ decides where it goes:
 | Symptom | Cause | Fix |
 |---|---|---|
 | Every AX call fails with `-25204` even though `AXIsProcessTrusted` returns true | You are using `AXUIElementCreateSystemWide` + `AXFocusedUIElement`. On current macOS it returns `kAXErrorCannotComplete` even for trusted processes | Resolve the focused *application* first, then ask it for its focused element. `ax-edit` already does this; do not "simplify" it back |
-| Toggle is ON in System Settings, all calls still fail, binary was run from a shell | TCC judges the *responsible process*. Shell-launched binaries are judged against the terminal's grant, not their own | Launch through LaunchServices: `open -a dist/AquaSpike.app` or `./scripts/doctor.sh`. Or grant the terminal itself (dev only) |
+| Toggle is ON in System Settings, all calls still fail, binary was run from a shell | TCC judges the *responsible process*. Shell-launched binaries are judged against the terminal's grant, not their own | Launch through LaunchServices: `open -a dist/OutLoudSpike.app` or `./scripts/doctor.sh`. Or grant the terminal itself (dev only) |
 | Worked yesterday, broken after `cargo build`, toggle still reads ON | Ad-hoc signature: TCC pins the grant to the cdhash, every rebuild silently revokes it | `tccutil reset Accessibility dev.hexavoice.spike`, re-grant. Long term: Developer ID certificate, which pins to team id instead |
 | App never appears in the Accessibility pane at all | Bare binary has no stable identity for TCC to list | Bundle it: `./scripts/bundle-macos.sh`, then add the .app |
 | Recognizer transcribes only silence | Microphone permission denied, or no input device. These are different failures | `doctor` distinguishes them: check `microphone-permission` vs `audio-input` |

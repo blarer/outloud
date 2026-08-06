@@ -15,14 +15,14 @@ On macOS, to actually exercise the Accessibility path you need a bundled,
 signed app. A bare binary will not get a stable permission identity:
 
 ```bash
-./scripts/bundle-macos.sh          # produces dist/AquaSpike.app
+./scripts/bundle-macos.sh          # produces dist/OutLoudSpike.app
 ./scripts/grant-accessibility.sh   # opens the right pane, waits for the toggle
 ```
 
 ## Run
 
 ```bash
-BIN=dist/AquaSpike.app/Contents/MacOS/AquaSpike
+BIN=dist/OutLoudSpike.app/Contents/MacOS/OutLoudSpike
 
 $BIN dry-run "change quick to slow"   # intent parser only, no permissions
 $BIN probe                            # read the focused field
@@ -37,7 +37,7 @@ itself; from a terminal you must reproduce that manually.
 
 If a command that needs permissions fails, run it through `./scripts/run.sh`,
 which launches via LaunchServices and tails the log file named by
-`AQUA_SPIKE_LOG`. See the gotchas below for why.
+`OUTLOUD_SPIKE_LOG`. See the gotchas below for why.
 
 ## Test
 
@@ -68,10 +68,10 @@ These four cost the M0 team real hours each. Full detail in
    Accessibility permission of the *responsible process*. From a terminal,
    that is the terminal, and your binary's own grant is ignored while the
    System Settings toggle sits there reading "on". Use `./scripts/run.sh` or
-   `open -a dist/AquaSpike.app --args ...`.
+   `open -a dist/OutLoudSpike.app --args ...`.
 2. **Rebuilds silently revoke the permission.** TCC pins the grant to the
    binary's `cdhash` under ad-hoc signing. After a rebuild, reset and
-   re-grant: `tccutil reset Accessibility dev.aquaoss.spike`, then
+   re-grant: `tccutil reset Accessibility dev.hexavoice.spike`, then
    `./scripts/grant-accessibility.sh`. With the team Developer ID profile
    this problem disappears.
 3. **Do not use `AXUIElementCreateSystemWide()` for focus.** It returns

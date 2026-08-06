@@ -73,8 +73,11 @@ echo
 #   - theme::palette AQUA / AQUA_PALE / AQUA_DEEP: the overlay's colour
 #     names, and "macOS Aqua": Apple's name for the GUI session. Neither is
 #     a product name.
-#   - scripts/bundle-macos.sh: internal harness, documented as deliberately
-#     not renamed in its own header.
+#   - scripts/bundle-outloud-macos.sh: names the old bundles on purpose,
+#     because unregistering them from LaunchServices is what it is for.
+#   - scripts/bundle-macos.sh: internal harness. Its bundle id stays
+#     dev.hexavoice.spike because TCC keys grants by identifier, but the
+#     bundle it produces is now OutLoudSpike.app.
 #   - audit/readiness docs and docs/planning: dated snapshots that quote old
 #     output as evidence; rewriting evidence would falsify it.
 #   - release-checklist.md: same class, the dated v0.1.0 audit that quotes
@@ -89,14 +92,13 @@ check_stale_names() {
     local hits doc_hits rs_hits
     # Docs and scripts: any prose or command still using the old names is a
     # user-visible bug (a doc'd command that 404s is exactly how the rename
-    # broke CI with exit 127). AquaSpike is the internal dev harness and is
-    # deliberately unrenamed; migration/uninstall docs must name the old
+    # broke CI with exit 127). Migration/uninstall docs must name the old
     # products because removing them is their whole purpose.
     doc_hits="$(grep -rIn --include='*.md' --include='*.sh' \
                 -iE 'hexavoice|\bhexad\b|\baqua\b' \
                 README.md docs scripts 2>/dev/null \
-        | grep -viE 'aquaspike|aqua[-_ ]?voice|withaqua\.com|\.aqua-oss|aqua[-_]speech[-_]helper|dev\.hexavoice|theme::palette|AQUA_PALE|AQUA_DEEP|palette::(PAPER|AQUA)|macOS Aqua' \
-        | grep -vE '^scripts/(bundle-macos|uninstall-macos|preflight)\.sh' \
+        | grep -viE 'aqua[-_ ]?voice|withaqua\.com|\.aqua-oss|aqua[-_]speech[-_]helper|dev\.hexavoice|theme::palette|AQUA_PALE|AQUA_DEEP|palette::(PAPER|AQUA)|macOS Aqua' \
+        | grep -vE '^scripts/(bundle-macos|bundle-outloud-macos|uninstall-macos|preflight)\.sh' \
         | grep -vE '^docs/(planning/|pre-release-audit|beta-readiness|release-readiness|release-checklist|M0-results|competitive-analysis|macos-quickstart|overlay-redesign)' \
         )" || true
     # Rust: comments are not user-visible, so only quoted string literals

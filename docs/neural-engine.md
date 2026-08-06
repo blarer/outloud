@@ -18,7 +18,7 @@ future work.
 The Swift helper links exactly two relevant frameworks:
 
 ```
-$ otool -L crates/asr/helper/aqua-speech-helper
+$ otool -L crates/asr/helper/outloud-speech-helper
     /System/Library/Frameworks/Speech.framework/...
     /usr/lib/swift/libswiftMetal.dylib (weak)
 ```

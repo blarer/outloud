@@ -115,7 +115,7 @@ because it is just bytes in the stream:
 
 For shells with a right prompt or transient status (zsh `RPROMPT`, fish
 right prompt, or a plugin-managed line above the prompt), the plugin exposes
-`aqua_status` for the user's prompt framework (starship/p10k modules shipped
+`outloud_status` for the user's prompt framework (starship/p10k modules shipped
 by us):
 
 ```

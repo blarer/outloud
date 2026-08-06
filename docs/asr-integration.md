@@ -60,7 +60,7 @@ can compare measured numbers against them.
 ### Apple SpeechTranscriber: measured results (this machine, macOS 26.5, 2026-07)
 
 The backend runs a small Swift helper (`crates/asr/helper/transcriber.swift`,
-build: `swiftc -O transcriber.swift -o aqua-speech-helper`) speaking raw
+build: `swiftc -O transcriber.swift -o outloud-speech-helper`) speaking raw
 f32le PCM on stdin and NDJSON events on stdout. Measured with
 `say`-synthesized audio:
 

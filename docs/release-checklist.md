@@ -10,7 +10,7 @@ manual README-claims audit actually found, and ends with the verdict.
 
 | Claim | What was run | What was seen |
 |---|---|---|
-| Bundle builds | `./scripts/bundle-outloud-macos.sh` | `dist/OutLoud.app` built, ad-hoc signed, helper `aqua-speech-helper` present, `codesign` valid on disk. **Verified** |
+| Bundle builds | `./scripts/bundle-outloud-macos.sh` | `dist/OutLoud.app` built, ad-hoc signed, helper `outloud-speech-helper` present, `codesign` valid on disk. **Verified** |
 | Dictation | `dist/OutLoud.app/Contents/MacOS/OutLoud --once --say "hello from a local dictation daemon" --no-overlay` | Text delivered via set-value, `release->text 131ms`. (Recognizer heard "demon" for "daemon", which is an ASR accuracy note, not a pipeline bug.) **Verified** |
 | Edit-by-voice | TextEdit doc "the quick brown fox", select-all, `--once --say "change quick to slow"` | Document read back through AppleScript: `the slow brown fox`, via set-selected-text, 119ms. **Verified** |
 | Shell bridge protocol + zsh plugin | bridge `serve` on a temp socket, real interactive zsh in a temp ZDOTDIR, `shell-bridge intent`, `^X^A`, `^Xu` | Line rewrote `prod-web` → `staging-web` in place; zsh undo restored it; daemon peek confirmed. **Verified, but only after fixing the broken verify script by hand — see blocker 2** |

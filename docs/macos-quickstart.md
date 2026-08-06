@@ -86,6 +86,14 @@ waste your afternoon.
    `OUTLOUD_*`, and it wins if you set both, but nothing in your shell profile
    or CI config breaks. There is no deadline on this.
 
+4. **Downloaded models move themselves, without re-downloading.** On first
+   launch OutLoud renames `~/.aqua-oss` to `~/.outloud`. A rename, not a
+   copy: these are gigabyte-scale files, and moving them costs nothing and
+   needs no free disk. If you already have a `~/.outloud`, the old directory
+   is left exactly where it is and reported, because merging two model caches
+   is your decision, not ours. Until you launch the new build, the old
+   directory is still read, so nothing re-downloads either way.
+
 Delete the old `dist/Aqua.app` whenever you like; `scripts/uninstall-macos.sh`
 knows about both names.
 

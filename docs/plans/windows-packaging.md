@@ -382,10 +382,10 @@ Trace it exactly:
   fine on Windows because it's plain Rust + `std::process::Command`, it
   just can never find the helper binary there).
 - `AppleRecognizer::new()` calls `find_helper()` (`apple.rs:64-83`), which
-  looks for `aqua-speech-helper` (a **Swift** binary, built by `swiftc`,
+  looks for `outloud-speech-helper` (a **Swift** binary, built by `swiftc`,
   which does not exist on Windows) next to the exe or in the dev tree.
   On Windows this is always `None`, so `new()` immediately returns
-  `Err("aqua-speech-helper not found; build it with `swiftc -O ...`")`
+  `Err("outloud-speech-helper not found; build it with `swiftc -O ...`")`
   (`apple.rs:98-103`) — an error message that tells a Windows user to run
   a macOS-only compiler.
 

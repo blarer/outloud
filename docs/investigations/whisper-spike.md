@@ -44,14 +44,14 @@ no measurements to compare against the budgets.
 - `cargo clippy -p asr --features whisper --all-targets` — clean.
 
 Weights are not committed. The test resolves a model from
-`$AQUA_WHISPER_MODEL`, else `~/.aqua-oss/models/whisper-base.en` (where
+`$OUTLOUD_WHISPER_MODEL`, else `~/.outloud/models/whisper-base.en` (where
 `asr::models::fetch` puts the `whisper-base.en` registry entry). With
 neither present it prints the fetch command and passes, so a fresh clone
 stays green:
 
 ```bash
-mkdir -p ~/.aqua-oss/models
-curl -L -o ~/.aqua-oss/models/whisper-base.en \
+mkdir -p ~/.outloud/models
+curl -L -o ~/.outloud/models/whisper-base.en \
   https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-base.en.bin  # 142MiB
 cargo test -p asr --features whisper
 ```
