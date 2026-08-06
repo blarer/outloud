@@ -806,6 +806,16 @@ impl MacOverlay {
             None => {}
         }
     }
+
+    /// The panel as a plain `NSWindow`, for offscreen capture only.
+    ///
+    /// Exists so the `cat_capture` example can snapshot the content view
+    /// through `cacheDisplayInRect:` without a Screen Recording grant.
+    /// Capture-only by contract: mutating the panel through this handle
+    /// would bypass the invariants the module doc numbers 1–4.
+    pub fn panel_for_capture(&self) -> &objc2_app_kit::NSWindow {
+        &self.panel
+    }
 }
 
 impl Drop for MacOverlay {
