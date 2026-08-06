@@ -24,7 +24,14 @@ set -euo pipefail
 
 REPO="blarer/outloud"
 APP_NAME="OutLoud.app"
-INSTALL_DIR="/Applications"
+
+# Test seams. An installer that cannot be exercised end to end before it is
+# handed to someone is a script whose first real run happens on the machine
+# where a failure is hardest to diagnose. Overriding these two lets the whole
+# script run against a local file server and a scratch directory, which is how
+# the pgrep name bug below was found. Neither is set in normal use.
+INSTALL_DIR="${OUTLOUD_INSTALL_DIR:-/Applications}"
+DOWNLOAD_URL="${OUTLOUD_INSTALL_URL:-https://github.com/$REPO/releases/latest/download/OutLoud-macos-arm64.tar.gz}"
 APP_PATH="$INSTALL_DIR/$APP_NAME"
 
 # Colours only when attached to a terminal, so a piped log stays clean.
@@ -82,11 +89,26 @@ ok "Apple Silicon, macOS $(sw_vers -productVersion)"
 #
 # Overwriting the bundle underneath a running process leaves the old code in
 # memory, so the user "installs" an update and sees no change until a reboot.
+#
+# BOTH spellings: the bundled executable is `OutLoud` (it is what shows in the
+# menu bar and in Activity Monitor) while a shell-run build is `outloud`.
+# pgrep matches the process name case-sensitively even on a case-insensitive
+# filesystem, so checking only the lowercase name found nothing and the
+# installer quietly skipped this step — which is precisely the update-appears-
+# to-do-nothing bug it exists to prevent.
 # ---------------------------------------------------------------------------
 
-if pgrep -x outloud >/dev/null 2>&1; then
+if [[ -n "${OUTLOUD_INSTALL_DIR:-}" ]]; then
+    # Under the test seam, killing "a running copy" would kill the developer's
+    # real daemon, which is a rude thing for a test to do.
+    say "(test mode: not stopping any running copy)"
+elif pgrep -x OutLoud >/dev/null 2>&1 || pgrep -x outloud >/dev/null 2>&1; then
     step "Closing the running copy"
-    pkill -x outloud || true
+    pkill -x OutLoud 2>/dev/null || true
+    pkill -x outloud 2>/dev/null || true
+    # The speech helper is a child process with its own name; an orphan left
+    # behind holds an OS speech session open.
+    pkill -x outloud-speech-helper 2>/dev/null || true
     sleep 1
 fi
 
@@ -99,8 +121,7 @@ step "Downloading the latest release"
 tmp="$(mktemp -d)"
 trap 'rm -rf "$tmp"' EXIT
 
-url="https://github.com/$REPO/releases/latest/download/OutLoud-macos-arm64.tar.gz"
-if ! curl -fL --progress-bar -o "$tmp/outloud.tar.gz" "$url"; then
+if ! curl -fL --progress-bar -o "$tmp/outloud.tar.gz" "$DOWNLOAD_URL"; then
     die "Could not download OutLoud. Check the internet connection and try again."
 fi
 
@@ -129,8 +150,14 @@ xattr -dr com.apple.quarantine "$APP_PATH" 2>/dev/null || true
 # Without it, a stale record from an older install can win, and the permission
 # toggle then lands on a bundle that is not the one running: the switch reads
 # as on while nothing works.
-lsregister="/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister"
-[[ -x "$lsregister" ]] && "$lsregister" -f "$APP_PATH" 2>/dev/null || true
+#
+# Skipped under the test seam. Registering a scratch copy would make it a rival
+# claimant for the real identifier on the machine running the test, which is
+# the exact confusion this line exists to prevent.
+if [[ -z "${OUTLOUD_INSTALL_DIR:-}" ]]; then
+    lsregister="/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister"
+    [[ -x "$lsregister" ]] && "$lsregister" -f "$APP_PATH" 2>/dev/null || true
+fi
 
 ok "Installed"
 
@@ -141,7 +168,14 @@ ok "Installed"
 # ---------------------------------------------------------------------------
 
 step "Starting OutLoud"
-open "$APP_PATH"
+# The launch is skipped under the test seam: registering a scratch bundle with
+# LaunchServices and starting a second daemon would disturb the machine running
+# the test, and everything worth verifying has already happened by here.
+if [[ -n "${OUTLOUD_INSTALL_DIR:-}" ]]; then
+    say "(test mode: not launching)"
+else
+    open "$APP_PATH"
+fi
 
 say ""
 say "${GREEN}${BOLD}Done.${RESET} OutLoud is running. Look for the cat in your menu bar, at the"
