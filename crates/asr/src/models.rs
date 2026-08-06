@@ -40,8 +40,14 @@ pub fn registry() -> Vec<ModelSpec> {
         ModelSpec {
             id: "silero-vad",
             url: "https://github.com/snakers4/silero-vad/raw/v5.1.2/src/silero_vad/data/silero_vad.onnx",
-            sha256: None, // pin after first verified fetch
-            approx_bytes: 2_300_000,
+            // Fetched twice over independent transports, GitHub raw and the
+            // jsdelivr CDN mirror of the same tag, and hashed: identical
+            // bytes and identical length both times. GitHub publishes only
+            // git blob SHA1s, so unlike the Hugging Face models there is no
+            // upstream SHA256 to compare against; two transports is the
+            // strongest evidence available for this one.
+            sha256: Some("2623a2953f6ff3d2c1e61740c6cdb7168133479b267dfef114a4a3cc5bdd788f"),
+            approx_bytes: 2_327_524,
             license: "MIT",
         },
         ModelSpec {
@@ -64,8 +70,14 @@ pub fn registry() -> Vec<ModelSpec> {
             // istupakov's ONNX export of nvidia/parakeet-tdt-0.6b-v2, the
             // artifact sherpa-onnx consumes.
             url: "https://huggingface.co/istupakov/parakeet-tdt-0.6b-v2-onnx/resolve/main/encoder-model.int8.onnx",
-            sha256: None,
-            approx_bytes: 652_000_000,
+            // From Hugging Face's published hash for the file (the LFS
+            // object id is the SHA256 of the content), which is why this
+            // could be pinned without downloading 652MB. Note the tradeoff:
+            // this pins the file as `main` served it, and a repo that moves
+            // its main branch will now fail loudly instead of silently
+            // swapping the model under us. That is the intended behaviour.
+            sha256: Some("3e0581fda6ab843888b51e56d7ee78b6d5bc3237ec113af1f732d1d5286aa155"),
+            approx_bytes: 652_184_014,
             license: "CC-BY-4.0",
         },
     ]
@@ -272,7 +284,7 @@ mod tests {
 
     #[test]
     fn sha256_matches_known_vector() {
-        let dir = std::env::temp_dir().join("aqua-asr-test-sha");
+        let dir = std::env::temp_dir().join("outloud-asr-test-sha");
         std::fs::create_dir_all(&dir).unwrap();
         let p = dir.join("abc.txt");
         std::fs::write(&p, b"abc").unwrap();
@@ -285,7 +297,7 @@ mod tests {
 
     #[test]
     fn cached_file_short_circuits_network() {
-        let dir = std::env::temp_dir().join("aqua-asr-test-cache");
+        let dir = std::env::temp_dir().join("outloud-asr-test-cache");
         std::fs::create_dir_all(&dir).unwrap();
         let spec = ModelSpec {
             id: "already-here",
@@ -305,7 +317,7 @@ mod tests {
     /// present under the right name.
     #[test]
     fn a_cached_file_that_fails_its_pin_is_rejected_and_removed() {
-        let dir = std::env::temp_dir().join("aqua-asr-test-tampered");
+        let dir = std::env::temp_dir().join("outloud-asr-test-tampered");
         std::fs::create_dir_all(&dir).unwrap();
         let spec = ModelSpec {
             id: "pinned-model",
@@ -331,7 +343,7 @@ mod tests {
     /// verdict so launching the app does not re-hash 148MB every time.
     #[test]
     fn a_matching_cached_file_is_verified_once_then_marked() {
-        let dir = std::env::temp_dir().join("aqua-asr-test-verified");
+        let dir = std::env::temp_dir().join("outloud-asr-test-verified");
         std::fs::create_dir_all(&dir).unwrap();
         let spec = ModelSpec {
             id: "good-model",
@@ -354,9 +366,14 @@ mod tests {
         assert_eq!(fetch(&spec, &dir, |_| {}).unwrap(), path);
     }
 
+    /// Every registry entry must be pinned. An unpinned model downloads
+    /// behind a warning nobody reads, which is exactly how whisper-base.en,
+    /// silero-vad and parakeet stayed unverified for months while the
+    /// download code looked complete.
     #[test]
     fn registry_entries_are_well_formed() {
         for spec in registry() {
+            assert!(spec.sha256.is_some(), "{} has no pinned sha256", spec.id);
             assert!(spec.url.starts_with("https://"), "{}", spec.id);
             assert!(!spec.license.is_empty(), "{}", spec.id);
             assert!(spec.approx_bytes > 0, "{}", spec.id);
