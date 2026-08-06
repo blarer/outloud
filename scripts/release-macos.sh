@@ -35,6 +35,7 @@ ASSET="OutLoud-macos-arm64.tar.gz"
 #
 # A separate staging directory removes the hazard rather than warning about
 # it. The artifact is identical; only the path differs.
+LSREGISTER="/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister"
 STAGE="dist/release-staging"
 APP="$STAGE/OutLoud.app"
 
@@ -89,7 +90,21 @@ tar -czf "dist/$ASSET" -C "$STAGE" OutLoud.app
 # diagnose it, and the failure looks like a broken app rather than a bad build.
 echo "==> Verifying the archive round-trips"
 verify="$(mktemp -d)"
-trap 'rm -rf "$verify"' EXIT
+# Remove the staged bundle on EVERY exit path, including failures.
+#
+# Skipping the LaunchServices registration is not enough on its own: macOS
+# rescans disk on its own schedule and will re-register any .app it finds,
+# which makes the staged copy a second claimant for this bundle identifier
+# again, hours later, with nothing on screen connecting it to a release run.
+# The only durable fix is to not leave a second bundle lying around.
+# Unregister before deleting: LaunchServices keeps the record after the bundle
+# is gone, so removing the directory alone leaves a phantom claimant pointing
+# at a path that no longer exists, and the grant can still resolve to it.
+cleanup() {
+    [[ -d "$STAGE/OutLoud.app" ]] && "$LSREGISTER" -u "$STAGE/OutLoud.app" 2>/dev/null
+    rm -rf "$verify" "$STAGE"
+}
+trap cleanup EXIT
 tar -xzf "dist/$ASSET" -C "$verify"
 [[ -x "$verify/OutLoud.app/Contents/MacOS/outloud" ]] || {
     echo "error: the archive does not contain a runnable app at its root" >&2
