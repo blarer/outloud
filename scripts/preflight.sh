@@ -256,11 +256,14 @@ check_tcc_ids() {
 #
 # Both entries below name stale artifacts by necessity, so counting them as
 # "written" made the check vouch for the very names it exists to reject.
+# "path|reason", both required. The reason is a FIELD rather than a comment
+# because a comment beside an entry can drift out of sync with it and nothing
+# notices; a missing field fails the check. The question this answers months
+# later is "why is this file not ground truth", and the answer has to survive
+# next to the entry rather than above it.
 ARTIFACT_GROUND_TRUTH_EXCLUSIONS=(
-    # This file: its own comments quote the aqua-spike defect as evidence.
-    "preflight.sh"
-    # The rename script: its before/after table lists every old name.
-    ".rename-outloud.py"
+    "preflight.sh|its own comments quote the aqua-spike defect as evidence"
+    ".rename-outloud.py|its before/after table lists every superseded name"
 )
 
 check_workflow_artifacts() {
@@ -277,9 +280,19 @@ check_workflow_artifacts() {
         return
     fi
     # What the build scripts actually write.
-    local exclude_args=() ex
-    for ex in "${ARTIFACT_GROUND_TRUTH_EXCLUSIONS[@]}"; do
-        exclude_args+=("--exclude=$ex")
+    local exclude_args=() entry path reason
+    for entry in "${ARTIFACT_GROUND_TRUTH_EXCLUSIONS[@]}"; do
+        path="${entry%%|*}"
+        reason="${entry#*|}"
+        # An entry with no reason, or whose reason is just the path repeated,
+        # is a widening nobody has justified. Refusing to run beats running
+        # while blind to a file for reasons nobody recorded.
+        if [[ -z "$path" || "$reason" == "$entry" || -z "${reason// /}" ]]; then
+            record FAIL "workflow-artifacts" \
+                "exclusion '$entry' has no reason. NEXT: write it as \"path|why this file cannot be ground truth\""
+            return
+        fi
+        exclude_args+=("--exclude=$path")
     done
 
     local written
