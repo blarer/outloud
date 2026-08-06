@@ -31,6 +31,14 @@ mod capture {
             let image = NSImage::initWithSize(NSImage::alloc(), NSSize::new(size, size));
             #[allow(deprecated)]
             image.lockFocusFlipped(true);
+            // Dark swatch behind the white glyph, for the PNG only: the
+            // real status item draws on the menu bar's own background.
+            NSColor::colorWithSRGBRed_green_blue_alpha(0.13, 0.13, 0.13, 1.0).setFill();
+            NSBezierPath::bezierPathWithRect(objc2_foundation::NSRect::new(
+                NSPoint::new(0.0, 0.0),
+                NSSize::new(size, size),
+            ))
+            .fill();
             NSColor::whiteColor().setFill();
             for poly in overlay::cat::glyph_in(size) {
                 let path = NSBezierPath::bezierPath();
@@ -48,7 +56,7 @@ mod capture {
             #[allow(deprecated)]
             image.unlockFocus();
 
-            let rep = unsafe {
+            let rep = {
                 let data = image
                     .TIFFRepresentation()
                     .ok_or_else(|| anyhow::anyhow!("no tiff"))?;
@@ -62,9 +70,7 @@ mod capture {
                     .ok_or_else(|| anyhow::anyhow!("png encode failed"))?
             };
             let path = format!("/tmp/{name}.png");
-            unsafe {
-                png.writeToFile_atomically(&NSString::from_str(&path), true);
-            }
+            png.writeToFile_atomically(&NSString::from_str(&path), true);
             println!("{path}");
         }
         Ok(())
