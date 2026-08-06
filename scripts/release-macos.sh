@@ -24,34 +24,25 @@ DRY_RUN=0
 [[ "${1:-}" == "--dry-run" ]] && DRY_RUN=1
 
 ASSET="OutLoud-macos-arm64.tar.gz"
-APP="dist/OutLoud.app"
 
-# dist/OutLoud.app is ALSO the developer's daily driver. The bundler writes
-# there unconditionally, so running this script from a feature branch silently
-# replaces the app the developer is running with the branch's build. That
-# happened: a --dry-run from the cat branch turned the running menu bar icon
-# into the cat, with no warning and no obvious way to connect the two.
+# Build somewhere that is NOT dist/OutLoud.app.
 #
-# Refuse to be surprising about it. Say which branch is about to become the
-# installed app, and make anything other than main an explicit choice.
+# dist/OutLoud.app is the developer's daily driver: launched, granted
+# permissions, left running. The bundler writes there by default, so this
+# script used to replace the app they were using with whatever branch was
+# checked out. It did exactly that from the cat branch, and nothing in the
+# output connected a "dry run" to their menu bar icon changing.
+#
+# A separate staging directory removes the hazard rather than warning about
+# it. The artifact is identical; only the path differs.
+STAGE="dist/release-staging"
+APP="$STAGE/OutLoud.app"
+
 branch="$(git rev-parse --abbrev-ref HEAD)"
-if [[ "$branch" != "main" && "${OUTLOUD_RELEASE_BRANCH_OK:-0}" != "1" ]]; then
-    cat >&2 <<EOF
-error: this would rebuild $APP from '$branch', replacing the copy you run.
-
-  Your running OutLoud comes from $APP, and this script overwrites it.
-  Building from a feature branch here changes the app on THIS Mac, not just
-  the release artifact.
-
-  If that is what you want:
-      OUTLOUD_RELEASE_BRANCH_OK=1 $0 ${1:-}
-  Afterwards, restore your own build with:
-      git checkout main && scripts/bundle-outloud-macos.sh
-EOF
-    exit 1
-fi
 if [[ "$branch" != "main" ]]; then
-    echo "==> WARNING: building from '$branch'; $APP will become this branch's build"
+    # Still worth saying, because the BRANCH decides what the user downloads,
+    # even though it can no longer damage the local install.
+    echo "==> building the release from '$branch' (your own $PWD/dist/OutLoud.app is untouched)"
 fi
 
 [[ "$(uname -m)" == "arm64" ]] || {
@@ -63,7 +54,10 @@ echo "==> Building the app bundle"
 # OUTLOUD_KEEP_TCC: the bundler clears the local TCC grants after signing,
 # which is right for a developer rebuild and wrong here. Publishing a release
 # should not revoke the permissions on the machine doing the publishing.
-OUTLOUD_KEEP_TCC=1 scripts/bundle-outloud-macos.sh
+# OUTLOUD_DIST_DIR: build into staging, NOT dist/OutLoud.app. Without this the
+# bundler overwrites the app the developer is running, which is exactly the
+# accident this script caused once already.
+OUTLOUD_KEEP_TCC=1 OUTLOUD_DIST_DIR="$STAGE" scripts/bundle-outloud-macos.sh
 
 [[ -d "$APP" ]] || { echo "error: $APP was not produced" >&2; exit 1; }
 
@@ -88,7 +82,7 @@ echo "==> Packaging $ASSET"
 rm -f "dist/$ASSET"
 # -C so the archive contains OutLoud.app at the root, which is what the
 # installer's `mv "$tmp/$APP_NAME"` expects.
-tar -czf "dist/$ASSET" -C dist OutLoud.app
+tar -czf "dist/$ASSET" -C "$STAGE" OutLoud.app
 
 # Prove the archive round-trips before it is published. A truncated or
 # wrongly-rooted tarball fails on the user's machine, where there is no way to

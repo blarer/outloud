@@ -28,7 +28,17 @@ LEGACY_BUNDLE_ID="dev.hexavoice.hexad"
 # LaunchServices' registration tool. Not on PATH; the full path is stable
 # across macOS versions.
 LSREGISTER="/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister"
-APP_DIR="$ROOT/dist/$APP_NAME.app"
+# Where the bundle is assembled. Overridable because dist/OutLoud.app is the
+# developer's daily driver: they launch it, grant it permissions, and leave it
+# running. A release build from a feature branch that writes here silently
+# replaces the app they are using, which is how a cat mascot ended up in
+# someone's menu bar with nothing in the output to explain it.
+#
+# Callers that only want an artifact should set OUTLOUD_DIST_DIR to a scratch
+# path. Default behaviour is unchanged, so a plain rebuild still updates the
+# copy the developer runs, which is what they want from a plain rebuild.
+DIST_DIR="${OUTLOUD_DIST_DIR:-$ROOT/dist}"
+APP_DIR="$DIST_DIR/$APP_NAME.app"
 
 echo "==> Building outloud (release)"
 cargo build --release -p outloud --manifest-path "$ROOT/Cargo.toml"
