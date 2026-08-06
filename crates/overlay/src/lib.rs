@@ -37,6 +37,10 @@ pub mod layout;
 pub mod mark;
 pub mod menu;
 pub mod pixel;
+/// The animated cat mascot: pure vector geometry plus a pure animator.
+/// Platform-neutral for the same reason [`mark`] is: headless CI asserts
+/// its motion properties, and every backend renders the same points.
+pub mod cat;
 /// The animated skull mascot: pure vector geometry plus a pure animator.
 /// Platform-neutral for the same reason [`mark`] is: headless CI asserts
 /// its motion properties, and every backend renders the same points.

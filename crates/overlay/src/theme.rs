@@ -123,6 +123,25 @@ pub mod palette {
     /// on a near-black card at small sizes shimmers on subpixel-antialiased
     /// displays.
     pub const PAPER: Color = Color::rgb(0xF2, 0xF3, 0xF7);
+
+    // The cat mascot's coat, sampled from the owner's reference photos of
+    // one specific dilute calico domestic longhair rather than named from
+    // memory — "grey cat" would have produced a neutral grey, and hers is
+    // warm. Sampled values were averaged over the relevant fur regions in
+    // the indoor (colour-neutral) reference.
+    /// `#F5F1EA` — her white: the chest ruff and muzzle. Warm off-white,
+    /// not PAPER, which is cool.
+    pub const CAT_WHITE: Color = Color::rgb(0xF5, 0xF1, 0xEA);
+    /// `#B4A99C` — the dilute grey ("blue") of her back, ears and temple
+    /// patch. Warm grey-taupe: dilute black, not slate.
+    pub const CAT_GREY: Color = Color::rgb(0xB4, 0xA9, 0x9C);
+    /// `#E8D3BC` — the dilute cream of her forehead patch. Muted buff, the
+    /// dilute of red.
+    pub const CAT_CREAM: Color = Color::rgb(0xE8, 0xD3, 0xBC);
+    /// `#C89093` — her nose and inner ears: dusty pink.
+    pub const CAT_PINK: Color = Color::rgb(0xC8, 0x90, 0x93);
+    /// `#9BA86A` — her eyes: moss green with a yellow core.
+    pub const CAT_MOSS: Color = Color::rgb(0x9B, 0xA8, 0x6A);
 }
 
 use crate::state::OverlayState;
