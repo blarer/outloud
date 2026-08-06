@@ -144,11 +144,11 @@ echo "==> Publishing $TAG"
 # blocks pasting a curl-pipe-bash line into Terminal with "Possible Malware,
 # Paste Blocked", which is the correct warning for that shape of instruction
 # and a terrible first impression for a gift.
-gh release create "$TAG" "dist/$ASSET" "scripts/Install OutLoud.command" \
+gh release create "$TAG" "dist/$ASSET" "scripts/Install-OutLoud.command" \
     --title "OutLoud $TAG" \
     --notes "### Install
 
-Download **Install OutLoud.command** below, then double-click it.
+Download **Install-OutLoud.command** below, then double-click it.
 
 The first time, macOS may say it is from an unidentified developer. Right-click
 the file and choose **Open**, then **Open** again.

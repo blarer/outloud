@@ -230,6 +230,14 @@ pub const DIALOGS: &[(&str, &str, &[&str])] = &[
     (DONE_TITLE, DONE_BODY, &["Got it"]),
 ];
 
+/// The bundle the dialogs borrow their icon from, and the icon inside it.
+///
+/// Named constants because they must match what bundle-outloud-macos.sh writes
+/// into the bundle; a typo here degrades silently to a generic icon rather
+/// than failing anything.
+const APP_NAME: &str = "OutLoud";
+const ICON_RESOURCE: &str = "OutLoud.icns";
+
 const HELLO_TITLE: &str = "Hi! I'm OutLoud.";
 const HELLO_BODY: &str = "I turn your voice into text anywhere you can type.\n\n\
      I need to ask for two permissions first. It takes about a minute, and \
@@ -268,13 +276,29 @@ pub fn dialog_script(title: &str, body: &str, buttons: &[&str]) -> String {
         .collect::<Vec<_>>()
         .join(", ");
     let default = buttons.first().map(|b| escape(b)).unwrap_or_default();
+    // The app's own icon rather than `with icon note`. osascript shows the icon
+    // of whatever RUNS the script, so the note default renders as a generic
+    // document or, when launched from a shell installer, a bare folder. The
+    // first thing a new user saw was a red folder introducing itself as
+    // OutLoud.
+    //
+    // Falls back to `note` if the bundle cannot be located, because a dialog
+    // with a plain icon is fine and a dialog that fails to compile never
+    // appears at all.
     format!(
-        "display dialog \"{}\" with title \"{}\" buttons {{{}}} \
-         default button \"{}\" with icon note",
-        escape(body),
-        escape(title),
-        list,
-        default,
+        "set theIcon to note\n\
+         try\n\
+         set theIcon to (path to resource \"{icon}\" in bundle \
+         (path to application \"{app}\"))\n\
+         end try\n\
+         display dialog \"{body}\" with title \"{title}\" buttons {{{list}}} \
+         default button \"{default}\" with icon theIcon",
+        icon = ICON_RESOURCE,
+        app = APP_NAME,
+        body = escape(body),
+        title = escape(title),
+        list = list,
+        default = default,
     )
 }
 
