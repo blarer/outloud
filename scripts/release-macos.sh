@@ -107,7 +107,7 @@ gh release create "$TAG" "dist/$ASSET" \
     --notes "Install or update:
 
 \`\`\`
-curl -fsSL https://raw.githubusercontent.com/blarer/outloud/overlay/cat-mascot/scripts/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/blarer/outloud/refs/heads/overlay/cat-mascot/scripts/install.sh | bash
 \`\`\`
 
 Apple Silicon, macOS 26 or newer." \

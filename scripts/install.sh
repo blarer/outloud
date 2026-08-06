@@ -1,12 +1,19 @@
 #!/usr/bin/env bash
 # One-line installer for OutLoud, meant to be piped from curl:
 #
-#   curl -fsSL https://raw.githubusercontent.com/blarer/outloud/overlay/cat-mascot/scripts/install.sh | bash
+#   curl -fsSL https://raw.githubusercontent.com/blarer/outloud/refs/heads/overlay/cat-mascot/scripts/install.sh | bash
 #
 # The URL names a BRANCH, not main, and that is deliberate. This installer and
 # the first-run walkthrough exist for one person's build; they are not part of
 # the shipped product. Retargeting this at main to "fix" the branch name would
 # quietly make a private build the public install path.
+#
+# The `refs/heads/` segment is required, not decoration. This branch name
+# contains a slash, so the short form
+#   raw.githubusercontent.com/OWNER/REPO/overlay/cat-mascot/scripts/install.sh
+# is ambiguous between the branch `overlay` and the branch `overlay/cat-mascot`,
+# and GitHub answers it with a 404. The explicit ref form resolves. Verified
+# both ways: the short form returns 404 and this one returns 200.
 #
 # The branch must therefore stay alive as long as anyone might reinstall from
 # it. Deleting it breaks the one-liner with a bare 404 that does not mention
