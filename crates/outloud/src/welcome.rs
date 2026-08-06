@@ -258,7 +258,7 @@ const DONE_BODY: &str = "Hold the right Option key (just right of the space bar)
 /// compile, and the failure path is silent by design (a dialog that cannot be
 /// shown must not change the exit path), so a malformed prompt would simply
 /// mean the user is never asked for the permission at all.
-fn dialog_script(title: &str, body: &str, buttons: &[&str]) -> String {
+pub fn dialog_script(title: &str, body: &str, buttons: &[&str]) -> String {
     fn escape(s: &str) -> String {
         s.replace('\\', "\\\\").replace('"', "\\\"")
     }
@@ -283,7 +283,7 @@ fn dialog_script(title: &str, body: &str, buttons: &[&str]) -> String {
 /// Split out for the same reason as the script builder: the format is
 /// osascript's, not ours, and a parser that silently returns `None` would make
 /// every button read as a cancel.
-fn parse_button(stdout: &str) -> Option<String> {
+pub fn parse_button(stdout: &str) -> Option<String> {
     stdout
         .split("button returned:")
         .nth(1)
