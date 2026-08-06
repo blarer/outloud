@@ -26,6 +26,34 @@ DRY_RUN=0
 ASSET="OutLoud-macos-arm64.tar.gz"
 APP="dist/OutLoud.app"
 
+# dist/OutLoud.app is ALSO the developer's daily driver. The bundler writes
+# there unconditionally, so running this script from a feature branch silently
+# replaces the app the developer is running with the branch's build. That
+# happened: a --dry-run from the cat branch turned the running menu bar icon
+# into the cat, with no warning and no obvious way to connect the two.
+#
+# Refuse to be surprising about it. Say which branch is about to become the
+# installed app, and make anything other than main an explicit choice.
+branch="$(git rev-parse --abbrev-ref HEAD)"
+if [[ "$branch" != "main" && "${OUTLOUD_RELEASE_BRANCH_OK:-0}" != "1" ]]; then
+    cat >&2 <<EOF
+error: this would rebuild $APP from '$branch', replacing the copy you run.
+
+  Your running OutLoud comes from $APP, and this script overwrites it.
+  Building from a feature branch here changes the app on THIS Mac, not just
+  the release artifact.
+
+  If that is what you want:
+      OUTLOUD_RELEASE_BRANCH_OK=1 $0 ${1:-}
+  Afterwards, restore your own build with:
+      git checkout main && scripts/bundle-outloud-macos.sh
+EOF
+    exit 1
+fi
+if [[ "$branch" != "main" ]]; then
+    echo "==> WARNING: building from '$branch'; $APP will become this branch's build"
+fi
+
 [[ "$(uname -m)" == "arm64" ]] || {
     echo "error: this produces an arm64 build and must run on Apple Silicon" >&2
     exit 1
