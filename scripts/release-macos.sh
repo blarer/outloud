@@ -139,15 +139,30 @@ TAG="v$(date +%Y.%m.%d-%H%M)"
 echo "==> Publishing $TAG"
 # --latest matters: the installer downloads /releases/latest/download/, so a
 # release that is not marked latest is invisible to every existing installer.
-gh release create "$TAG" "dist/$ASSET" \
+# The double-clickable installer ships as a release asset so the instruction
+# can be "download this and open it" rather than a command to paste. macOS 26
+# blocks pasting a curl-pipe-bash line into Terminal with "Possible Malware,
+# Paste Blocked", which is the correct warning for that shape of instruction
+# and a terrible first impression for a gift.
+gh release create "$TAG" "dist/$ASSET" "scripts/Install OutLoud.command" \
     --title "OutLoud $TAG" \
-    --notes "Install or update:
+    --notes "### Install
+
+Download **Install OutLoud.command** below, then double-click it.
+
+The first time, macOS may say it is from an unidentified developer. Right-click
+the file and choose **Open**, then **Open** again.
+
+Apple Silicon, macOS 26 or newer.
+
+<details><summary>Terminal alternative</summary>
 
 \`\`\`
 curl -fsSL https://raw.githubusercontent.com/blarer/outloud/refs/heads/overlay/cat-mascot/scripts/install.sh | bash
 \`\`\`
 
-Apple Silicon, macOS 26 or newer." \
+macOS 26 may block pasting this; the download above avoids that.
+</details>" \
     --latest
 
 echo "==> Published. The installer one-liner now serves this build."
