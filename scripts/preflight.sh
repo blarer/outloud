@@ -143,6 +143,26 @@ check_stale_names
 #    keeps working and a live instruction cannot hide behind it.
 check_tcc_ids() {
     local bad=""
+
+    # A legacy reset can declare itself intentional. That is sound while it
+    # stays rare: the marker's job is to make an author stop and decide which
+    # case they are in. Once it is routine it stops being a decision and
+    # starts being a convention, and this check is then vouching for whatever
+    # the repo says about itself.
+    #
+    # Today: one real use, the quickstart's migration step that clears the
+    # grant the rename orphaned. Raising this number is fine when a genuine
+    # new migration lands; doing it without noticing is what this prevents.
+    local expected_markers=1
+    local markers
+    markers="$(
+        grep -rl 'preflight: legacy-tcc-id intentional' \
+            --include='*.md' --include='*.sh' --include='*.rs' . 2>/dev/null |
+            grep -v '^./target/' | grep -v 'preflight.sh' | wc -l | tr -d ' '
+    )"
+    if [[ "$markers" -gt "$expected_markers" ]]; then
+        bad+="$markers files claim legacy-tcc-id is intentional, budget $expected_markers: the marker is becoming the default rather than the exception; "
+    fi
     # Ground truth: identifiers the repo creates, from the places that create
     # them (bundle scripts and the Rust constant the doctor reports against).
     local declared
@@ -217,13 +237,51 @@ check_tcc_ids() {
 
 # 9. Every dist/ path a workflow verifies is one a build script writes.
 #
+#    SCOPE, stated because this gate reads the same repo it judges: it can
+#    only catch SKEW between the workflow and the scripts, never a world
+#    where both are wrong together. The only external anchor is a build
+#    actually producing the file, and that is the release job, not preflight.
+#    A check whose ground truth is the artifact under test has no way to
+#    notice that its ground truth moved.
+#
 #    release.yml checked for dist/*/aqua-spike[.exe] long after the build
 #    scripts had been renamed to emit outloud-spike. A verification step
 #    pointed at a path nothing produces, which is a gate that cannot fail for
 #    the reason it exists and can fail for one it does not.
+# Files excluded from artifact ground truth, each with the reason inline.
+#
+# By PATH, never by pattern: a pattern silently widens as the repo grows,
+# whereas a path breaks loudly when the file moves, and that break is exactly
+# the moment to re-justify the exclusion.
+#
+# Both entries below name stale artifacts by necessity, so counting them as
+# "written" made the check vouch for the very names it exists to reject.
+ARTIFACT_GROUND_TRUTH_EXCLUSIONS=(
+    # This file: its own comments quote the aqua-spike defect as evidence.
+    "preflight.sh"
+    # The rename script: its before/after table lists every old name.
+    ".rename-outloud.py"
+)
+
 check_workflow_artifacts() {
     local bad=""
+
+    # The exclusion list is the softest part of this gate, so widening it has
+    # to be deliberate rather than quiet. Growing the array without updating
+    # this number fails the check, which turns "someone added one more
+    # exclusion" into a red line instead of a diff nobody reads.
+    local expected_exclusions=2
+    if [[ ${#ARTIFACT_GROUND_TRUTH_EXCLUSIONS[@]} -ne $expected_exclusions ]]; then
+        record FAIL "workflow-artifacts" \
+            "exclusion list has ${#ARTIFACT_GROUND_TRUTH_EXCLUSIONS[@]} entries, expected $expected_exclusions. NEXT: every exclusion blinds this check to a file, so update expected_exclusions in the same commit and say in the message why the new file cannot be ground truth"
+        return
+    fi
     # What the build scripts actually write.
+    local exclude_args=() ex
+    for ex in "${ARTIFACT_GROUND_TRUTH_EXCLUSIONS[@]}"; do
+        exclude_args+=("--exclude=$ex")
+    done
+
     local written
     written="$(
         # Every dist/ path any build or bundle script mentions, plus the
@@ -234,13 +292,13 @@ check_workflow_artifacts() {
         # ci-compliance.sh, and a check that only knows about two filename
         # patterns fails on the third the moment someone adds one.
         grep -rhoE 'dist/[A-Za-z0-9_/*.${}:+-]+' scripts/ 2>/dev/null \
-            --exclude=preflight.sh --exclude=.rename-outloud.py |
+            "${exclude_args[@]}" |
             grep -vE '^[[:space:]]*#' |
             sed -E 's/\$\{[^}]*\}/*/g; s/\$[A-Za-z_]+/*/g' | sort -u
         # Filenames assembled next to a dist/ variable rather than inside it,
         # e.g. cp "$BIN" "$OUT_DIR/outloud-spiked${TARGET:+-$TARGET}".
         grep -rhoE '"\$[A-Za-z_]+/[A-Za-z0-9_.${}:+-]+' scripts/ 2>/dev/null \
-            --exclude=preflight.sh --exclude=.rename-outloud.py |
+            "${exclude_args[@]}" |
             sed -E 's/.*\///; s/\$\{[^}]*\}//g; s/\$[A-Za-z_]+//g' | sort -u
     )"
 
