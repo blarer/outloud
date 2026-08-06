@@ -27,7 +27,7 @@ by *probing*, not by whether the user clicked our button:
 |  [ ] Voice model           2.1 GB download, not started      |
 |                                                              |
 |  macOS needs you to allow this in System Settings.           |
-|  We opened the right pane. Toggle on "AquaOSS".              |
+|  We opened the right pane. Toggle on "OutLoud".              |
 |                                                              |
 |  This permission lets the app read and rewrite text in       |
 |  the field you're editing. It is checked live: this line     |
@@ -64,7 +64,7 @@ What M0 proved, and how the flow absorbs each finding:
 | Finding | Flow consequence |
 |---|---|
 | Grant follows the *responsible process*: a binary run from a shell is judged by the terminal's permission | The shipping app is always launched via LaunchServices, so users never hit this. `outloud doctor` detects the case anyway (trusted-check fails while the toggle is on and the responsible process is a terminal) and says: "You're running this from a terminal, which macOS treats as the terminal asking for permission. Launch the app normally, or grant your terminal Accessibility." |
-| Grant is pinned to `cdhash`; re-sign silently revokes while the toggle reads "on" | Ship with a Developer ID cert from the first external build so grants pin to the team ID. If the probe fails while the toggle reads on, the flow says: "macOS is holding a stale approval. Remove AquaOSS from the list, then re-add it" with a button to the pane. Never let the user stare at an on-toggle that doesn't work. |
+| Grant is pinned to `cdhash`; re-sign silently revokes while the toggle reads "on" | Ship with a Developer ID cert from the first external build so grants pin to the team ID. If the probe fails while the toggle reads on, the flow says: "macOS is holding a stale approval. Remove OutLoud from the list, then re-add it" with a button to the pane. Never let the user stare at an on-toggle that doesn't work. |
 | `-25204` means "not trusted", not "busy" | Error mapping happens in `ax-edit`; onboarding renders `NotTrusted` as the Accessibility checklist item flipping back to unverified, with the pane-opening button. Raw codes appear only in `outloud doctor --verbose`. |
 | AX calls can hang on a busy target | All probes are time-bounded (500ms). A timeout during verification retries against our own scratch window, never against a third-party app, so verification can't be poisoned by someone else's hung Electron process. |
 
@@ -85,7 +85,7 @@ synthesize nothing, just confirm the tap reports enabled.
   `ms-settings:privacy-microphone` and poll.
 - **No UAC by default.** The app installs and runs per-user. The one case that
   needs elevation is injecting into elevated windows (an admin terminal):
-  detect it at use-time, not install-time, and offer "Restart AquaOSS
+  detect it at use-time, not install-time, and offer "Restart OutLoud
   elevated for this session" rather than demanding admin up front.
 - **SmartScreen** is onboarding before our onboarding: an unsigned binary gets
   a scare screen that ends most installs. Code-signing cert is a launch

@@ -11,6 +11,9 @@ publish = false
 description = "Environmental diagnostics: turn confusing failures into named next actions"
 
 [dependencies]
+# Path policy only: the doctor must probe the same model directory the
+# daemon actually reads, which is what a hand-copied path got wrong before.
+config = { path = "../config" }
 anyhow.workspace = true
 # Only for the accessibility trust probe; diag never edits text itself.
 ax-edit = { path = "../ax-edit" }

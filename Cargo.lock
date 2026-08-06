@@ -71,6 +71,7 @@ name = "asr"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "config",
  "serde",
  "serde_json",
  "sha2",
@@ -488,6 +489,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "ax-edit",
+ "config",
  "hotkey",
 ]
 
@@ -1096,6 +1098,7 @@ dependencies = [
 name = "llm"
 version = "0.1.0"
 dependencies = [
+ "config",
  "llama-cpp-2",
  "sha2",
  "thiserror 2.0.19",

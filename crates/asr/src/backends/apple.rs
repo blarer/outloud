@@ -16,7 +16,7 @@
 //! and ~60ms of startup (measured), is debuggable with a shell one-liner,
 //! and crash-isolates the OS speech stack from the app. The helper source
 //! lives at `crates/asr/helper/transcriber.swift`; build it with
-//! `swiftc -O transcriber.swift -o aqua-speech-helper`.
+//! `swiftc -O transcriber.swift -o outloud-speech-helper`.
 //!
 //! ## Measured on this machine (M-series, macOS 26.5, 2026-07)
 //!
@@ -62,25 +62,43 @@ const FINALIZE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
 /// Locate the helper binary: explicit override, then next to the current
 /// executable (release layout), then the in-repo build (dev layout).
 fn find_helper() -> Option<PathBuf> {
-    if let Some(p) = std::env::var_os("AQUA_SPEECH_HELPER") {
-        let p = PathBuf::from(p);
-        if p.exists() {
-            return Some(p);
-        }
-    }
-    if let Ok(exe) = std::env::current_exe() {
-        if let Some(dir) = exe.parent() {
-            let p = dir.join("aqua-speech-helper");
+    // The pre-rename names are still accepted, in both the variable and the
+    // filename. A developer has the old binary built in their tree and the
+    // old variable in a shell profile, and the failure mode of ignoring them
+    // is not an error message: it is dictation that silently stops working
+    // until they read this function.
+    for var in ["OUTLOUD_SPEECH_HELPER", LEGACY_SPEECH_HELPER_ENV] {
+        if let Some(p) = std::env::var_os(var) {
+            let p = PathBuf::from(p);
             if p.exists() {
                 return Some(p);
             }
         }
     }
-    let dev = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("helper")
-        .join("aqua-speech-helper");
-    dev.exists().then_some(dev)
+    for name in [HELPER_BIN, LEGACY_HELPER_BIN] {
+        if let Ok(exe) = std::env::current_exe() {
+            if let Some(dir) = exe.parent() {
+                let p = dir.join(name);
+                if p.exists() {
+                    return Some(p);
+                }
+            }
+        }
+        let dev = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("helper")
+            .join(name);
+        if dev.exists() {
+            return Some(dev);
+        }
+    }
+    None
 }
+
+/// The helper binary this build asks for, and the name it shipped under
+/// before the product was renamed to OutLoud.
+const HELPER_BIN: &str = "outloud-speech-helper";
+const LEGACY_HELPER_BIN: &str = "aqua-speech-helper";
+const LEGACY_SPEECH_HELPER_ENV: &str = "AQUA_SPEECH_HELPER";
 
 pub struct AppleRecognizer {
     child: Child,
@@ -99,9 +117,9 @@ impl AppleRecognizer {
     pub fn new() -> anyhow::Result<Self> {
         let helper = find_helper().ok_or_else(|| {
             anyhow::anyhow!(
-                "aqua-speech-helper not found; build it with \
-                 `swiftc -O crates/asr/helper/transcriber.swift -o aqua-speech-helper` \
-                 or set AQUA_SPEECH_HELPER"
+                "outloud-speech-helper not found; build it with \
+                 `swiftc -O crates/asr/helper/transcriber.swift -o outloud-speech-helper` \
+                 or set OUTLOUD_SPEECH_HELPER"
             )
         })?;
         let mut child = Command::new(&helper)
@@ -313,7 +331,7 @@ mod tests {
     #[ignore = "requires macOS 26 SpeechTranscriber and built helper"]
     fn transcribes_synthesized_speech() {
         // Synthesize a known sentence with `say`, convert to 16k f32.
-        let dir = std::env::temp_dir().join("aqua-apple-asr-test");
+        let dir = std::env::temp_dir().join("outloud-apple-asr-test");
         std::fs::create_dir_all(&dir).unwrap();
         let aiff = dir.join("t.aiff");
         let caf = dir.join("t.caf");

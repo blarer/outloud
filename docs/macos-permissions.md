@@ -19,7 +19,7 @@ The fix is to launch through LaunchServices, which makes the app responsible for
 itself:
 
 ```bash
-open -a dist/AquaSpike.app --args probe
+open -a dist/OutLoudSpike.app --args probe
 ```
 
 `scripts/run.sh` wraps this. Because LaunchServices detaches the process from

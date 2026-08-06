@@ -14,7 +14,7 @@ APP_DIR="$ROOT/dist/OutLoud.app"
 
 if [[ ! -d "$APP_DIR" ]]; then
     # Must be the OutLoud bundler, not scripts/bundle-macos.sh: that one builds
-    # the spike-cli development harness as dist/AquaSpike.app, so calling it
+    # the spike-cli development harness as dist/OutLoudSpike.app, so calling it
     # here announced "Building it first", produced a different app, and then
     # asked the user to drag a bundle that did not exist.
     echo "App bundle not found. Building it first."

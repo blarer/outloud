@@ -32,7 +32,7 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
 
-APP_NAME="AquaSpike"
+APP_NAME="OutLoudSpike"
 BUNDLE_ID="dev.hexavoice.spike"
 VERSION="$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)"
 APP_DIR="dist/$APP_NAME.app"

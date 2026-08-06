@@ -12,7 +12,7 @@
   # Toolchain source: rust-overlay reads rust-toolchain.toml, so the flake
   # and rustup agree on the compiler BY CONSTRUCTION rather than by two pins
   # that drift apart.
-  description = "aqua-oss-spike: local edit-by-voice M0 spike";
+  description = "outloud-spike: local edit-by-voice M0 spike";
 
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-25.05";
@@ -49,7 +49,7 @@
         };
 
         packages.default = pkgs.rustPlatform.buildRustPackage {
-          pname = "aqua-spike";
+          pname = "outloud-spike";
           version = "0.1.0";
           src = self;
           cargoLock.lockFile = ./Cargo.lock;

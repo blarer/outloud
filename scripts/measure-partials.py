@@ -18,7 +18,7 @@ import sys
 import time
 import wave
 
-HELPER = "crates/asr/helper/aqua-speech-helper"
+HELPER = "crates/asr/helper/outloud-speech-helper"
 CHUNK_MS = 100
 
 

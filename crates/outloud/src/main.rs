@@ -357,6 +357,15 @@ fn main() -> anyhow::Result<()> {
 
     let mut args = parse_args()?;
 
+    // Move a pre-rename model cache into place before anything asks where
+    // the weights are. Silent in the common case; loud only when it did
+    // something or could not, because a user whose 1.5GB of models just
+    // moved should be able to find them.
+    match config::migrate_model_dir() {
+        config::ModelDirMigration::NothingToDo => {}
+        outcome => eprintln!("outloud: {outcome}"),
+    }
+
     // Refuse to be the second daemon. Two copies both bind the hotkey and
     // both open the microphone, so one keypress records the user twice and
     // types their words twice into the field they are focused on. Taken

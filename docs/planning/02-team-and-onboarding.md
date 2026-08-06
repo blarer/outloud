@@ -45,12 +45,12 @@ terminal.
    binary from your shell and macOS checks your *terminal's* Accessibility
    permission, ignoring the app's own grant, while System Settings shows the
    toggle on. Launch through LaunchServices instead: `./scripts/run.sh` or
-   `open -a dist/AquaSpike.app --args probe`. Output is mirrored to
-   `AQUA_SPIKE_LOG` because LaunchServices detaches from the terminal.
+   `open -a dist/OutLoudSpike.app --args probe`. Output is mirrored to
+   `OUTLOUD_SPIKE_LOG` because LaunchServices detaches from the terminal.
 3. **Ad-hoc signatures silently revoke the grant on every rebuild.** TCC pins
    approval to the binary's `cdhash`. Rebuild → new hash → every call fails
    while the toggle still reads "on". After a rebuild:
-   `tccutil reset Accessibility dev.aquaoss.spike`, then re-grant with
+   `tccutil reset Accessibility dev.hexavoice.spike`, then re-grant with
    `./scripts/grant-accessibility.sh`. This disappears once you use the team
    Developer ID profile (ask SYS for it).
 4. **Applications hang windows off `AXWindows`, not `AXChildren`.** An app
@@ -68,11 +68,11 @@ into another process; never remove that.
 **Day 1 — environment and first run.**
 
 ```bash
-git clone <repo> && cd aqua-oss-spike
+git clone <repo> && cd outloud-spike
 cargo test                       # edit-intent tests pass with no permissions
 ./scripts/bundle-macos.sh        # .app bundle: gives TCC a stable identity
 ./scripts/grant-accessibility.sh # opens the pane, waits for the toggle
-BIN=dist/AquaSpike.app/Contents/MacOS/AquaSpike
+BIN=dist/OutLoudSpike.app/Contents/MacOS/OutLoudSpike
 $BIN dry-run "change quick to slow"   # no permissions needed
 $BIN probe                            # via scripts/run.sh if it fails: trap 2
 $BIN edit --after 5 "change hello to goodbye"  # click into TextEdit first

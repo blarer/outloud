@@ -27,6 +27,9 @@ whisper-cuda = ["whisper-rs/cuda"]      # NVIDIA
 whisper-vulkan = ["whisper-rs/vulkan"]  # AMD, Intel, and NVIDIA without CUDA
 
 [dependencies]
+# Path policy only: one crate decides where model weights live, so the
+# recognizer, the LLM and the doctor cannot disagree about the directory.
+config = { path = "../config" }
 anyhow = { workspace = true }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"

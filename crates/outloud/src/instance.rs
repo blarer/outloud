@@ -232,7 +232,7 @@ fn try_lock_exclusive(_file: &std::fs::File) -> bool {
 ///
 /// ```text
 ///   PID  PPID STARTED                       ELAPSED COMMAND
-/// 45677     1 Tue Jul 28 01:07:42 2026     07:46:20 .../aqua-speech-helper
+/// 45677     1 Tue Jul 28 01:07:42 2026     07:46:20 .../outloud-speech-helper
 /// ```
 ///
 /// **The trigger is unknown.** The obvious hypothesis, that `SIGKILL` skips
@@ -255,10 +255,15 @@ fn try_lock_exclusive(_file: &std::fs::File) -> bool {
 pub fn reap_stale_helpers() -> usize {
     // Match on the binary's name rather than a full path: the helper lives
     // beside the executable in a bundle, in the source tree during
-    // development, and wherever AQUA_SPEECH_HELPER points, and a stale one
+    // development, and wherever OUTLOUD_SPEECH_HELPER points, and a stale one
     // from any of those is equally wrong.
+    //
+    // The suffix rather than the full name, so a helper left running by a
+    // pre-rename build (aqua-speech-helper) is reaped too. Those are the
+    // most likely stale processes on any machine that has been through the
+    // rename, and the one holding the microphone.
     let Ok(out) = std::process::Command::new("pgrep")
-        .args(["-f", "aqua-speech-helper"])
+        .args(["-f", "-speech-helper"])
         .output()
     else {
         // No pgrep, or it failed. Not being able to tidy up is not a reason

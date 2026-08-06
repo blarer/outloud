@@ -71,7 +71,7 @@ closes the task; the generic per-task Definition of Done in
 | id | title | owner | size | deps | acceptance criteria |
 |---|---|---|---|---|---|
 | D-01 | Engine/daemon split with versioned local protocol | SYS | L | R-06, E-04 | Daemon owns audio/ASR/LLM; protocol documented (versioned JSON-RPC over unix socket); macOS app runs as client with no latency regression > 10ms p50 |
-| D-02 | CLI client | SYS | M | D-01 | `aqua-cli dictate`, `aqua-cli edit "<cmd>"`, `aqua-cli status` work headless (no GUI session); exit codes documented |
+| D-02 | CLI client | SYS | M | D-01 | `outloud-cli dictate`, `outloud-cli edit "<cmd>"`, `outloud-cli status` work headless (no GUI session); exit codes documented |
 | D-03 | Remote/SSH operation mode | SYS | L | D-02 | Audio captured locally, text injected on remote host via forwarded socket; end-to-end p50 ≤ local p50 + 100ms on LAN; documented recipe |
 | D-04 | Daemon security: socket permissions + auth | SYS | M | D-01 | Socket is user-only (0600); protocol rejects other-uid peers; threat model documented for security review |
 | D-05 | Protocol conformance test suite | SYS | M | D-01 | Every protocol message round-trips in tests; version-mismatch handshake yields a clear error, not a hang |

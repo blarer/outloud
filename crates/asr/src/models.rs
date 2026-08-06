@@ -4,7 +4,7 @@
 //! hundreds of MB, some carry non-MIT licences (Parakeet weights are
 //! CC-BY-4.0), and users on macOS 26 may never need any of them (Apple's
 //! backend is zero-install). So models are fetched on demand into
-//! `~/.aqua-oss/models`, verified by SHA256, and re-download resumes from
+//! `~/.outloud/models`, verified by SHA256, and re-download resumes from
 //! where it stopped, because a 600MB fetch dying at 95% on hotel Wi-Fi and
 //! restarting from zero is how apps earn one-star reviews.
 //!
@@ -47,8 +47,16 @@ pub fn registry() -> Vec<ModelSpec> {
         ModelSpec {
             id: "whisper-base.en",
             url: "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-base.en.bin",
-            sha256: None,
-            approx_bytes: 148_000_000,
+            // Pinned against the hash Hugging Face publishes for the file
+            // (LFS object id, which is the SHA256 of the content:
+            // `POST /api/models/ggerganov/whisper.cpp/paths-info/main`
+            // with `{"paths":["ggml-base.en.bin"]}`), cross-checked against
+            // a local `sha256sum` of a fetched copy. Both agree, and both
+            // agree on the size below, so an unpinned fetch is no longer
+            // the only thing standing between a rehosted file and the
+            // user's microphone.
+            sha256: Some("a03779c86df3323075f5e796cb2ce5029f00ec8869eee3fdfb897afe36c6d002"),
+            approx_bytes: 147_964_211,
             license: "MIT",
         },
         ModelSpec {
@@ -64,11 +72,12 @@ pub fn registry() -> Vec<ModelSpec> {
 }
 
 /// Where models live. Overridable for tests via `base`.
+///
+/// Delegated to `config::paths` so the recognizer, the LLM cache and the
+/// doctor cannot drift apart about the directory, and so the rename from
+/// `~/.aqua-oss` has exactly one migration.
 pub fn default_cache_dir() -> PathBuf {
-    let home = std::env::var_os("HOME")
-        .map(PathBuf::from)
-        .unwrap_or_else(|| PathBuf::from("."));
-    home.join(".aqua-oss").join("models")
+    config::model_dir()
 }
 
 /// Download progress, delivered after every chunk.
@@ -112,9 +121,14 @@ pub fn fetch(
     std::fs::create_dir_all(cache_dir)?;
     let final_path = cache_dir.join(spec.id);
     if final_path.exists() {
-        // Present implies verified (see rename invariant above), so opening
-        // the app offline with a warm cache costs zero hashing time.
-        return Ok(final_path);
+        // Present implies verified *if this process put it there*. Files
+        // arriving any other way break that: the documented
+        // `curl -o ~/.outloud/models/whisper-base.en ...` shortcut, a
+        // hand-copied model, and every file cached before its hash was
+        // pinned. Those are exactly the paths an attacker or a bad mirror
+        // would use, so a pinned model with no verification marker is
+        // hashed once, here, rather than trusted forever.
+        return verify_cached(spec, &final_path).map(|()| final_path);
     }
     let partial_path = cache_dir.join(format!("{}.partial", spec.id));
     let existing = std::fs::metadata(&partial_path)
@@ -185,7 +199,56 @@ pub fn fetch(
         );
     }
     std::fs::rename(&partial_path, &final_path)?;
+    mark_verified(&final_path);
     Ok(final_path)
+}
+
+/// Path of the marker recording that `<model>` was checksum-verified.
+///
+/// A sidecar rather than a field in a database: it lives and dies with the
+/// model file, survives nothing being written atomically anywhere else, and
+/// a user who deletes it only costs themselves one re-hash.
+fn verified_marker(model_path: &Path) -> PathBuf {
+    let mut name = model_path.file_name().unwrap_or_default().to_os_string();
+    name.push(".verified");
+    model_path.with_file_name(name)
+}
+
+fn mark_verified(model_path: &Path) {
+    // Best effort: a missing marker costs a re-hash on next launch, which is
+    // cheap, while failing the fetch over an unwritable sidecar would deny
+    // the user a model they successfully downloaded and verified.
+    let _ = std::fs::write(verified_marker(model_path), b"sha256-ok\n");
+}
+
+/// Ensure a cached file matches its pinned hash, hashing it at most once.
+///
+/// Unpinned models are accepted as before: there is nothing to check them
+/// against, and refusing to run would only punish users for a checksum the
+/// project has not yet recorded.
+///
+/// A mismatch deletes the file. Leaving it would mean the next launch hits
+/// the same error, and the honest state after "this is not the model you
+/// asked for" is no model at all.
+pub fn verify_cached(spec: &ModelSpec, model_path: &Path) -> Result<(), FetchError> {
+    let Some(expected) = spec.sha256 else {
+        return Ok(());
+    };
+    let marker = verified_marker(model_path);
+    if marker.exists() {
+        return Ok(());
+    }
+    let actual = sha256_file(model_path)?;
+    if actual != expected {
+        let _ = std::fs::remove_file(model_path);
+        return Err(FetchError::ChecksumMismatch {
+            id: spec.id.to_string(),
+            expected: expected.to_string(),
+            actual,
+        });
+    }
+    mark_verified(model_path);
+    Ok(())
 }
 
 /// SHA256 of a file, streamed so 600MB models do not need 600MB of RAM.
@@ -235,6 +298,60 @@ mod tests {
         std::fs::write(dir.join(spec.id), b"hit").unwrap();
         let path = fetch(&spec, &dir, |_| {}).unwrap();
         assert_eq!(std::fs::read(path).unwrap(), b"hit");
+    }
+
+    /// A file that arrived outside `fetch` (documented `curl` shortcut,
+    /// hand copy, pre-pin cache) must not be trusted just because it is
+    /// present under the right name.
+    #[test]
+    fn a_cached_file_that_fails_its_pin_is_rejected_and_removed() {
+        let dir = std::env::temp_dir().join("aqua-asr-test-tampered");
+        std::fs::create_dir_all(&dir).unwrap();
+        let spec = ModelSpec {
+            id: "pinned-model",
+            // Unroutable: a rejection must not fall back to downloading.
+            url: "http://192.0.2.1/never",
+            // sha256 of "abc", while the file below contains something else.
+            sha256: Some("ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"),
+            approx_bytes: 3,
+            license: "MIT",
+        };
+        let path = dir.join(spec.id);
+        std::fs::write(&path, b"not abc").unwrap();
+
+        let err = fetch(&spec, &dir, |_| {}).unwrap_err();
+        assert!(
+            matches!(err, FetchError::ChecksumMismatch { .. }),
+            "got {err}"
+        );
+        assert!(!path.exists(), "a file that failed its pin must not linger");
+    }
+
+    /// The happy path costs one hash, then none: a marker records the
+    /// verdict so launching the app does not re-hash 148MB every time.
+    #[test]
+    fn a_matching_cached_file_is_verified_once_then_marked() {
+        let dir = std::env::temp_dir().join("aqua-asr-test-verified");
+        std::fs::create_dir_all(&dir).unwrap();
+        let spec = ModelSpec {
+            id: "good-model",
+            url: "http://192.0.2.1/never",
+            sha256: Some("ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"),
+            approx_bytes: 3,
+            license: "MIT",
+        };
+        let path = dir.join(spec.id);
+        std::fs::write(&path, b"abc").unwrap();
+        let marker = dir.join("good-model.verified");
+        let _ = std::fs::remove_file(&marker);
+
+        assert_eq!(fetch(&spec, &dir, |_| {}).unwrap(), path);
+        assert!(marker.exists(), "verification verdict was not recorded");
+
+        // With the marker present the content is not read again, which is
+        // what makes the check affordable at every launch.
+        std::fs::write(&path, b"changed after verification").unwrap();
+        assert_eq!(fetch(&spec, &dir, |_| {}).unwrap(), path);
     }
 
     #[test]

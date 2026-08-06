@@ -183,8 +183,9 @@ say ""
 #    Paths verified against the code rather than assumed from the product
 #    name. The bridge binds `<runtime>/outloud/shell.sock` today but bound
 #    `<runtime>/aqua/shell.sock` before the rename, and the model directory
-#    is deliberately still `~/.aqua-oss/models` (diag/src/checks.rs), so both
-#    spellings are listed.
+#    moved from `~/.aqua-oss/models` to `~/.outloud/models` in the rename
+#    (config::paths::migrate_model_dir), and a user who never launched the
+#    new build still has the old one, so both spellings are listed.
 say "5. Removing runtime state"
 REMOVED_STATE=0
 RUNTIME_BASE="${XDG_RUNTIME_DIR:-${TMPDIR:-/tmp}}"

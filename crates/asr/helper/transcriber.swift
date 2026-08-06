@@ -1,4 +1,4 @@
-// aqua-speech-helper: bridge from raw PCM on stdin to Apple SpeechTranscriber.
+// outloud-speech-helper: bridge from raw PCM on stdin to Apple SpeechTranscriber.
 //
 // Why a helper process instead of in-process FFI: SpeechAnalyzer is a Swift
 // async API with actor-isolated types; binding it directly from Rust would
@@ -16,7 +16,7 @@
 //     {"type":"done"}                        input finished, all results flushed
 //     {"type":"error","message":"..."}       fatal problem
 //
-// Build: swiftc -O transcriber.swift -o aqua-speech-helper  (macOS 26+ SDK)
+// Build: swiftc -O transcriber.swift -o outloud-speech-helper  (macOS 26+ SDK)
 
 import Foundation
 import Speech
@@ -47,7 +47,10 @@ let semaphore = DispatchSemaphore(value: 0)
 
 Task {
     do {
-        let locale = Locale(identifier: ProcessInfo.processInfo.environment["AQUA_ASR_LOCALE"] ?? "en_US")
+        // The pre-rename AQUA_ASR_LOCALE still works: it lives in shell
+        // profiles and CI configs, and breaking it buys nothing.
+        let env = ProcessInfo.processInfo.environment
+        let locale = Locale(identifier: env["OUTLOUD_ASR_LOCALE"] ?? env["AQUA_ASR_LOCALE"] ?? "en_US")
 
         guard let transcriberLocale = await SpeechTranscriber.supportedLocale(equivalentTo: locale) else {
             fail("locale \(locale.identifier) not supported by SpeechTranscriber")
@@ -200,7 +203,7 @@ Task {
         // on an end-of-input marker that only exists once audio has flowed.
         // That happens for real whenever the user taps the hotkey without
         // speaking, or releases before the segmenter's onset debounce
-        // elapses, and it wedged the whole daemon: the helper hung, aquad's
+        // elapses, and it wedged the whole daemon: the helper hung, the daemon's
         // 30s finalize deadline fired, and the overlay was left stuck in
         // Transcribing before reporting a recognizer fault. An utterance
         // with no audio has one honest answer, so give it directly.

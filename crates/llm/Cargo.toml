@@ -18,6 +18,9 @@ default = []
 llama = ["dep:llama-cpp-2"]
 
 [dependencies]
+# Path policy only: the model cache is shared with crates/asr, and one
+# crate owns the directory name and its migration.
+config = { path = "../config" }
 sha2 = "0.10"
 thiserror = "2"
 ureq = "2"

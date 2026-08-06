@@ -63,9 +63,9 @@ submits with `notarytool` and staples the ticket, so the result works offline.
 **Verify a release build:**
 
 ```bash
-codesign --verify --deep --strict --verbose=2 dist/AquaSpike.app
-spctl --assess --type execute --verbose dist/AquaSpike.app   # expect: accepted
-xcrun stapler validate dist/AquaSpike.app
+codesign --verify --deep --strict --verbose=2 dist/OutLoudSpike.app
+spctl --assess --type execute --verbose dist/OutLoudSpike.app   # expect: accepted
+xcrun stapler validate dist/OutLoudSpike.app
 ```
 
 ## Windows

@@ -133,7 +133,7 @@ jobs:
         if: matrix.target == 'x86_64-pc-windows-msvc'
         shell: bash
         # objdump ships with the Git-for-Windows/MSYS toolchain on runners.
-        run: scripts/ci-verify-baseline.sh dist/windows/${{ matrix.target }}/aqua-spike.exe
+        run: scripts/ci-verify-baseline.sh dist/windows/${{ matrix.target }}/outloud-spike.exe
       - uses: actions/upload-artifact@v4
         with:
           name: windows-${{ matrix.target }}
@@ -170,7 +170,7 @@ jobs:
         run: scripts/build-linux.sh ${{ matrix.target }}
       - name: Verify x86-64 ISA baseline (pre-Haswell guard)
         if: startsWith(matrix.target, 'x86_64')
-        run: scripts/ci-verify-baseline.sh dist/linux/${{ matrix.target }}/aqua-spike
+        run: scripts/ci-verify-baseline.sh dist/linux/${{ matrix.target }}/outloud-spike
       - uses: actions/upload-artifact@v4
         with:
           name: linux-${{ matrix.target }}
