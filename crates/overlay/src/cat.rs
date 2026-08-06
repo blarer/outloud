@@ -502,6 +502,53 @@ pub fn posed_geometry(pose: &CatPose) -> CatGeometry {
 }
 
 // ---------------------------------------------------------------------------
+// Menu-bar glyph: the cat as a silhouette.
+// ---------------------------------------------------------------------------
+
+/// The cat reduced to what survives at menu-bar size: the resting head,
+/// perked ears, and the ruff, as closed polygons meant to be filled in ONE
+/// colour. Filling them all in the same colour makes their union the
+/// silhouette, so no boolean geometry is needed anywhere.
+///
+/// Silhouette only, no face: at ~15 points the eyes and patches turn to
+/// mud, and the ear-head-ruff outline is the part of this cat that is
+/// recognisable across the room (the same simplify-not-scale rule
+/// [`crate::mark`] applies to the megaphone). Ears are fully perked: the
+/// glyph is the product's mark, not a state surface — state is carried by
+/// tint, exactly as the megaphone does it.
+pub fn glyph_silhouette() -> Vec<Vec<Point>> {
+    // The glyph draws the untransformed rest geometry directly; assert the
+    // rest pose really is the identity so a future tilt/scale in
+    // `at_rest` cannot silently diverge from what the menu bar shows.
+    let rest = CatPose::at_rest();
+    debug_assert_eq!(rest.tilt, 0.0);
+    debug_assert_eq!(rest.scale, 1.0);
+    vec![
+        head_outline(),
+        ear(1.0, -1.0),
+        ear(1.0, 1.0),
+        ruff_outline(),
+    ]
+}
+
+/// [`glyph_silhouette`] scaled to fit a square of `size` points, matching
+/// [`crate::mark::mark_in`]'s contract so backends can swap between the
+/// two glyphs without new plumbing.
+pub fn glyph_in(size: f64) -> Vec<Vec<Point>> {
+    glyph_silhouette()
+        .into_iter()
+        .map(|poly| {
+            poly.into_iter()
+                .map(|p| Point {
+                    x: p.x * size,
+                    y: p.y * size,
+                })
+                .collect()
+        })
+        .collect()
+}
+
+// ---------------------------------------------------------------------------
 // Animator.
 // ---------------------------------------------------------------------------
 
@@ -837,6 +884,52 @@ mod tests {
         v.extend(geo.pupils.iter());
         v.extend(geo.glints.iter());
         v
+    }
+
+    #[test]
+    fn glyph_silhouette_is_closed_polys_inside_the_unit_box() {
+        // The status item fills these verbatim; an open or escaping poly
+        // draws garbage in the menu bar where no unit test can see it.
+        let polys = glyph_silhouette();
+        assert_eq!(polys.len(), 4, "head, two ears, ruff");
+        for poly in &polys {
+            assert!(poly.len() >= 3, "degenerate glyph polygon");
+            for p in poly {
+                assert!(
+                    (-0.01..=1.01).contains(&p.x) && (-0.01..=1.01).contains(&p.y),
+                    "glyph point escaped the unit box: {p:?}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn glyph_ears_are_perked() {
+        // The glyph is the brand mark, not a state surface: flat ears in
+        // the menu bar would read as a permanently unhappy product.
+        let polys = glyph_silhouette();
+        // Ear tips are the second vertex (see `ear`); polys[1]/[2] are the
+        // ears per glyph_silhouette's construction.
+        for ear in &polys[1..3] {
+            assert!(
+                ear[1].y < 0.15,
+                "ear tip should be near the box top, got {:?}",
+                ear[1]
+            );
+        }
+    }
+
+    #[test]
+    fn glyph_in_scales_uniformly() {
+        let unit = glyph_silhouette();
+        let scaled = glyph_in(15.0);
+        assert_eq!(unit.len(), scaled.len());
+        for (u, s) in unit.iter().zip(&scaled) {
+            for (up, sp) in u.iter().zip(s) {
+                assert!((sp.x - up.x * 15.0).abs() < 1e-9);
+                assert!((sp.y - up.y * 15.0).abs() < 1e-9);
+            }
+        }
     }
 
     #[test]

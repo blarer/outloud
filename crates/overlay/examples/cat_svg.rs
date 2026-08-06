@@ -135,4 +135,27 @@ fn main() {
         OverlayState::Transcribing,
         "slow_blink",
     );
+    render_glyph();
+}
+
+/// Render the menu-bar silhouette at glyph proportions, dark-bar white on
+/// a dark swatch, so the 15pt legibility call is checkable by eye.
+fn render_glyph() {
+    let polys = overlay::cat::glyph_silhouette();
+    let mut s = String::from(
+        "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"420\" height=\"420\" \
+         viewBox=\"0 0 420 420\"><rect width=\"420\" height=\"420\" fill=\"#222\"/>\n",
+    );
+    for p in &polys {
+        s += &poly(p, "#FFFFFF", 1.0);
+    }
+    // A 15pt-equivalent thumbnail in the corner: the size it actually ships.
+    s += "<g transform=\"translate(370,10) scale(0.0714)\">";
+    s += "<rect width=\"560\" height=\"560\" fill=\"#222\"/>";
+    for p in &polys {
+        s += &poly(p, "#FFFFFF", 1.0);
+    }
+    s += "</g></svg>";
+    std::fs::write("/tmp/cat_glyph.svg", s).expect("write svg");
+    println!("/tmp/cat_glyph.svg");
 }

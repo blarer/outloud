@@ -34,8 +34,8 @@ use objc2::{
     define_class, msg_send, sel, AllocAnyThread, DefinedClass, MainThreadMarker, MainThreadOnly,
 };
 use objc2_app_kit::{
-    NSBezierPath, NSColor, NSControlStateValueOff, NSControlStateValueOn, NSImage, NSLineCapStyle,
-    NSLineJoinStyle, NSMenu, NSMenuItem, NSStatusBar, NSStatusItem, NSVariableStatusItemLength,
+    NSBezierPath, NSColor, NSControlStateValueOff, NSControlStateValueOn, NSImage, NSMenu,
+    NSMenuItem, NSStatusBar, NSStatusItem, NSVariableStatusItemLength,
 };
 use objc2_foundation::{NSObject, NSPoint, NSSize, NSString};
 
@@ -189,13 +189,17 @@ impl MacStatusItem {
         button.setToolTip(Some(&NSString::from_str(&model.tooltip)));
     }
 
-    /// Draw the megaphone mark into an `NSImage`.
+    /// Draw the cat-silhouette mark into an `NSImage`.
     ///
-    /// Drawn rather than loaded: the geometry in `crate::mark` is the
-    /// single source shared with the Windows tray backend (an SF Symbol
-    /// would break that, see mark.rs's module doc), and a shipped PNG
-    /// would be wrong at some combination of Retina, menu bar height, and
-    /// the user's menu bar size setting.
+    /// The cat-mascot branch's menu-bar identity: the same head/ears/ruff
+    /// outline as the overlay mascot ([`crate::cat::glyph_silhouette`]),
+    /// filled as one solid silhouette. Face detail is deliberately absent —
+    /// at 15pt it turns to mud (see the glyph's own doc).
+    ///
+    /// Drawn rather than loaded: the geometry in `crate::cat` is the
+    /// single source shared with the overlay (a shipped PNG would be wrong
+    /// at some combination of Retina, menu bar height, and the user's menu
+    /// bar size setting).
     ///
     /// `lockFocusFlipped` rather than `imageWithSize:flipped:drawingHandler:`
     /// because the block form produced a correctly-sized image that never
@@ -205,14 +209,13 @@ impl MacStatusItem {
     /// reason about and the thing that actually works here.
     ///
     /// Flipped so the handler's coordinates match this crate's
-    /// top-left-origin convention, which is what `mark::path_in` returns.
+    /// top-left-origin convention, which is what the glyph geometry uses.
     fn mark_image(&self, tint: Option<Color>, dark: bool) -> Retained<NSImage> {
         let size = NSSize::new(mark::GLYPH_SIZE, mark::GLYPH_SIZE);
         let image = NSImage::initWithSize(NSImage::alloc(), size);
         #[allow(deprecated)]
         image.lockFocusFlipped(true);
 
-        let m = mark::mark_in(mark::GLYPH_SIZE);
         // Drawn in its final colour. Untinted states use explicit white on a
         // dark bar and near-black on a light one, decided from the button's
         // real appearance in `is_dark_menu_bar`. NOT `labelColor`: a dynamic
@@ -229,29 +232,14 @@ impl MacStatusItem {
             None => NSColor::colorWithSRGBRed_green_blue_alpha(0.15, 0.15, 0.15, 1.0),
         };
         colour.setFill();
-        colour.setStroke();
 
-        // The horn is FILLED: a stroked outline collapses into scribble at
-        // this size, and the solid horn is the anchor that keeps the glyph
-        // legible across the room (mark.rs's module doc).
-        let horn = NSBezierPath::bezierPath();
-        for (i, p) in m.horn.iter().enumerate() {
-            let at = NSPoint::new(p.x, p.y);
-            if i == 0 {
-                horn.moveToPoint(at);
-            } else {
-                horn.lineToPoint(at);
-            }
-        }
-        horn.closePath();
-        horn.fill();
-
-        // The sound arcs are STROKED with round caps, matching the logo's
-        // arc treatment. Round caps also stop the arc ends reading as
-        // clipped at 15pt.
-        for wave in &m.waves {
+        // Every part FILLED in the one colour: overlapping fills union into
+        // the silhouette, so ears and ruff need no boolean clipping against
+        // the head. A stroked outline collapses into scribble at this size,
+        // same reason the megaphone's horn was filled.
+        for poly in crate::cat::glyph_in(mark::GLYPH_SIZE) {
             let path = NSBezierPath::bezierPath();
-            for (i, p) in wave.iter().enumerate() {
+            for (i, p) in poly.iter().enumerate() {
                 let at = NSPoint::new(p.x, p.y);
                 if i == 0 {
                     path.moveToPoint(at);
@@ -259,12 +247,8 @@ impl MacStatusItem {
                     path.lineToPoint(at);
                 }
             }
-            path.setLineWidth(mark::GLYPH_LINE_WIDTH);
-            path.setLineCapStyle(NSLineCapStyle::Round);
-            // Round joins: the arc is sampled as short segments, and mitre
-            // spikes at the joints would fuzz the curve.
-            path.setLineJoinStyle(NSLineJoinStyle::Round);
-            path.stroke();
+            path.closePath();
+            path.fill();
         }
 
         #[allow(deprecated)]

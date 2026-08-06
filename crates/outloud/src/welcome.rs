@@ -156,13 +156,7 @@ pub fn run_if_needed(observe: impl Fn() -> Grants) {
     if !welcomed {
         // The app has no Dock icon, so without this it is invisible: a user
         // who double-clicks it sees literally nothing happen.
-        let _ = dialog(
-            "Hi! I'm OutLoud.",
-            "I turn your voice into text anywhere you can type.\n\n\
-             I need to ask for two permissions first. It takes about a minute, \
-             and I'll open each screen for you.",
-            &["Let's go"],
-        );
+        let _ = dialog(HELLO_TITLE, HELLO_BODY, &["Let's go"]);
     }
 
     // Loop rather than a fixed sequence: granting Input Monitoring can reveal
@@ -189,13 +183,7 @@ pub fn run_if_needed(observe: impl Fn() -> Grants) {
         // Wait on the user, then VERIFY. Asking "did it work?" cannot detect
         // the common failure, which is granting the switch to the wrong app or
         // to a stale bundle entry: the user sincerely believes they did it.
-        let _ = dialog(
-            "Waiting for you",
-            "Turn the switch ON for OutLoud, then click Done here.\n\n\
-             (If you don't see OutLoud in the list, click the + button and \
-             choose OutLoud from Applications.)",
-            &["Done"],
-        );
+        let _ = dialog(WAITING_TITLE, WAITING_BODY, &["Done"]);
 
         // Still missing after they said Done? Say so plainly rather than
         // silently re-showing the same dialog, which reads as the app
@@ -208,14 +196,7 @@ pub fn run_if_needed(observe: impl Fn() -> Grants) {
             Step::Ready { .. } => true,
         };
         if !granted {
-            let again = dialog(
-                "Not quite yet",
-                "I still can't see that permission. This usually means the \
-                 switch is off, or it got turned on for a different copy of \
-                 OutLoud.\n\n\
-                 Want to try once more?",
-                &["Try again", "Later"],
-            );
+            let again = dialog(RETRY_TITLE, RETRY_BODY, &["Try again", "Later"]);
             if again.as_deref() != Some("Try again") {
                 return;
             }
@@ -228,20 +209,85 @@ pub fn run_if_needed(observe: impl Fn() -> Grants) {
     if let Some(p) = marker {
         let _ = std::fs::write(&p, "");
     }
-    let _ = dialog(
-        "You're all set",
-        "Hold the right Option key (just right of the space bar), say \
-         something, then let go.\n\n\
-         Your words appear wherever your cursor is. Try it in Messages.\n\n\
-         I live in the menu bar at the top of the screen. Click the cat any \
-         time.",
-        &["Got it"],
-    );
+    let _ = dialog(DONE_TITLE, DONE_BODY, &["Got it"]);
 }
 
 #[cfg(not(target_os = "macos"))]
 pub fn run_if_needed(_observe: impl Fn() -> Grants) {
     // The walkthrough is entirely about macOS TCC panes.
+}
+
+/// Every dialog the walkthrough can show, as (title, body, buttons).
+///
+/// Constants rather than literals at each call site so a test can compile all
+/// of them. The osascript failure path is silent by design, so a prompt with an
+/// unbalanced quote would not error: it would just never appear, and the user
+/// would never be asked for the permission it exists to request.
+pub const DIALOGS: &[(&str, &str, &[&str])] = &[
+    (HELLO_TITLE, HELLO_BODY, &["Let's go"]),
+    (WAITING_TITLE, WAITING_BODY, &["Done"]),
+    (RETRY_TITLE, RETRY_BODY, &["Try again", "Later"]),
+    (DONE_TITLE, DONE_BODY, &["Got it"]),
+];
+
+const HELLO_TITLE: &str = "Hi! I'm OutLoud.";
+const HELLO_BODY: &str = "I turn your voice into text anywhere you can type.\n\n\
+     I need to ask for two permissions first. It takes about a minute, and \
+     I'll open each screen for you.";
+
+const WAITING_TITLE: &str = "Waiting for you";
+const WAITING_BODY: &str = "Turn the switch ON for OutLoud, then click Done here.\n\n\
+     (If you don't see OutLoud in the list, click the + button and choose \
+     OutLoud from Applications.)";
+
+const RETRY_TITLE: &str = "Not quite yet";
+const RETRY_BODY: &str = "I still can't see that permission. This usually means the switch is \
+     off, or it got turned on for a different copy of OutLoud.\n\n\
+     Want to try once more?";
+
+const DONE_TITLE: &str = "You're all set";
+const DONE_BODY: &str = "Hold the right Option key (just right of the space bar), say \
+     something, then let go.\n\n\
+     Your words appear wherever your cursor is. Try it in Messages.\n\n\
+     I live in the menu bar at the top of the screen. Click the cat any time.";
+
+/// Build the AppleScript for a dialog.
+///
+/// Separated from running it so the generated script can be checked without a
+/// display. An unescaped quote or brace produces a script that fails to
+/// compile, and the failure path is silent by design (a dialog that cannot be
+/// shown must not change the exit path), so a malformed prompt would simply
+/// mean the user is never asked for the permission at all.
+fn dialog_script(title: &str, body: &str, buttons: &[&str]) -> String {
+    fn escape(s: &str) -> String {
+        s.replace('\\', "\\\\").replace('"', "\\\"")
+    }
+    let list = buttons
+        .iter()
+        .map(|b| format!("\"{}\"", escape(b)))
+        .collect::<Vec<_>>()
+        .join(", ");
+    let default = buttons.first().map(|b| escape(b)).unwrap_or_default();
+    format!(
+        "display dialog \"{}\" with title \"{}\" buttons {{{}}} \
+         default button \"{}\" with icon note",
+        escape(body),
+        escape(title),
+        list,
+        default,
+    )
+}
+
+/// Extract the pressed button from osascript's output.
+///
+/// Split out for the same reason as the script builder: the format is
+/// osascript's, not ours, and a parser that silently returns `None` would make
+/// every button read as a cancel.
+fn parse_button(stdout: &str) -> Option<String> {
+    stdout
+        .split("button returned:")
+        .nth(1)
+        .map(|s| s.trim().to_string())
 }
 
 /// A modal dialog; returns the button label pressed, or `None` if it could not
@@ -252,37 +298,15 @@ pub fn run_if_needed(_observe: impl Fn() -> Grants) {
 /// activate itself, which steals focus from the field the user is typing in.
 #[cfg(target_os = "macos")]
 fn dialog(title: &str, body: &str, buttons: &[&str]) -> Option<String> {
-    fn escape(s: &str) -> String {
-        s.replace('\\', "\\\\").replace('"', "\\\"")
-    }
-    let list = buttons
-        .iter()
-        .map(|b| format!("\"{}\"", escape(b)))
-        .collect::<Vec<_>>()
-        .join(", ");
-    let default = buttons.first().map(|b| escape(b)).unwrap_or_default();
-    let script = format!(
-        "display dialog \"{}\" with title \"{}\" buttons {{{}}} \
-         default button \"{}\" with icon note",
-        escape(body),
-        escape(title),
-        list,
-        default,
-    );
     let out = std::process::Command::new("osascript")
-        .args(["-e", &script])
+        .args(["-e", &dialog_script(title, body, buttons)])
         .output()
         .ok()?;
     if !out.status.success() {
         // Cancel and close both land here; both mean "stop".
         return None;
     }
-    // "button returned:Let's go"
-    let stdout = String::from_utf8_lossy(&out.stdout);
-    stdout
-        .split("button returned:")
-        .nth(1)
-        .map(|s| s.trim().to_string())
+    parse_button(&String::from_utf8_lossy(&out.stdout))
 }
 
 #[cfg(test)]
@@ -366,5 +390,86 @@ mod tests {
         let a = prompt_for(Step::NeedInputMonitoring).unwrap().pane;
         let b = prompt_for(Step::NeedAccessibility).unwrap().pane;
         assert_ne!(a, b);
+    }
+
+    #[test]
+    fn a_pressed_button_is_read_back_not_mistaken_for_a_cancel() {
+        // osascript's own format. Getting this wrong would make every button
+        // read as a cancel, so the walkthrough would exit at the first click.
+        assert_eq!(
+            parse_button("button returned:Let's go\n").as_deref(),
+            Some("Let's go")
+        );
+        // Cancel produces no such line, and must stay None.
+        assert_eq!(parse_button(""), None);
+    }
+
+    /// Every dialog string must produce a script osascript can actually
+    /// compile.
+    ///
+    /// This is the check that a human eyeballing the dialogs cannot make.
+    /// `dialog` swallows failure on purpose, because a dialog that cannot be
+    /// shown must not change the exit path, so a prompt containing an
+    /// unbalanced quote does not error anywhere: it silently never appears,
+    /// and the user is never asked for the permission it exists to request.
+    /// Two of these strings already contain apostrophes.
+    ///
+    /// `osacompile` parses without displaying, so this needs no screen and
+    /// interrupts nobody.
+    #[test]
+    #[cfg(target_os = "macos")]
+    fn every_dialog_compiles_as_applescript() {
+        for (title, body, buttons) in DIALOGS {
+            let script = dialog_script(title, body, buttons);
+            let out = std::process::Command::new("osacompile")
+                .args(["-o", "/dev/null", "-e", &script])
+                .output()
+                .expect("osacompile is present on every macOS");
+            assert!(
+                out.status.success(),
+                "the {title:?} dialog is not valid AppleScript, so it would \
+                 never appear:\n{}",
+                String::from_utf8_lossy(&out.stderr)
+            );
+        }
+    }
+
+    #[test]
+    #[cfg(target_os = "macos")]
+    fn the_prompts_that_open_panes_compile_too() {
+        // The two permission prompts are built from `prompt_for` rather than
+        // the DIALOGS table, so they need their own pass or the table would
+        // vouch for strings it does not contain.
+        for step in [Step::NeedInputMonitoring, Step::NeedAccessibility] {
+            let p = prompt_for(step).unwrap();
+            let script = dialog_script(p.title, p.body, &[p.button, "Later"]);
+            let out = std::process::Command::new("osacompile")
+                .args(["-o", "/dev/null", "-e", &script])
+                .output()
+                .expect("osacompile is present on every macOS");
+            assert!(
+                out.status.success(),
+                "the {:?} prompt is not valid AppleScript:\n{}",
+                p.title,
+                String::from_utf8_lossy(&out.stderr)
+            );
+        }
+    }
+
+    #[test]
+    #[cfg(target_os = "macos")]
+    fn a_quote_in_a_prompt_would_be_caught() {
+        // Proves the compile check above is not vacuous: without escaping,
+        // this input produces a script that osacompile rejects, which is
+        // exactly the class of defect the check exists to find.
+        let script = dialog_script("t", "she said \"hello\" loudly", &["OK"]);
+        let out = std::process::Command::new("osacompile")
+            .args(["-o", "/dev/null", "-e", &script])
+            .output()
+            .expect("osacompile is present on every macOS");
+        assert!(
+            out.status.success(),
+            "escaping failed for a quoted body, so the dialog would never show"
+        );
     }
 }
