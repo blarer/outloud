@@ -22,7 +22,10 @@ fn run_with_home(home: &Path) -> (bool, String) {
         .env("HOME", home)
         .output()
         .expect("the daemon binary should be runnable");
-    (out.status.success(), String::from_utf8_lossy(&out.stderr).into_owned())
+    (
+        out.status.success(),
+        String::from_utf8_lossy(&out.stderr).into_owned(),
+    )
 }
 
 fn temp_home(tag: &str) -> std::path::PathBuf {

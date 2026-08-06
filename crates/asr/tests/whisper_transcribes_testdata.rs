@@ -125,3 +125,52 @@ fn transcribes_the_fixture_recording() {
 
     eprintln!("whisper finalize: {elapsed:?} for {audio_secs:.2}s of audio");
 }
+
+/// An utterance longer than whisper's 30s encoder window must keep the
+/// START of the audio.
+///
+/// Keeping the end instead would drop the beginning of a long sentence, and
+/// a transcript that begins mid-thought reads as a recognition failure
+/// rather than a length limit. The backend documents that choice; nothing
+/// asserted it, and the only evidence a user gets is one stderr line.
+#[test]
+fn an_over_long_utterance_keeps_the_beginning() {
+    let Some(model) = model_path() else {
+        eprintln!("skipping: no whisper model");
+        return;
+    };
+    let wav = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("testdata")
+        .join("quick-brown-fox.wav");
+    let speech = read_wav_16k_mono(&wav);
+
+    let mut rec =
+        asr::backends::whisper_cpp::WhisperCppRecognizer::new(&model).expect("model should load");
+    rec.feed(&speech);
+    // Pad past the window with silence. 40s total: the sentence is inside
+    // the first 30s, so a backend that kept the END would transcribe pure
+    // silence and return nothing.
+    let padding = vec![0.0f32; 16_000 * 40 - speech.len()];
+    rec.feed(&padding);
+
+    let out = rec.finalize().expect("finalize should succeed");
+    let normalized: String = out
+        .text
+        .to_lowercase()
+        .chars()
+        .filter(|c| c.is_alphanumeric() || c.is_whitespace())
+        .collect();
+    assert!(
+        normalized.contains("quick brown fox"),
+        "the first 30s must survive truncation, got {:?}",
+        out.text
+    );
+    // audio_secs reports what the user actually said, not the truncated
+    // window: it is the length of their utterance, and the truncation is a
+    // separate fact reported on stderr.
+    assert!(
+        (out.audio_secs - 40.0).abs() < 0.1,
+        "reported {:.2}s for 40s of audio",
+        out.audio_secs
+    );
+}
