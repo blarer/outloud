@@ -1,7 +1,16 @@
 #!/usr/bin/env bash
 # One-line installer for OutLoud, meant to be piped from curl:
 #
-#   curl -fsSL https://raw.githubusercontent.com/blarer/outloud/main/scripts/install.sh | bash
+#   curl -fsSL https://raw.githubusercontent.com/blarer/outloud/overlay/cat-mascot/scripts/install.sh | bash
+#
+# The URL names a BRANCH, not main, and that is deliberate. This installer and
+# the first-run walkthrough exist for one person's build; they are not part of
+# the shipped product. Retargeting this at main to "fix" the branch name would
+# quietly make a private build the public install path.
+#
+# The branch must therefore stay alive as long as anyone might reinstall from
+# it. Deleting it breaks the one-liner with a bare 404 that does not mention
+# OutLoud.
 #
 # WHY a curl installer rather than a .dmg: the app is signed ad-hoc, because
 # notarization needs a paid Developer ID certificate. macOS attaches a
