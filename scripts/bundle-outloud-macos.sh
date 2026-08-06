@@ -178,6 +178,12 @@ fi
 # Only the freshly built bundle should answer to this identifier, so drop
 # the rest from the database. The bundles themselves are left alone: this
 # script does not delete anything a human might still want.
+#
+# Skipped for a staging build, which must not touch the registration of the
+# app the developer is running: from staging, THEIR bundle is the "rival" and
+# this sweep would unregister it, breaking the very grant it exists to protect.
+stale=""
+if [[ -z "${OUTLOUD_DIST_DIR:-}" ]]; then
 stale=$(
     "$LSREGISTER" -dump 2>/dev/null \
         | awk -v id="$BUNDLE_ID" -v legacy="$LEGACY_BUNDLE_ID" '
@@ -187,6 +193,7 @@ stale=$(
         | sort -u \
         | grep -v "^$APP_DIR$" || true
 )
+fi
 if [[ -n "$stale" ]]; then
     echo "==> Other bundles claim $BUNDLE_ID or $LEGACY_BUNDLE_ID; unregistering so this build wins:"
     while IFS= read -r path; do
@@ -200,7 +207,19 @@ fi
 # sufficient on its own: macOS caches the rendered icon per bundle, so a
 # corrected registration can still be drawn with a previous build's artwork.
 # Touching the bundle invalidates that cache entry.
-"$LSREGISTER" -f "$APP_DIR" 2>/dev/null || true
+#
+# NOT for a staging build. Registering a scratch bundle makes it a second app
+# claiming this identifier, and TCC grants are per-identifier: the toggle in
+# System Settings then lands on whichever copy LaunchServices resolved, which
+# may not be the one running. The switch reads as on while nothing works, and
+# there is nothing on screen to suggest why.
+#
+# That is not theoretical. A release build left a rival bundle registered and
+# cost the owner a working Accessibility grant, with an orange icon and
+# "transport failed" as the only symptoms.
+if [[ -z "${OUTLOUD_DIST_DIR:-}" ]]; then
+    "$LSREGISTER" -f "$APP_DIR" 2>/dev/null || true
+fi
 touch "$APP_DIR"
 
 cat <<EOF
