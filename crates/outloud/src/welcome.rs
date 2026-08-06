@@ -196,6 +196,27 @@ pub fn run_if_needed(observe: impl Fn() -> Grants) {
             Step::Ready { .. } => true,
         };
         if !granted {
+            // Input Monitoring is decided ONCE per process. IOHIDCheckAccess
+            // caches its answer, so a running app never observes a grant made
+            // while it was running: the switch is genuinely on, the user is
+            // looking straight at it, and this loop would keep insisting it
+            // is not. A recipient hit exactly that and asked "what am I
+            // missing" while the toggle was visibly enabled.
+            //
+            // Nothing to fix in the pane, so re-prompting is not just useless,
+            // it is accusatory. Relaunch instead, which is the only thing that
+            // can make the new grant visible.
+            if step == Step::NeedInputMonitoring {
+                let choice = dialog(
+                    RESTART_TITLE,
+                    RESTART_BODY,
+                    &["Restart OutLoud", "Later"],
+                );
+                if choice.as_deref() == Some("Restart OutLoud") {
+                    relaunch();
+                }
+                return;
+            }
             let again = dialog(RETRY_TITLE, RETRY_BODY, &["Try again", "Later"]);
             if again.as_deref() != Some("Try again") {
                 return;
@@ -227,6 +248,7 @@ pub const DIALOGS: &[(&str, &str, &[&str])] = &[
     (HELLO_TITLE, HELLO_BODY, &["Let's go"]),
     (WAITING_TITLE, WAITING_BODY, &["Done"]),
     (RETRY_TITLE, RETRY_BODY, &["Try again", "Later"]),
+    (RESTART_TITLE, RESTART_BODY, &["Restart OutLoud", "Later"]),
     (DONE_TITLE, DONE_BODY, &["Got it"]),
 ];
 
@@ -248,6 +270,14 @@ const WAITING_BODY: &str = "Turn the switch ON for OutLoud, then click Done here
      (If you don't see OutLoud in the list, click the + button and choose \
      OutLoud from Applications.)";
 
+const RESTART_TITLE: &str = "Almost there";
+// Deliberately does NOT suggest the switch is wrong. It is right, and telling
+// someone to check it again when it is already correct is how a person
+// concludes they are the problem.
+const RESTART_BODY: &str = "That's set correctly. macOS only hands this permission to OutLoud \
+     when it starts, so I need to restart myself to pick it up.\n\n\
+     Takes a second, and you won't lose anything.";
+
 const RETRY_TITLE: &str = "Not quite yet";
 const RETRY_BODY: &str = "I still can't see that permission. This usually means the switch is \
      off, or it got turned on for a different copy of OutLoud.\n\n\
@@ -258,6 +288,49 @@ const DONE_BODY: &str = "Hold the right Option key (just right of the space bar)
      something, then let go.\n\n\
      Your words appear wherever your cursor is. Try it in Messages.\n\n\
      I live in the menu bar at the top of the screen. Click the cat any time.";
+
+/// Restart the app so a newly granted Input Monitoring permission is seen.
+///
+/// `open -n` against the bundle rather than re-execing the binary: the grant
+/// belongs to the bundle identity, and a bare exec would inherit this
+/// process's already-cached answer, which is the thing being escaped.
+///
+/// The delay lets this process exit first, so the new instance does not lose
+/// the single-instance lock race and refuse to start.
+#[cfg(target_os = "macos")]
+fn relaunch() {
+    let Ok(exe) = std::env::current_exe() else {
+        return;
+    };
+    // .../OutLoud.app/Contents/MacOS/OutLoud -> .../OutLoud.app
+    let Some(bundle) = exe
+        .parent()
+        .and_then(|p| p.parent())
+        .and_then(|p| p.parent())
+    else {
+        return;
+    };
+    if bundle.extension().and_then(|e| e.to_str()) != Some("app") {
+        return;
+    }
+    let script = format!(
+        "sleep 1; open -n {}",
+        shell_quote(&bundle.to_string_lossy())
+    );
+    let _ = std::process::Command::new("/bin/sh")
+        .args(["-c", &script])
+        .spawn();
+    std::process::exit(0);
+}
+
+/// Single-quote a path for /bin/sh.
+///
+/// Paths reach here from the filesystem, and /Applications is writable by the
+/// user, so a directory name containing a quote is possible and must not be
+/// able to extend the command.
+fn shell_quote(s: &str) -> String {
+    format!("'{}'", s.replace('\'', r"'\''"))
+}
 
 /// Build the AppleScript for a dialog.
 ///
@@ -414,6 +487,49 @@ mod tests {
         let a = prompt_for(Step::NeedInputMonitoring).unwrap().pane;
         let b = prompt_for(Step::NeedAccessibility).unwrap().pane;
         assert_ne!(a, b);
+    }
+
+    #[test]
+    fn the_restart_copy_never_blames_the_switch() {
+        // Input Monitoring is cached per process, so after the user grants it
+        // the switch is CORRECT and the app still cannot see it. A recipient
+        // met the old copy here and asked "what am I missing" with the toggle
+        // visibly enabled.
+        //
+        // Whatever this text becomes, it must not send them back to a setting
+        // that is already right.
+        let body = RESTART_BODY.to_lowercase();
+        for wrong in ["switch is off", "turn the switch", "try once more"] {
+            assert!(
+                !body.contains(wrong),
+                "restart copy blames the user's setting: {wrong:?}"
+            );
+        }
+        assert!(
+            body.contains("restart"),
+            "restart copy must name the actual fix"
+        );
+    }
+
+    #[test]
+    fn a_path_with_a_quote_cannot_extend_the_relaunch_command() {
+        // /Applications is user-writable, so a bundle name containing a quote
+        // is possible, and this string is handed to /bin/sh.
+        assert_eq!(shell_quote("/A/B.app"), "'/A/B.app'");
+        // Assert against the SHELL's interpretation, not the characters. The
+        // correct escape is '\'' , which necessarily contains a bare quote,
+        // so a substring check on the encoded form fails on correct output.
+        // Ask sh what it actually parsed instead.
+        let hostile = "/A/x'; touch pwned; echo '.app";
+        let out = std::process::Command::new("/bin/sh")
+            .args(["-c", &format!("printf %s {}", shell_quote(hostile))])
+            .output()
+            .expect("sh is present");
+        assert_eq!(
+            String::from_utf8_lossy(&out.stdout),
+            hostile,
+            "the shell saw something other than the literal path"
+        );
     }
 
     #[test]
