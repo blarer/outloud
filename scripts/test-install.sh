@@ -161,6 +161,30 @@ out="$(FAKE_MACOS_VERSION=26.0 run_installer "$ASSET" || true)"
 check "macOS 26.0 is accepted (the boundary is not off by one)" \
     grep -q "Installed" <<<"$out"
 
+# --- The URL a human is actually told to paste -----------------------------
+#
+# Everything above tests the installer's behaviour once it is running. None of
+# it tests whether the one-liner reaches it. The advertised URL points at a
+# branch, so an installer that lives only on a feature branch 404s for the
+# person pasting the command, and the failure is a bare "404" with no mention
+# of OutLoud at all.
+#
+# Found exactly that way: the one-liner named main/scripts/install.sh while the
+# script existed only on the cat branch.
+#
+# Skipped without network. An offline developer should still get the rest.
+advertised="$(grep -o 'https://raw.githubusercontent.com/[^ ]*install.sh' "$INSTALLER" | head -1)"
+check "the installer advertises a URL at all" \
+    test -n "$advertised"
+
+if curl -fsS -o /dev/null --max-time 10 https://raw.githubusercontent.com 2>/dev/null \
+    || [[ "${OUTLOUD_REQUIRE_NETWORK:-0}" == "1" ]]; then
+    check "the advertised one-liner URL resolves ($advertised)" \
+        curl -fsS -o /dev/null --max-time 20 "$advertised"
+else
+    echo "  SKIP  the advertised one-liner URL (no network)"
+fi
+
 echo
 printf '  %d passed, %d failed\n' "$pass" "$fail"
 [[ "$fail" -eq 0 ]]
