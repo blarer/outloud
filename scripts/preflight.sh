@@ -222,6 +222,19 @@ check_bundle
 #    without the grant it SKIPs with the grant as the next action rather
 #    than reporting a false FAIL.
 # ---------------------------------------------------------------------------
+# Classify a frontmost change while the overlay is up.
+#
+# Only the overlay winning focus is a product bug. Another app winning it
+# means something outside this check moved focus (the operator, a
+# notification, a terminal reclaiming activation), which says nothing about
+# the overlay and must not read as release-blocking: a FAIL nobody can
+# reproduce is how a real one gets ignored.
+#
+# The overlay demo runs as `overlay-demo`, so that is the name to catch.
+overlay_stole_focus() {
+    [[ "$1" == *"overlay-demo"* || "$1" == *"overlay"* ]]
+}
+
 check_overlay_focus() {
     if [[ "$(uname)" != "Darwin" ]]; then
         record SKIP "overlay-focus" "macOS only"
@@ -255,9 +268,24 @@ EOF
         record SKIP "overlay-focus" "cannot script TextEdit; NEXT: grant this terminal Automation for TextEdit in System Settings > Privacy & Security > Automation"
         return
     fi
-    sleep 1
-    local front_before
-    front_before="$(osascript -e 'tell application "System Events" to get name of first process whose frontmost is true' 2>/dev/null || echo '?')"
+    # Wait for TextEdit to actually BE frontmost before recording the
+    # baseline, rather than sleeping a fixed second and hoping. A cold
+    # TextEdit takes longer than 1s to come forward, and when it does the
+    # baseline captures the terminal instead. The check then sees
+    # "wezterm-gui -> TextEdit" after the overlay appears and reports a focus
+    # steal that never happened, with the overlay blamed for the activation
+    # this function itself requested. Observed on an otherwise idle machine.
+    local front_before="?" waited
+    for waited in 1 2 3 4 5 6 7 8 9 10; do
+        front_before="$(osascript -e 'tell application "System Events" to get name of first process whose frontmost is true' 2>/dev/null || echo '?')"
+        [[ "$front_before" == "TextEdit" ]] && break
+        sleep 0.5
+    done
+    if [[ "$front_before" != "TextEdit" ]]; then
+        record SKIP "overlay-focus" "TextEdit never came to the front (stuck at '$front_before'), so there is no baseline to compare against; NEXT: rerun without touching the machine"
+        osascript -e 'tell application "TextEdit" to close front document saving no' >/dev/null 2>&1 || true
+        return
+    fi
     echo "==> overlay-focus: launching overlay-demo over $front_before"
     ./target/debug/overlay-demo >"$LOG_DIR/overlay-demo.log" 2>&1 &
     local demo_pid=$!
@@ -272,8 +300,27 @@ EOF
     # Layer (b): with the overlay still on screen, type into TextEdit and read
     # the document back. If the text landed, keyboard focus genuinely stayed
     # with the field, which is the property that actually matters.
-    local probe="preflight-focus-probe" typed=""
-    osascript -e "tell application \"System Events\" to keystroke \"$probe\"" >/dev/null 2>&1
+    local probe="preflight-focus-probe" typed="" keystroke_err=""
+    # Keep stderr: without an Accessibility grant for whatever is running
+    # this script, System Events refuses with "osascript is not allowed to
+    # send keystrokes. (1002)" and NOTHING is typed. Discarding that error
+    # made the empty document look like the overlay eating keystrokes, and
+    # the check then reported a release-blocking focus bug that does not
+    # exist. Layer (b) is documented above as SKIP-without-grant; this is
+    # what makes that true.
+    keystroke_err="$(osascript -e "tell application \"System Events\" to keystroke \"$probe\"" 2>&1 >/dev/null)" || true
+    if [[ "$keystroke_err" == *"not allowed to send keystrokes"* || "$keystroke_err" == *"1002"* ]]; then
+        kill "$demo_pid" 2>/dev/null; wait "$demo_pid" 2>/dev/null
+        osascript -e 'tell application "TextEdit" to close front document saving no' >/dev/null 2>&1 || true
+        if [[ "$front_after" != "$front_before" ]] && overlay_stole_focus "$front_after"; then
+            record FAIL "overlay-focus" "NEXT: the overlay took focus ($front_before -> $front_after). Release-blocking: fix the NSPanel non-activating style in crates/overlay"
+        elif [[ "$front_after" != "$front_before" ]]; then
+            record SKIP "overlay-focus" "$front_after took focus mid-probe, not the overlay, so this run proves nothing; NEXT: re-run without touching the machine"
+        else
+            record SKIP "overlay-focus" "frontmost stayed $front_before, but the keystroke probe needs an Accessibility grant for the process running preflight; NEXT: grant it in System Settings > Privacy & Security > Accessibility, then re-run"
+        fi
+        return
+    fi
     sleep 1
     typed="$(osascript -e 'tell application "TextEdit" to get text of front document' 2>/dev/null || true)"
     kill "$demo_pid" 2>/dev/null; wait "$demo_pid" 2>/dev/null
@@ -282,8 +329,10 @@ EOF
     if [[ -n "$operator_app" && "$operator_app" != "TextEdit" ]]; then
         osascript -e "tell application \"System Events\" to set frontmost of process \"$operator_app\" to true" >/dev/null 2>&1 || true
     fi
-    if [[ "$front_after" != "$front_before" ]]; then
-        record FAIL "overlay-focus" "NEXT: frontmost changed under the overlay ($front_before -> $front_after). If front_after is the overlay process this is the release-blocking focus steal: fix the NSPanel non-activating style in crates/overlay. If it is another app, rerun without touching the machine."
+    if [[ "$front_after" != "$front_before" ]] && overlay_stole_focus "$front_after"; then
+        record FAIL "overlay-focus" "NEXT: the overlay took focus ($front_before -> $front_after). Release-blocking: fix the NSPanel non-activating style in crates/overlay"
+    elif [[ "$front_after" != "$front_before" ]]; then
+        record SKIP "overlay-focus" "$front_after took focus mid-probe, not the overlay, so this run proves nothing; NEXT: re-run without touching the machine"
     elif [[ "$typed" != *"$probe"* ]]; then
         record FAIL "overlay-focus" "NEXT: frontmost unchanged but keystrokes did not land in TextEdit (got: '$typed'). Overlay is intercepting input; inspect the window level/ignoresMouseEvents in crates/overlay/src/macos.rs"
     else
