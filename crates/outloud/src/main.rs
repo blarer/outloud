@@ -44,6 +44,84 @@ struct Args {
     sensitivity: Option<u8>,
 }
 
+/// What `--permissions` prints for the "accessibility" row.
+///
+/// This is per-platform because the *mechanism* is per-platform, and
+/// reporting one platform's mechanism on another is worse than silence: it
+/// sends the user to fix something that does not exist. On Windows the row
+/// previously read `MISSING (text will paste, not insert)` on every machine
+/// forever, because `ax_edit::is_trusted` is a macOS-only query that returns
+/// a hardcoded `false` everywhere else. Windows has no accessibility grant to
+/// hold: UI Automation is available to any non-elevated process, so the only
+/// honest question is whether a UIA session can actually be created.
+fn accessibility_permission_line() -> String {
+    #[cfg(target_os = "macos")]
+    {
+        if ax_edit::is_trusted(false) {
+            "granted".into()
+        } else {
+            "MISSING (text will paste, not insert)".into()
+        }
+    }
+    // A UIA session that constructs is the real precondition for reading a
+    // field, which is what undo and edit-by-voice need. It is not a grant and
+    // cannot be granted: a failure here is COM being unavailable, which is a
+    // broken machine rather than a settings pane to visit. UIPI (an elevated
+    // window in focus) is deliberately NOT probed, because it is a property of
+    // whatever happens to be focused at this instant, not of this process, and
+    // `docs/hotkeys.md` covers it.
+    #[cfg(all(target_os = "windows", feature = "display"))]
+    {
+        match text_target::targets::ax::UiaTarget::new() {
+            Ok(_) => "n/a on Windows (UI Automation reachable)".into(),
+            Err(e) => format!("UI Automation unavailable: {e}"),
+        }
+    }
+    #[cfg(all(target_os = "windows", not(feature = "display")))]
+    {
+        "n/a on Windows (UI Automation needs --features display)".into()
+    }
+    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+    {
+        "n/a on this platform".into()
+    }
+}
+
+/// What `--route` reports: an app and the transport it would get.
+///
+/// Names the app as the rules see it, not as the title bar spells it: the
+/// lists match on the process name, so "which app is this" and "which name
+/// did the rule match" have to be the same string or the answer is
+/// unfalsifiable.
+///
+/// `app: None` asks about whatever is frontmost right now.
+#[cfg(all(target_os = "windows", feature = "display"))]
+fn route_probe_line(app: Option<&str>) -> String {
+    use text_target::targets::keys::{accepts, Acceptance};
+    let (label, app) = match app {
+        Some(a) => ("app:           ", Some(a.to_string())),
+        None => (
+            "foreground app:",
+            text_target::targets::keys::foreground_process_name(),
+        ),
+    };
+    let acceptance = accepts(app.as_deref());
+    let transport = match acceptance {
+        Acceptance::AxAndTyping => "UI Automation, then synthetic keys, then clipboard",
+        Acceptance::TypingOnly => "synthetic keys, then clipboard (ignores accessibility writes)",
+        Acceptance::ClipboardOnly => "clipboard only (discards both accessibility writes and keys)",
+    };
+    format!(
+        "{label} {}\ntransport:      {transport}",
+        app.as_deref().unwrap_or("<unknown> (treated as ordinary)")
+    )
+}
+
+#[cfg(not(all(target_os = "windows", feature = "display")))]
+fn route_probe_line(_app: Option<&str>) -> String {
+    "--route is implemented on Windows display builds only".into()
+}
+
 fn parse_args() -> anyhow::Result<Args> {
     let mut args = Args {
         once: false,
@@ -105,20 +183,49 @@ fn parse_args() -> anyhow::Result<Args> {
                         "MISSING (hotkey cannot fire)"
                     }
                 );
-                println!(
-                    "accessibility:    {}",
-                    if ax_edit::is_trusted(false) {
-                        "granted"
-                    } else {
-                        "MISSING (text will paste, not insert)"
-                    }
-                );
+                println!("accessibility:    {}", accessibility_permission_line());
                 println!(
                     "bundle:           {}",
                     std::env::current_exe()
                         .map(|p| p.display().to_string())
                         .unwrap_or_else(|_| "?".into())
                 );
+                std::process::exit(0);
+            }
+            // `--route [APP|SECONDS]`: which transport an app would get.
+            //
+            // The per-app rules (`accepts`) decide whether a write goes by
+            // accessibility, synthetic keys, or clipboard, and until now the
+            // only way to observe that choice was to dictate into the app and
+            // infer it from the result. When the answer is wrong the symptom
+            // is "my text vanished a second after it appeared", which does
+            // not point at a routing table.
+            //
+            // Given a NAME, answers for that app without focusing it. That
+            // matters because Windows refuses programmatic foreground changes
+            // (anti-focus-stealing policy), so a harness cannot point this at
+            // Discord by itself, and dictating into Discord to find out is
+            // how test text ends up in someone's chat. Given a NUMBER (or
+            // nothing), waits that many seconds and reads whatever is
+            // frontmost, for checking an app whose process name you do not
+            // know.
+            "--route" => {
+                let arg = it.next();
+                match arg.as_deref().map(str::trim) {
+                    // A number is a countdown, not an app called "5".
+                    Some(a) if a.parse::<u64>().is_ok() => {
+                        let secs: u64 = a.parse().unwrap();
+                        eprintln!("focus the app to probe; reading in {secs}s...");
+                        std::thread::sleep(std::time::Duration::from_secs(secs));
+                        println!("{}", route_probe_line(None));
+                    }
+                    Some(app) => println!("{}", route_probe_line(Some(app))),
+                    None => {
+                        eprintln!("focus the app to probe; reading in 5s...");
+                        std::thread::sleep(std::time::Duration::from_secs(5));
+                        println!("{}", route_probe_line(None));
+                    }
+                }
                 std::process::exit(0);
             }
             "--version" | "-V" => {
@@ -136,11 +243,14 @@ fn parse_args() -> anyhow::Result<Args> {
                                       the flag to replay several utterances\n\
                                       through one process (needed for undo)\n\
                      --wav FILE       feed FILE instead of the microphone (with --once)\n\
-                     --say TEXT       synthesize TEXT with `say` and feed it (with --once)\n\
                      --asr BACKEND    apple (default), whisper, or mock\n\
                      --chord CHORD    hotkey (default right-option)\n\
                      --no-overlay     log state changes instead of drawing the panel\n\
                      --realtime       pace file audio like live speech\n\
+                     --sensitivity N  override microphone.sensitivity (1-100)\n\
+                     --permissions    report this build's grants and exit\n\
+                     --route [APP|N]  which transport APP would get, or whatever\n\
+                                      you focus within N seconds (Windows)\n\
                      --version        print the version and exit"
                 );
                 std::process::exit(0);
@@ -268,8 +378,29 @@ fn synthesize(text: &str) -> anyhow::Result<std::path::PathBuf> {
     // rather than as two processes colliding.
     let dir = std::env::temp_dir().join(format!("outloud-say-{}", std::process::id()));
     std::fs::create_dir_all(&dir)?;
-    let aiff = dir.join("utterance.aiff");
     let wav = dir.join("utterance.wav");
+    synthesize_to(text, &wav)?;
+    // Lead-in silence before the speech.
+    //
+    // Synthesizers start the first phoneme at sample zero. A recognizer needs
+    // a moment of silence to lock on, so without this the first word is
+    // unreliable: "add a period at the end" came back as "a period at the
+    // end", "At a period at the end", and "" across three consecutive runs.
+    // That turns a valid edit command into an unparseable one, and the
+    // resulting text then REPLACES the user's selection, so a test harness
+    // artifact looks exactly like a parser bug.
+    //
+    // Real dictation does not have this problem: a human holds the key, then
+    // speaks. This makes --say match that shape rather than testing a
+    // condition the product never encounters.
+    prepend_silence(&wav, LEAD_IN)?;
+    Ok(wav)
+}
+
+/// macOS: `say` writes AIFF, `afconvert` lands it at 16kHz mono.
+#[cfg(target_os = "macos")]
+fn synthesize_to(text: &str, wav: &std::path::Path) -> anyhow::Result<()> {
+    let aiff = wav.with_extension("aiff");
     let ok = |st: std::process::ExitStatus, what: &str| {
         anyhow::ensure!(st.success(), "{what} failed");
         Ok(())
@@ -282,29 +413,49 @@ fn synthesize(text: &str) -> anyhow::Result<std::path::PathBuf> {
             .status()?,
         "say",
     )?;
-    // Lead-in silence before the speech.
-    //
-    // `say` starts the first phoneme at sample zero. A recognizer needs a
-    // moment of silence to lock on, so without this the first word is
-    // unreliable: "add a period at the end" came back as "a period at the
-    // end", "At a period at the end", and "" across three consecutive
-    // runs. That turns a valid edit command into an unparseable one, and
-    // the resulting text then REPLACES the user's selection, so a test
-    // harness artifact looks exactly like a parser bug.
-    //
-    // Real dictation does not have this problem: a human holds the key,
-    // then speaks. This makes --say match that shape rather than testing a
-    // condition the product never encounters.
     ok(
         std::process::Command::new("afconvert")
             .args(["-f", "WAVE", "-d", "LEI16@16000", "-c", "1"])
             .arg(&aiff)
-            .arg(&wav)
+            .arg(wav)
             .status()?,
         "afconvert",
-    )?;
-    prepend_silence(&wav, LEAD_IN)?;
-    Ok(wav)
+    )
+}
+
+/// Windows: `System.Speech` writes 16kHz mono WAV directly, so there is no
+/// convert step. Driven through PowerShell because the synthesizer is a .NET
+/// API with no command-line front end, the way `say` is on macOS.
+///
+/// `--say` existing on only one platform is not cosmetic: the undo, repeated
+/// utterance, and routing checks in `docs/windows-handoff.md` are all written
+/// in terms of it, so without this the documented way to exercise the Windows
+/// paths fails with `program not found` before reaching any of them.
+#[cfg(target_os = "windows")]
+fn synthesize_to(text: &str, wav: &std::path::Path) -> anyhow::Result<()> {
+    let script = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../scripts/sapi-say.ps1")
+        .canonicalize()
+        .unwrap_or_else(|_| std::path::PathBuf::from("scripts/sapi-say.ps1"));
+    let out = std::process::Command::new("powershell")
+        .args(["-NoProfile", "-ExecutionPolicy", "Bypass", "-File"])
+        .arg(&script)
+        .arg("-Text")
+        .arg(text)
+        .arg("-Out")
+        .arg(wav)
+        .output()?;
+    anyhow::ensure!(
+        out.status.success(),
+        "SAPI synthesis failed: {}",
+        String::from_utf8_lossy(&out.stderr).trim()
+    );
+    Ok(())
+}
+
+#[cfg(not(any(target_os = "macos", target_os = "windows")))]
+fn synthesize_to(_text: &str, _wav: &std::path::Path) -> anyhow::Result<()> {
+    anyhow::bail!("--say has no speech synthesizer on this platform; use --wav")
 }
 
 /// Show a startup refusal to a user who has no terminal.

@@ -88,10 +88,22 @@ fn replaying_the_tty_bug_produces_a_divergence_that_names_it() {
         .compare_selection(replayed.name)
         .expect("fixed selector must disagree with the buggy recording");
     assert_eq!(divergence.recorded, "tmux");
-    assert_eq!(divergence.replayed, "macos-ax");
+    // The accessibility tier is named per-platform ("macos-ax" there,
+    // "windows-uia" here), and this test is about the DIVERGENCE, not about
+    // which desktop tier won: hardcoding the macOS name made it fail on
+    // Windows for a reason unrelated to what it checks.
+    let accessibility_tier = if cfg!(target_os = "windows") {
+        "windows-uia"
+    } else {
+        "macos-ax"
+    };
+    assert_eq!(divergence.replayed, accessibility_tier);
     // The Display output is the line that goes in the issue.
     let msg = divergence.to_string();
-    assert!(msg.contains("tmux") && msg.contains("macos-ax"), "{msg}");
+    assert!(
+        msg.contains("tmux") && msg.contains(accessibility_tier),
+        "{msg}"
+    );
 }
 
 #[test]

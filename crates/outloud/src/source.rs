@@ -223,6 +223,26 @@ pub fn spawn_wav_sequence(
     tx: UnboundedSender<FrontendEvent>,
 ) {
     tokio::spawn(async move {
+        // OUTLOUD_REPLAY_DELAY_MS: wait before the first key cycle so the
+        // window under test can be focused first.
+        //
+        // Dictate-vs-edit is decided at KEY-DOWN, from whatever is focused
+        // then. A replay launched from a console therefore always sees the
+        // console: it reports Dictate, and the edit and undo routes cannot be
+        // reached at all. That is not a hypothetical -- it is why undo stayed
+        // unverifiable on Windows, where every check is run from a terminal.
+        // Delaying the first key-down leaves a window for a fixture (or a
+        // person) to focus the real target, so the routing under test is the
+        // routing that runs in production.
+        if let Some(ms) = std::env::var("OUTLOUD_REPLAY_DELAY_MS")
+            .ok()
+            .and_then(|v| v.trim().parse::<u64>().ok())
+        {
+            eprintln!(
+                "outloud: waiting {ms}ms before replaying, focus your target now (test knob)"
+            );
+            tokio::time::sleep(std::time::Duration::from_millis(ms)).await;
+        }
         for (i, samples) in utterances.into_iter().enumerate() {
             if i > 0 {
                 // Long enough for the previous utterance to commit and its

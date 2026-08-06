@@ -374,6 +374,34 @@ pub fn app_identity(snap: Option<&TextSnapshot>) -> Option<config::AppIdentity> 
 }
 
 /// How one utterance ended, for the overlay and the log.
+/// Whether the environment asked for delivery to be suppressed.
+///
+/// Deliberately forgiving about the value, because the cost of the two
+/// mistakes is wildly asymmetric: reading a stray value as "suppress" wastes
+/// a dry run, while failing to read one types the transcript into whatever
+/// window the user has focused.
+///
+/// The specific trap this exists for is cmd.exe. `set OUTLOUD_NO_INJECT=1 &&
+/// outloud ...` assigns `"1 "`, INCLUDING the trailing space before the `&&`,
+/// so an exact `== "1"` test silently fails and the "safe" command is the one
+/// that types into your terminal. That happened while verifying this file.
+/// Trimming also covers `1\r` from a CRLF-authored script and `"1"` from a
+/// shell that keeps the quotes.
+///
+/// An explicit off value is still honoured so `OUTLOUD_NO_INJECT=0` means
+/// what it looks like rather than being surprisingly truthy.
+fn no_inject_requested() -> bool {
+    match std::env::var("OUTLOUD_NO_INJECT") {
+        Ok(v) => {
+            let v = v.trim().trim_matches(['"', '\'']);
+            !matches!(v, "" | "0" | "false" | "no" | "off")
+        }
+        // Non-UTF8 is still a deliberate set: suppress.
+        Err(std::env::VarError::NotUnicode(_)) => true,
+        Err(std::env::VarError::NotPresent) => false,
+    }
+}
+
 #[derive(Debug)]
 pub enum Outcome {
     /// Text landed. `via` names the transport/strategy for diagnostics.
@@ -423,10 +451,9 @@ pub fn deliver(mode: &Mode, transcript: &str) -> Outcome {
     // because the damage lands outside anything a test asserts on. Fixing
     // those two by hand would not stop the third.
     #[cfg(test)]
-    let suppressed = crate::testenv::delivery_suppressed_by_default()
-        || std::env::var_os("OUTLOUD_NO_INJECT").is_some_and(|v| v == "1");
+    let suppressed = crate::testenv::delivery_suppressed_by_default() || no_inject_requested();
     #[cfg(not(test))]
-    let suppressed = std::env::var_os("OUTLOUD_NO_INJECT").is_some_and(|v| v == "1");
+    let suppressed = no_inject_requested();
 
     if suppressed {
         // Report the ROUTE an edit would take, not just the transcript.
@@ -438,6 +465,19 @@ pub fn deliver(mode: &Mode, transcript: &str) -> Outcome {
         let text = match mode {
             Mode::Edit { selected } => {
                 format!("{text} [route: {}]", route_edit(text, selected).label())
+            }
+            // Undo is reachable WITHOUT a selection (our own write consumed
+            // it), so a dry run has to be able to say so. Reporting plain
+            // dictation here is what made the real bug invisible: the live
+            // path typed "scratch that" into the document while the dry run
+            // showed nothing unusual.
+            Mode::Dictate
+                if matches!(
+                    edit_intent::parse(text.trim_end_matches(['.', '!', '?', ','])),
+                    EditIntent::Undo(_)
+                ) =>
+            {
+                format!("{text} [route: undo]")
             }
             Mode::Dictate => text.to_string(),
         };
@@ -465,6 +505,24 @@ pub fn deliver(mode: &Mode, transcript: &str) -> Outcome {
 
     #[cfg(target_os = "macos")]
     match mode {
+        // Undo first, and deliberately NOT gated on there being a selection.
+        //
+        // Our own write REPLACES the selection, so by the time the user says
+        // "scratch that" the field holds a caret and nothing is selected. A
+        // `Mode::Dictate` arm that goes straight to insertion therefore types
+        // the words "scratch that" into their document in exactly the
+        // sequence undo exists for. Found and fixed on the Windows tier path
+        // by running it against a real window; the same hole is here, and
+        // `route_edit` already states the rule both paths must follow:
+        // "undo resolves against the ring, not the selection".
+        Mode::Dictate
+            if matches!(
+                edit_intent::parse(text.trim_end_matches(['.', '!', '?', ','])),
+                EditIntent::Undo(_)
+            ) =>
+        {
+            apply_undo()
+        }
         Mode::Dictate => insert_with_fallback(text),
         Mode::Edit { selected } => match route_edit(text, selected) {
             // Every route is dispatched here and nowhere else. An enum
@@ -768,11 +826,22 @@ fn deliver_via_tiers_inner(mode: &Mode, text: &str) -> Outcome {
     // utterance, so it cannot come from `payload_for`. Reading the field
     // back is also what lets the ring decline when the user changed it
     // after our write, rather than destroying that work.
-    if let Mode::Edit { .. } = mode {
-        if let EditIntent::Undo(_) = edit_intent::parse(text.trim_end_matches(['.', '!', '?', ',']))
-        {
-            return apply_undo_via_tiers();
-        }
+    //
+    // Deliberately NOT gated on `Mode::Edit`, i.e. not on there being a
+    // selection. `route_edit` states the rule already ("undo resolves
+    // against the ring, not the selection") and this is the same rule: what
+    // undo needs is a previous write of OURS, which has nothing to do with
+    // what happens to be selected when the user asks for it.
+    //
+    // Gating on a selection made undo unreachable in the one sequence that
+    // matters. Our own write REPLACES the selection, so by the time the user
+    // says "scratch that" the field holds a caret and no selection: the
+    // utterance fell through to dictation and typed the words "scratch that"
+    // into their document. Measured on Windows against Notepad: an edit
+    // landed correctly, then the undo appended, leaving
+    // "the slow brown foxscratch that".
+    if let EditIntent::Undo(_) = edit_intent::parse(text.trim_end_matches(['.', '!', '?', ','])) {
+        return apply_undo_via_tiers();
     }
 
     let payload = match payload_for(mode, text) {
@@ -2333,6 +2402,97 @@ mod tier_tests {
             ),
             other => panic!("expected suppression, got {other:?}"),
         }
+    }
+
+    /// "Scratch that" must ask the ring even with nothing selected.
+    ///
+    /// This is the state the user is ALWAYS in when they want an undo: our
+    /// own write replaced their selection, so the field holds a caret. Gating
+    /// undo on `Mode::Edit` therefore made it unreachable in exactly the
+    /// sequence it exists for, and the phrase fell through to dictation.
+    /// Measured on Windows against Notepad: an edit landed, then "scratch
+    /// that" was TYPED, leaving "the slow brown foxscratch that" in the
+    /// document.
+    ///
+    /// Asserted through the dry-run route label rather than by delivering,
+    /// because the real path writes into whatever window is focused.
+    #[test]
+    fn undo_is_reachable_without_a_selection() {
+        let _guard = crate::testenv::no_inject();
+        for phrase in ["scratch that", "undo that", "scratch this"] {
+            match deliver(&Mode::Dictate, phrase) {
+                Outcome::Suppressed { text } => assert!(
+                    text.contains("[route: undo]"),
+                    "{phrase:?} with no selection must route to undo, got {text:?}: \
+                     our own write consumes the selection, so requiring one makes \
+                     undo unreachable and types the phrase into the document"
+                ),
+                other => panic!("expected suppression, got {other:?}"),
+            }
+        }
+    }
+
+    /// Ordinary dictation must NOT be diverted into the undo path.
+    ///
+    /// The counterweight to the test above: undo is now reachable from
+    /// `Mode::Dictate`, so the parser is the only thing keeping "scratch the
+    /// paint off" (a sentence) apart from "scratch that" (a command).
+    #[test]
+    fn dictation_that_merely_mentions_scratching_is_not_an_undo() {
+        let _guard = crate::testenv::no_inject();
+        for phrase in [
+            "scratch the paint off the door",
+            "we should scratch that idea from the agenda",
+            "the cat left a scratch",
+        ] {
+            match deliver(&Mode::Dictate, phrase) {
+                Outcome::Suppressed { text } => assert!(
+                    !text.contains("[route: undo]"),
+                    "{phrase:?} is dictation, not an undo command, got {text:?}"
+                ),
+                other => panic!("expected suppression, got {other:?}"),
+            }
+        }
+    }
+
+    /// The suppression switch must survive the shell's mangling of its value.
+    ///
+    /// `set OUTLOUD_NO_INJECT=1 && outloud ...` on cmd.exe assigns `"1 "`,
+    /// with the space before the `&&` included. Against an exact `== "1"`
+    /// test that reads as "not set", so the command a developer runs
+    /// specifically to avoid typing into their own windows is the one that
+    /// types into their own windows. It pasted into a live terminal during
+    /// the Windows verification pass.
+    ///
+    /// Asserted on the predicate rather than through `deliver`, because the
+    /// failure being guarded against is a REAL delivery: a test that got this
+    /// wrong would type its fixture into the developer running the suite.
+    #[test]
+    fn the_suppression_switch_tolerates_shell_mangled_values() {
+        let _guard = crate::testenv::deliver_lock();
+        // SAFETY: the lock makes this the only thread touching the
+        // environment, and every branch below restores it before returning.
+        for set in ["1", "1 ", " 1", "1\r", "\"1\"", "true", "yes"] {
+            unsafe { std::env::set_var("OUTLOUD_NO_INJECT", set) };
+            assert!(
+                no_inject_requested(),
+                "{set:?} must suppress delivery: guessing wrong types into \
+                 whatever window is focused"
+            );
+        }
+        for off in ["0", "false", "no", "off", ""] {
+            unsafe { std::env::set_var("OUTLOUD_NO_INJECT", off) };
+            assert!(
+                !no_inject_requested(),
+                "{off:?} must NOT suppress: an explicit off value has to mean \
+                 what it says"
+            );
+        }
+        unsafe { std::env::remove_var("OUTLOUD_NO_INJECT") };
+        assert!(
+            !no_inject_requested(),
+            "unset must not suppress, or normal dictation would never deliver"
+        );
     }
 
     /// Exiting must not abandon a pending clipboard restore.

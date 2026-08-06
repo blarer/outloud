@@ -1,8 +1,11 @@
 # Windows handoff: state of the build as of 2026-08-04
 
-Written on the Mac for whoever picks up work on the Windows machine. The
-Windows session lost its context; this is the shortest path back to
-productive, plus the things that are easy to get wrong.
+Written on the Mac for whoever picks up work on the Windows machine, then
+updated ON that machine after the checks it recommended were actually run.
+This is the shortest path back to productive, plus the things that are easy
+to get wrong. Where the original guidance turned out to be wrong on real
+hardware, it says so rather than being quietly corrected: the mistakes are
+the useful part.
 
 Start with the "Windows status, precisely" table in the top-level
 `README.md`: it lists every Windows backend and whether it has ever run on
@@ -16,14 +19,86 @@ Windows dictation works. It has been used to dictate into Discord on real
 hardware: whisper.cpp with CUDA on an RTX 5090, ~350ms end to end, routed to
 clipboard-paste because Discord discards accessibility writes.
 
-Landed since then, none of it exercised on a Windows machine yet:
+**The list below has now been run on the Windows machine** (2026-08-04). Every
+item found something, and the two most serious were invisible from macOS:
 
-| Change | Risk on Windows |
+| Change | Result on hardware |
 |---|---|
-| Undo (`"scratch that"`) wired to the ring on both platforms | Never run on Windows |
-| `--say` is repeatable: several utterances per process | Never run on Windows |
-| Per-app transport rules (`accepts`) applied to the tier path | Was macOS-only before |
-| Single-instance guard no longer calls a no-op `mem::forget` | Behaviour change |
+| Undo (`"scratch that"`) wired to the ring | **Was broken.** Typed the words into the document. Fixed and verified. |
+| `--say` is repeatable | Works. Two utterances, one process, whisper via CUDA. |
+| Per-app transport rules (`accepts`) on the tier path | Correct for all three tiers, checked with `--route`. |
+| Single-instance guard | Refuses correctly, but the mutex was mis-scoped and leaked. Fixed. |
+| The hotkey path itself (not on the original list) | Works: a real chord drives listening -> transcribing -> idle. |
+
+What the run actually turned up, worst first:
+
+1. **`"scratch that"` was typed into the user's document instead of undoing.**
+   Undo was gated on `Mode::Edit`, meaning on there being a selection. Our own
+   write *replaces* the selection, so by the time anyone asks to undo there is
+   only a caret: the gate made undo unreachable in exactly the sequence it
+   exists for. Measured against Notepad: an edit landed, then the field read
+   `the slow brown foxscratch that`.
+2. **`OUTLOUD_NO_INJECT` silently did nothing under `cmd.exe`.** It was
+   compared exactly against `"1"`, and `set VAR=1 && prog` assigns `"1 "`,
+   trailing space included. The command you run specifically to avoid typing
+   into your own windows was the one that typed into them. It pasted into a
+   live terminal here before it was found.
+3. **`--say` had no synthesizer on Windows**, so every check the previous
+   version of this document recommended failed with `program not found`
+   before reaching anything. Now goes through `System.Speech`.
+4. **A dry run computed the edit route and threw it away**, so `[route: ...]`
+   never reached the user. Same shape as the unreachable undo ring: a correct
+   value nothing displays.
+5. **`--permissions` reported a missing macOS grant on every Windows
+   machine**, telling users to fix a permission that does not exist here.
+6. **Nine tests had never passed on Windows**, all hardcoding macOS tier names
+   or Linux session types. None found a real defect; together they made a real
+   Windows failure impossible to spot.
+
+The workspace now passes on Windows: 0 failures, `clippy -D warnings` clean.
+
+### Still not verified here
+
+- **How the overlay looks.** Unchanged from `docs/plans/windows-overlay.md`:
+  CI proves the Direct2D path executes, not that the pixels are right.
+- **A real dictation into Discord since these changes.** The ROUTING is
+  verified (`outloud --route discord` answers clipboard-only on this
+  machine, and the same for Slack and Notepad), and dictation into Discord
+  worked before them, but nobody has spoken into Discord since. Deliberately
+  not tested by script: a run that writes goes into a live chat box, which
+  happened once here by accident and is why the undo harness now aborts when
+  focus moves.
+- **Whether `ValuePattern::SetValue` preserves the app's own undo stack.**
+  Still expected not to; still a known design gap.
+
+### Verifying it yourself
+
+```powershell
+powershell -File scripts\verify-undo-windows.ps1 -DryRun  # routing only, writes nothing
+powershell -File scripts\verify-undo-windows.ps1          # real writes into Notepad
+powershell -File scripts\verify-single-instance.ps1       # second daemon must refuse
+powershell -File scripts\verify-hotkey-windows.ps1        # the real hotkey path
+outloud --route discord                                   # a named app's transport
+outloud --route 5                                         # or whatever you focus in 5s
+```
+
+`verify-hotkey-windows.ps1` is the only one that exercises the product's
+actual entry point. Everything built on `--say` enters the pipeline BELOW the
+hotkey and the microphone, so a hook that never fires would pass every other
+check here. It sends the real `VK_RMENU` chord and asserts the daemon reached
+`state listening`, which means the hook received the key-down, the matcher
+recognised the chord, and capture opened. Confirmed on this machine:
+`listening -> transcribing -> idle` from a synthetic keypress.
+
+`--route NAME` answers without focusing the app, which matters because
+Windows refuses programmatic foreground changes and because the alternative
+way to find out is dictating into someone's chat window.
+
+`verify-undo-windows.ps1` asserts on the FIELD CONTENTS, read back through the
+clipboard, not on log lines: a log proves a value was computed, which is
+precisely how an unreachable undo ring survived for weeks. It reports
+INCONCLUSIVE rather than FAIL when focus is stolen mid-run, which happens on a
+machine someone is using.
 
 ## Build it
 
@@ -48,7 +123,7 @@ outloud --once --say "hello"   # one utterance, into whatever is focused
 ```
 
 `OUTLOUD_NO_INJECT=1` runs the whole pipeline and writes nothing. For an
-edit command it now also reports the route it *would* have taken:
+edit command it also reports the route it *would* have taken:
 
 ```
 transcript [route: undo|rewrite|no-match|dictate|unsupported]
@@ -56,27 +131,41 @@ transcript [route: undo|rewrite|no-match|dictate|unsupported]
 
 Use that before doing anything that types into a window.
 
+**Set it on its own line.** `set OUTLOUD_NO_INJECT=1 && outloud ...` in
+`cmd.exe` assigns `"1 "`, with the space before the `&&`, and until it was
+fixed here that read as unset and the "safe" command typed into a live
+terminal. The parse is forgiving now, but `scripts\dry-run.bat` and
+`scripts\dry-whisper.bat` set it correctly and are less to remember.
+
+`--say` uses `System.Speech` on Windows (`scripts\sapi-say.ps1`), so it needs
+no extra install. `--asr mock` emits one word per SECOND of voiced audio, so
+a short phrase commits nothing and reports "heard nothing?", which looks
+exactly like a broken pipeline: `scripts\mock-words.py FILE` tells the two
+apart, and `--asr whisper` avoids the question.
+
 ## What is untested and most likely to be wrong
 
-**1. Undo, all of it.** The decision half (`resolve_undo`) is unit-tested and
-runs on macOS CI. The Windows-specific half is compile-checked only:
+**1. Undo: now verified, and it was broken.** `UiaTarget::read()` reads the
+focused element through TextPattern, falling back to ValuePattern, and a
+field implementing neither correctly reports "could not read the field to
+undo into". All of that works. What did not was reaching it at all: see the
+list above.
 
-- `UiaTarget::read()` through TextPattern's `DocumentRange::GetText`, falling
-  back to ValuePattern's `CurrentValue`. If a field implements neither, undo
-  reports "could not read the field to undo into", which is correct but
-  worth confirming reads as intended.
-- The restore is written by `write_literal_via_tiers`, which deliberately
-  skips intent parsing. See the note below; this was a real bug.
+`scripts\verify-undo-windows.ps1` runs the whole thing unattended. Doing it
+by hand needs two things that are easy to miss:
 
-Try, in a Notepad window:
+- **The target window must be focused before the first key-down**, because
+  that is when dictate-vs-edit is decided. A run launched from a console
+  samples the console and silently degrades to dictation, which is why this
+  looked fine for so long. `OUTLOUD_REPLAY_DELAY_MS=6000` holds the first
+  utterance so you can click the window.
+- **Both utterances must share one process.** The undo ring is
+  process-lifetime, so two separate `--once` runs can never work.
 
 ```powershell
-outloud --once --say "change quick to slow" --say "scratch that"
+$env:OUTLOUD_REPLAY_DELAY_MS=6000
+outloud --once --asr whisper --say "change quick to slow" --say "scratch that"
 ```
-
-after typing `the quick brown fox` and selecting it. Expect the original
-text back. Both utterances share one process, which is required: the undo
-ring is process-lifetime, so two separate `--once` runs cannot work.
 
 **2. Whether ValuePattern's `SetValue` preserves the app's own undo stack.**
 It probably does not. If Ctrl+Z in Notepad after a dictation does something
@@ -86,7 +175,9 @@ a regression.
 **3. `accepts()` on the tier path.** Windows previously applied no per-app
 rules at all. Now `Acceptance::ClipboardOnly` skips both UIA and SendInput.
 If an app that used to work now takes the clipboard route unnecessarily,
-check `crates/text-target/src/targets/keys.rs` for its process name.
+check `crates/text-target/src/targets/keys.rs` for its process name, and ask
+`outloud --route` what the rules actually decided rather than inferring it
+from a dictation that went somewhere unexpected.
 
 ## Things that cost hours before, so they are worth stating plainly
 
@@ -114,6 +205,22 @@ bugs this week were values computed correctly that never reached the user,
 each behind passing tests. When something is wrong, check what the user can
 *see*, not what the code computes.
 
+**Anything that reads the focused element is racing the rest of the desktop.**
+Verification on this machine kept being derailed by whatever held focus: a
+fullscreen game reported its own window (with no TextPattern and no
+ValuePattern) for every probe, and one undo run read back a browser's URL
+bar and reported a product failure that was nothing of the kind. Windows also
+refuses `SetForegroundWindow` from a process that does not already own the
+foreground, and `AppActivate` fails silently against some windows, so a
+harness cannot reliably focus its own target. Anything asserting on a focused
+field must check it read the window it MEANT to, and report inconclusive
+rather than failure when it did not.
+
+**A `--once` run skips the single-instance guard deliberately.** It neither
+binds the hotkey nor stays resident, and benchmarks run several at a time. A
+pair of `--once` runs therefore "passes" a guard check while never touching
+the mutex: test it with real daemons.
+
 ## Lint Windows from the Mac now
 
 This is new and worth knowing about, because it shortens the loop a lot:
@@ -133,6 +240,11 @@ reason after the Linux job broke three times in one day.
 So: compile errors and lints for Windows can be caught on the Mac. What
 still needs the Windows machine is *behaviour* -- whether UIA actually reads
 that field, whether the paste lands, whether the hotkey fires.
+
+It does NOT run the Windows test suite, which turned out to matter: nine
+tests had never passed here, and the lint script cannot see that because it
+only checks. Running `cargo test --workspace --features display` on the
+Windows box is a separate and worthwhile step.
 
 If you change shared code on the Windows box, running these two on the Mac
 (or asking for them to be run) is much faster than a CI round trip, and they
@@ -157,8 +269,15 @@ through the parser: the safe set of phrases is not enumerable.
 ## Current test and CI state
 
 - 771 tests pass on macOS
+- The workspace passes on Windows too, as of 2026-08-04: 0 failures,
+  `clippy -D warnings` clean, `cargo fmt --check` clean. Before this session
+  nine tests failed here, every one of them a macOS-shaped assertion rather
+  than a real defect.
 - 17/17 CI jobs green, including `windows-2025` build and overlay smoke
 - `scripts/ci-check.sh`, `scripts/ci-check-cfg.sh`, and
   `scripts/ci-check-windows.sh` all pass on the Mac
 
-Nothing is unpushed. `main` is the truth.
+The Windows fixes above are committed on the Windows machine and may not be
+pushed yet; check `git log origin/main..HEAD` there before assuming `main`
+has them. The macOS CI has never run the changed undo path against a real
+focused field, because no CI can.

@@ -1,4 +1,4 @@
-//! Capability probing: pick the best available transport for the current
+﻿//! Capability probing: pick the best available transport for the current
 //! environment.
 //!
 //! The probe answers two questions in order. First, *where are we*: inside a
@@ -294,7 +294,7 @@ mod tests {
             has_display: true,
             has_clipboard: true,
         };
-        assert_eq!(select(&env).name, "macos-ax");
+        assert_eq!(select(&env).name, ACCESSIBILITY_TIER);
     }
 
     #[test]
@@ -323,7 +323,7 @@ mod tests {
             has_display: true,
             ..Default::default()
         };
-        assert_eq!(select(&env).name, "macos-ax");
+        assert_eq!(select(&env).name, ACCESSIBILITY_TIER);
     }
 
     #[test]
@@ -384,6 +384,17 @@ mod tests {
         assert_eq!(select(&env).name, "osc52");
     }
 
+    /// The accessibility tier this platform actually has.
+    ///
+    /// Named per-platform rather than hardcoded to `macos-ax`: Windows'
+    /// accessibility tier is UI Automation, and needs no trust grant. These
+    /// assertions had never passed on Windows, where `select` correctly
+    /// answered "windows-uia" and the test insisted on the macOS name.
+    #[cfg(all(feature = "display", target_os = "windows"))]
+    const ACCESSIBILITY_TIER: &str = "windows-uia";
+    #[cfg(all(feature = "display", not(target_os = "windows")))]
+    const ACCESSIBILITY_TIER: &str = "macos-ax";
+
     // Asserts a display-tier outcome, so it only applies to a build that
     // has those tiers compiled in.
     #[test]
@@ -394,7 +405,7 @@ mod tests {
             has_display: true,
             ..Default::default()
         };
-        assert_eq!(select(&env).name, "macos-ax");
+        assert_eq!(select(&env).name, ACCESSIBILITY_TIER);
     }
 
     // Asserts a display-tier outcome, so it only applies to a build that
@@ -407,7 +418,18 @@ mod tests {
             has_clipboard: true,
             ..Default::default()
         };
-        assert_eq!(select(&env).name, "clipboard-paste");
+        // Windows has no trust grant to lack: UI Automation is available to
+        // any non-elevated process, so an untrusted desktop still gets the
+        // accessibility tier there rather than falling back to the clipboard.
+        // The clipboard fallback on Windows is a RUNTIME one (UIA
+        // construction or the write failing), which this environment-level
+        // selection cannot express.
+        let expected = if cfg!(target_os = "windows") {
+            ACCESSIBILITY_TIER
+        } else {
+            "clipboard-paste"
+        };
+        assert_eq!(select(&env).name, expected);
     }
 
     #[test]

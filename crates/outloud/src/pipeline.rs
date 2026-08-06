@@ -1123,13 +1123,22 @@ async fn commit_transcript(
         None => engine.transition(OverlayState::Idle, None),
     };
 
+    // A dry run's reported transcript, carrying the `[route: ...]` annotation
+    // that `Outcome::Suppressed` computes. Without this the route is worked
+    // out correctly and then dropped on the floor: `outcome_str` records only
+    // "suppressed", and the report prints the RAW transcript, so the one
+    // observable signal a dry run exists to produce never reaches the user.
+    // That is the same shape as the unreachable undo ring: a correct value
+    // that nothing displays.
+    let mut reported_text: Option<String> = None;
     let outcome_str = match outcome {
         Outcome::Wrote { via, .. } => {
             settled(engine);
             via
         }
-        Outcome::Suppressed { .. } => {
+        Outcome::Suppressed { text } => {
             settled(engine);
+            reported_text = Some(text);
             "suppressed (OUTLOUD_NO_INJECT)".into()
         }
         Outcome::EmptyTranscript => {
@@ -1180,7 +1189,7 @@ async fn commit_transcript(
     };
 
     Some(UtteranceReport {
-        transcript: text.to_string(),
+        transcript: reported_text.unwrap_or_else(|| text.to_string()),
         outcome: outcome_str,
         finalize_ms,
         inject_ms,
