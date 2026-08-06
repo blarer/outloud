@@ -51,12 +51,12 @@ fn synth(text: &str) -> Vec<f32> {
 }
 
 fn helper_path() -> std::path::PathBuf {
-    std::env::var_os("AQUA_SPEECH_HELPER")
+    std::env::var_os("OUTLOUD_SPEECH_HELPER")
         .map(Into::into)
         .unwrap_or_else(|| {
             std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
                 .join("helper")
-                .join("aqua-speech-helper")
+                .join("outloud-speech-helper")
         })
 }
 

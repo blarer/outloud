@@ -14,13 +14,13 @@
 //! Weights are not in the repository (142MiB, and the project vendors no
 //! model). The test looks for a ggml model in this order:
 //!
-//! 1. `$AQUA_WHISPER_MODEL`
+//! 1. `$OUTLOUD_WHISPER_MODEL`
 //! 2. `~/.aqua-oss/models/whisper-base.en`, where `asr::models::fetch` puts
 //!    the `whisper-base.en` registry entry.
 //!
 //! With neither present the test reports the fix and passes, so a clone
 //! without weights still gets a green suite. CI that wants the real
-//! assertion sets `AQUA_WHISPER_MODEL`.
+//! assertion sets `OUTLOUD_WHISPER_MODEL`.
 
 #![cfg(feature = "whisper")]
 
@@ -43,11 +43,11 @@ fn read_wav_16k_mono(path: &std::path::Path) -> Vec<f32> {
 }
 
 fn model_path() -> Option<std::path::PathBuf> {
-    if let Some(p) = std::env::var_os("AQUA_WHISPER_MODEL") {
+    if let Some(p) = std::env::var_os("OUTLOUD_WHISPER_MODEL") {
         let p = std::path::PathBuf::from(p);
         assert!(
             p.exists(),
-            "AQUA_WHISPER_MODEL points at {}, which does not exist",
+            "OUTLOUD_WHISPER_MODEL points at {}, which does not exist",
             p.display()
         );
         return Some(p);
@@ -63,7 +63,7 @@ fn transcribes_the_fixture_recording() {
             "skipping: no whisper model. Fetch one with\n  \
              curl -L -o ~/.aqua-oss/models/whisper-base.en \\\n    \
              https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-base.en.bin\n\
-             or set AQUA_WHISPER_MODEL to a ggml .bin."
+             or set OUTLOUD_WHISPER_MODEL to a ggml .bin."
         );
         return;
     };
