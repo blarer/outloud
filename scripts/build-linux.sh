@@ -102,7 +102,7 @@ if command -v dpkg-deb >/dev/null 2>&1; then
 Package: outloud-spike
 Version: $VERSION
 Architecture: $DEB_ARCH
-Maintainer: aquaoss project
+Maintainer: OutLoud project
 Section: utils
 Priority: optional
 Description: Local edit-by-voice spike harness

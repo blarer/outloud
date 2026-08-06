@@ -1,14 +1,28 @@
 #!/usr/bin/env python3
-"""Rename Hexavoice -> OutLoud, protecting the competitor's name.
+"""Rename Hexavoice -> OutLoud (and the last aqua-named identifiers), protecting
+the competitor's name.
 
 Same shape as the previous rename, and the same reason for the masking pass:
 `Aqua Voice` is a DIFFERENT product our docs analyse by name. It survived the
 last rename because it was masked; it must survive this one too.
 
 Also protects the strings that are deliberately frozen history rather than
-current naming: the legacy config directory list, the `aqua-speech-helper`
-filename that crates/asr looks for literally, the `~/.aqua-oss/models` cache
-path, and the old bundle ids that uninstall/upgrade paths must still clear.
+current naming: the legacy config directory list, the legacy env-var prefix,
+the pre-rename bridge socket variables, the `aqua-replay v1` schema line, the
+`# aqua shell-bridge` rc marker, `aqua.fish`, and the old bundle ids that
+uninstall/upgrade paths must still clear.
+
+Those PROTECTED entries are frozen FOREVER, not until the next rename. They
+name artifacts that already exist on users' disks, and rewriting them turns a
+migration path into a silent data loss. crates/config's
+`legacy_generations_are_frozen_history` test exists because a previous run of
+this script rewrote exactly such a list and left migration untested.
+
+`aqua-speech-helper` and `aqua-oss` are NO LONGER protected: the helper binary
+is `outloud-speech-helper` and the model cache is `~/.outloud/models`, with the
+old names surviving only inside explicitly-named legacy constants
+(`LEGACY_HELPER_BIN`, `LEGACY_MODEL_HOME_DIR`) that this script must not touch
+either — check the diff after running it.
 """
 import pathlib
 import re
@@ -23,9 +37,16 @@ PROTECTED = [
     "aquavoice.com",
     "withaqua.com",
     "aquavoice",
-    # Frozen history: renaming these breaks upgraders or the helper lookup.
-    "aqua-speech-helper",
-    "aqua-oss",
+    # Frozen history: renaming these breaks upgraders.
+    "LEGACY_HELPER_BIN",
+    "LEGACY_SPEECH_HELPER_ENV",
+    "LEGACY_MODEL_HOME_DIR",
+    "AQUA_BRIDGE_SOCKET",
+    "AQUA_BRIDGE_KEY",
+    "AQUA_LAUNCHED_VIA_LS",
+    "aqua-replay v1",
+    "# aqua shell-bridge",
+    "aqua.fish",
     "dev.aquaoss.aquad",
     "dev.aquaoss.doctor",
     "dev.aquaoss.spike",
@@ -37,6 +58,20 @@ PROTECTED = [
 ]
 
 RULES = [
+    # The last aqua-named current identifiers. Deliberately specific: a bare
+    # "aqua" rule would rewrite the competitor's name, Apple's "macOS Aqua"
+    # session type, and the overlay's AQUA palette constants.
+    ("aqua-speech-helper", "outloud-speech-helper"),
+    ("AQUA_SPEECH_HELPER", "OUTLOUD_SPEECH_HELPER"),
+    ("AQUA_ASR_LOCALE", "OUTLOUD_ASR_LOCALE"),
+    ("AQUA_WHISPER_MODEL", "OUTLOUD_WHISPER_MODEL"),
+    ("AQUA_SPIKE_LOG", "OUTLOUD_SPIKE_LOG"),
+    ("~/.aqua-oss/models", "~/.outloud/models"),
+    (".aqua-oss/models", ".outloud/models"),
+    ("aqua-oss-spike", "outloud-spike"),
+    ("AquaSpike", "OutLoudSpike"),
+    ("aqua-spiked", "outloud-spiked"),
+    ("aqua-spike", "outloud-spike"),
     ("bundle-hexad-macos.sh", "bundle-outloud-macos.sh"),
     ("crates/hexad", "crates/outloud"),
     ("Hexavoice.app/Contents/MacOS/Hexavoice", "OutLoud.app/Contents/MacOS/OutLoud"),

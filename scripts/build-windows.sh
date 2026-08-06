@@ -122,7 +122,7 @@ if command -v wix >/dev/null 2>&1; then
 <!-- Minimal per-user MSI for enterprise deployment tooling. UpgradeCode is
      fixed forever: changing it orphans installed copies from upgrades. -->
 <Wix xmlns="http://wixtoolset.org/schemas/v4/wxs">
-  <Package Name="OutLoud Spike" Manufacturer="aquaoss" Version="$VERSION"
+  <Package Name="OutLoud Spike" Manufacturer="OutLoud" Version="$VERSION"
            UpgradeCode="7f9b2a44-1c3e-4d5f-9a8b-0e6f31c25a10" Scope="perUser">
     <MajorUpgrade DowngradeErrorMessage="A newer version is already installed." />
     <StandardDirectory Id="LocalAppDataFolder">

@@ -2,7 +2,7 @@
 
 # DELIBERATELY NOT RENAMED to OutLoud. This bundles spike-cli, the internal
 # accessibility development harness, not the shipping product, so the name is
-# never seen by a user. docs/planning/ also references the AquaSpike paths and
+# never seen by a user. docs/planning/ also references the OutLoudSpike paths and
 # is owned elsewhere, so renaming here would force edits into a directory this
 # change cannot touch. Leave it; it is not an oversight.
 # Package the spike CLI as a macOS .app bundle.
@@ -17,7 +17,7 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-APP_NAME="AquaSpike"
+APP_NAME="OutLoudSpike"
 BUNDLE_ID="dev.hexavoice.spike"
 APP_DIR="$ROOT/dist/$APP_NAME.app"
 
