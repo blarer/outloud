@@ -70,7 +70,9 @@ waste your afternoon.
    `OutLoud.app` as described below.
 
    ```bash
-   # The equivalent from a terminal, if you prefer:
+   # The equivalent from a terminal, if you prefer.
+   # preflight: legacy-tcc-id intentional - clearing the grant the rename
+   # orphaned is the whole point of this step, so the OLD id is correct here.
    tccutil reset Accessibility dev.aquaoss.aquad
    tccutil reset Microphone dev.aquaoss.aquad
    ```

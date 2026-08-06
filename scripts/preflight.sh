@@ -129,6 +129,150 @@ check_stale_names
 #    build no longer produces sends a user chasing a ghost, which is worse
 #    than no remedy (this exact bug shipped once: cce4396).
 # ---------------------------------------------------------------------------
+# 8. Every `tccutil reset <service> <id>` names an identifier this repo
+#    actually declares.
+#
+#    tccutil prints "Successfully reset" for an unknown identifier and exits
+#    0, so an id that no bundle declares makes the documented recovery step a
+#    no-op that looks like it worked. That shipped: CONTRIBUTING and the
+#    onboarding doc both told users to reset dev.aquaoss.spike while the
+#    harness declared dev.hexavoice.spike.
+#
+#    Ids quoted as EVIDENCE are exempt by construction: the exemption is a
+#    comment marker rather than a name list, so a doc showing the failure
+#    keeps working and a live instruction cannot hide behind it.
+check_tcc_ids() {
+    local bad=""
+    # Ground truth: identifiers the repo creates, from the places that create
+    # them (bundle scripts and the Rust constant the doctor reports against).
+    local declared
+    declared="$(
+        {
+            # Identifiers the repo creates today.
+            grep -h 'BUNDLE_ID=' scripts/bundle-*.sh 2>/dev/null |
+                sed -E 's/.*BUNDLE_ID="([^"]+)".*/\1/'
+            grep -rhoE 'BUNDLE_ID[^=]*= *"[^"]+"' crates/ 2>/dev/null |
+                sed -E 's/.*"([^"]+)".*/\1/'
+        } | grep -E '^[a-z0-9.]+$' | sort -u
+    )"
+
+    # Identifiers previous generations created. Legitimate ONLY in the
+    # uninstaller, which sweeps every generation so a rename cannot orphan a
+    # grant. Anywhere else a legacy id is the defect that shipped: a rebuild
+    # instruction named dev.aquaoss.spike while the harness declared
+    # dev.hexavoice.spike, and tccutil reported success for the dead one, so
+    # the documented recovery step did nothing and the real grant stayed
+    # broken.
+    local legacy
+    legacy="$(
+        sed -nE '/^for bundle_id in/,/do$/p' scripts/uninstall-macos.sh 2>/dev/null |
+            tr ' \\\\' '\n\n' | grep -E '^dev\.[a-z0-9.]+$' | sort -u
+    )"
+
+    local line file id
+    while IFS= read -r line; do
+        file="${line%%:*}"
+        id="$(echo "$line" | grep -oE 'tccutil reset [A-Za-z]+ [A-Za-z0-9._-]+' |
+            awk '{print $4}' | head -1)"
+        [[ -n "$id" ]] || continue
+        # Exempt when the line is evidence rather than instruction. Two
+        # shapes, both meaning "this already happened, here is what it
+        # printed" rather than "run this":
+        #   - a comment line
+        #   - a transcript line carrying a `$` prompt
+        # A line a reader is meant to run is written bare, so neither
+        # exemption can hide a live instruction.
+        echo "$line" | grep -qE ':[[:space:]]*#' && continue
+        echo "$line" | grep -qE ':[[:space:]]*\$ ' && continue
+        if echo "$declared" | grep -qx "$id"; then
+            continue
+        fi
+        if echo "$legacy" | grep -qx "$id"; then
+            # A legacy id is right in exactly two places: the uninstaller,
+            # which sweeps every generation, and a migration step whose whole
+            # purpose is clearing the entry a rename orphaned. It is wrong in
+            # a rebuild or re-grant instruction, where naming a dead id means
+            # the reset succeeds, does nothing, and the live grant stays
+            # broken. That is the defect that shipped.
+            #
+            # The command text cannot tell those apart, so the file must say
+            # which it is. Requiring the marker also makes the author decide.
+            [[ "$file" == *uninstall-macos.sh ]] && continue
+            grep -q 'preflight: legacy-tcc-id intentional' "$file" && continue
+            bad+="$file resets LEGACY id $id without declaring why (add a 'preflight: legacy-tcc-id intentional' line if clearing an orphaned grant is the point, otherwise name the live id); "
+            continue
+        fi
+        bad+="$file names TCC id $id that nothing in this repo declares; "
+    done < <(
+        grep -rn 'tccutil reset' --include='*.sh' --include='*.rs' --include='*.md' \
+            --include='*.yml' . 2>/dev/null | grep -v '^./target/'
+    )
+
+    if [[ -n "$bad" ]]; then
+        record FAIL "tcc-ids" "$bad NEXT: name the id the app declares today (BUNDLE_ID in the bundle scripts); legacy ids belong only in uninstall-macos.sh, and evidence belongs on a comment or \$-prompt line"
+    else
+        record PASS "tcc-ids" "every tccutil id is one this repo declares"
+    fi
+}
+
+# 9. Every dist/ path a workflow verifies is one a build script writes.
+#
+#    release.yml checked for dist/*/aqua-spike[.exe] long after the build
+#    scripts had been renamed to emit outloud-spike. A verification step
+#    pointed at a path nothing produces, which is a gate that cannot fail for
+#    the reason it exists and can fail for one it does not.
+check_workflow_artifacts() {
+    local bad=""
+    # What the build scripts actually write.
+    local written
+    written="$(
+        # Every dist/ path any build or bundle script mentions, plus the
+        # variables they assign, because the interesting writes go through
+        # them: `cp "$BIN" "$OUT_DIR/outloud-spiked..."` names neither
+        # dist/ nor the filename on the same line as the copy.
+        # Every script, not just build-*/bundle-*: dist/sbom/ is written by
+        # ci-compliance.sh, and a check that only knows about two filename
+        # patterns fails on the third the moment someone adds one.
+        grep -rhoE 'dist/[A-Za-z0-9_/*.${}:+-]+' scripts/ 2>/dev/null \
+            --exclude=preflight.sh --exclude=.rename-outloud.py |
+            grep -vE '^[[:space:]]*#' |
+            sed -E 's/\$\{[^}]*\}/*/g; s/\$[A-Za-z_]+/*/g' | sort -u
+        # Filenames assembled next to a dist/ variable rather than inside it,
+        # e.g. cp "$BIN" "$OUT_DIR/outloud-spiked${TARGET:+-$TARGET}".
+        grep -rhoE '"\$[A-Za-z_]+/[A-Za-z0-9_.${}:+-]+' scripts/ 2>/dev/null \
+            --exclude=preflight.sh --exclude=.rename-outloud.py |
+            sed -E 's/.*\///; s/\$\{[^}]*\}//g; s/\$[A-Za-z_]+//g' | sort -u
+    )"
+
+    local ref stem
+    while IFS= read -r ref; do
+        # Reduce both sides to a filename stem so a target-triple or version
+        # substitution on either side does not read as a mismatch.
+        # Reduce to the stable stem: strip globs, the .exe suffix, and any
+        # target triple the workflow spells out but the script leaves as
+        # ${TARGET}. What remains is the part a rename would change.
+        stem="$(basename "$ref" |
+            sed -E 's/\*//g; s/\.exe$//; s/-(x86_64|aarch64)-[a-z0-9-]+$//; s/[-.]$//')"
+        [[ -n "$stem" ]] || continue
+        # A pure-glob reference (dist/*.dmg) names no specific artifact, so a
+        # rename cannot invalidate it and there is nothing to verify.
+        [[ "$(basename "$ref")" == \** ]] && continue
+        # Whole-name match, not substring: "aqua-spike" is a substring of
+        # "outloud-spiked", so a substring test passed the very rename this
+        # check was written to catch.
+        echo "$written" | sed -E 's#.*/##' | grep -qx "$stem" ||
+            bad+="workflow verifies dist path '$ref' that no build script writes; "
+    done < <(
+        grep -rhoE 'dist/[A-Za-z0-9_/*.$-]+' .github/workflows/ 2>/dev/null | sort -u
+    )
+
+    if [[ -n "$bad" ]]; then
+        record FAIL "workflow-artifacts" "$bad NEXT: reconcile the workflow path with the cp/mv line in the owning build script"
+    else
+        record PASS "workflow-artifacts" "every workflow dist/ path is one a build script writes"
+    fi
+}
+
 check_doctor_remedies() {
     local checks_rs="crates/diag/src/checks.rs" bad=""
     if [[ ! -f "$checks_rs" ]]; then
@@ -167,6 +311,8 @@ check_doctor_remedies() {
     fi
 }
 check_doctor_remedies
+check_tcc_ids
+check_workflow_artifacts
 
 # ---------------------------------------------------------------------------
 # 4. App bundle well-formed. Checked against the bundle on disk; if none has
