@@ -33,14 +33,14 @@
 //! math, the meter shaping — is pure Rust in [`state`] and [`layout`],
 //! compiled and unit-tested on every platform including headless CI.
 
-pub mod layout;
-pub mod mark;
-pub mod menu;
-pub mod pixel;
 /// The animated cat mascot: pure vector geometry plus a pure animator.
 /// Platform-neutral for the same reason [`mark`] is: headless CI asserts
 /// its motion properties, and every backend renders the same points.
 pub mod cat;
+pub mod layout;
+pub mod mark;
+pub mod menu;
+pub mod pixel;
 /// The animated skull mascot: pure vector geometry plus a pure animator.
 /// Platform-neutral for the same reason [`mark`] is: headless CI asserts
 /// its motion properties, and every backend renders the same points.

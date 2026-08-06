@@ -301,9 +301,8 @@ fn poly_path(poly: &[crate::layout::Point]) -> Option<Retained<NSBezierPath>> {
     if poly.len() < 3 {
         return None;
     }
-    let map = |p: &crate::layout::Point| {
-        NSPoint::new(CAT_X + p.x * CAT_SIZE, CAT_Y + p.y * CAT_SIZE)
-    };
+    let map =
+        |p: &crate::layout::Point| NSPoint::new(CAT_X + p.x * CAT_SIZE, CAT_Y + p.y * CAT_SIZE);
     let path = NSBezierPath::bezierPath();
     path.moveToPoint(map(&poly[0]));
     for p in &poly[1..] {

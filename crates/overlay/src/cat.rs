@@ -198,7 +198,10 @@ fn ruff_outline() -> Vec<Point> {
 
 /// Mirror a point across the head's vertical centreline.
 fn mirror(p: Point) -> Point {
-    Point { x: 1.0 - p.x, y: p.y }
+    Point {
+        x: 1.0 - p.x,
+        y: p.y,
+    }
 }
 
 fn lerp(a: Point, b: Point, t: f64) -> Point {
@@ -259,10 +262,22 @@ fn whisker(a: Point, b: Point) -> Vec<Point> {
     let len = (dx * dx + dy * dy).sqrt().max(1e-9);
     let (nx, ny) = (-dy / len * HALF_W, dx / len * HALF_W);
     vec![
-        Point { x: a.x + nx, y: a.y + ny },
-        Point { x: b.x + nx, y: b.y + ny },
-        Point { x: b.x - nx, y: b.y - ny },
-        Point { x: a.x - nx, y: a.y - ny },
+        Point {
+            x: a.x + nx,
+            y: a.y + ny,
+        },
+        Point {
+            x: b.x + nx,
+            y: b.y + ny,
+        },
+        Point {
+            x: b.x - nx,
+            y: b.y - ny,
+        },
+        Point {
+            x: a.x - nx,
+            y: a.y - ny,
+        },
     ]
 }
 
@@ -381,8 +396,14 @@ pub fn posed_geometry(pose: &CatPose) -> CatGeometry {
     let top = 0.685;
     let bottom = top + 0.005 + MOUTH_DROP * open;
     let mouth = vec![
-        Point { x: 0.5 - half_w, y: top },
-        Point { x: 0.5 + half_w, y: top },
+        Point {
+            x: 0.5 - half_w,
+            y: top,
+        },
+        Point {
+            x: 0.5 + half_w,
+            y: top,
+        },
         Point {
             x: 0.5 + half_w * 0.8,
             y: bottom,
@@ -396,8 +417,14 @@ pub fn posed_geometry(pose: &CatPose) -> CatGeometry {
     // opening so they only appear mid-meow, as in the reference photo.
     let fang = |cx: f64| {
         vec![
-            Point { x: cx - 0.012, y: top },
-            Point { x: cx + 0.012, y: top },
+            Point {
+                x: cx - 0.012,
+                y: top,
+            },
+            Point {
+                x: cx + 0.012,
+                y: top,
+            },
             Point {
                 x: cx,
                 y: top + 0.045 * open,
@@ -412,7 +439,19 @@ pub fn posed_geometry(pose: &CatPose) -> CatGeometry {
     let pupil_ry = PUPIL_RY * blink;
     let eye = |dx: f64| ellipse(0.5 + dx, EYE_Y, EYE_RX, eye_ry, EYE_SEGMENTS);
     let pupil = |dx: f64| ellipse(0.5 + dx, EYE_Y, pupil_rx, pupil_ry, EYE_SEGMENTS);
-    let glint = |dx: f64| ellipse(0.5 + dx, EYE_Y, pupil_rx * 0.6, pupil_ry * 0.6, EYE_SEGMENTS);
+    // The glint sits high in the pupil, toward the backend's light
+    // (LIGHT_ELEVATION is top-front, slightly left), and stays small: a
+    // glint that fills the pupil recolours it, and the pupil must stay
+    // dark for the dilation to read.
+    let glint = |dx: f64| {
+        ellipse(
+            0.5 + dx - pupil_rx * 0.15,
+            EYE_Y - pupil_ry * 0.35,
+            pupil_rx * 0.45,
+            pupil_ry * 0.35,
+            EYE_SEGMENTS,
+        )
+    };
 
     let perk = pose.ear_perk;
     let ears = [ear(perk, -1.0), ear(perk, 1.0)];
@@ -1021,8 +1060,14 @@ mod tests {
         assert_eq!(p1.scale, 1.0);
         assert_eq!(p1.tilt, 0.0);
         assert_eq!(p1.eye_open, 1.0);
-        assert_eq!(p1.mouth_open, 0.5, "level tracking stays: it is information");
-        assert_eq!(p1.ear_perk, 1.0, "ear posture stays: it is state signalling");
+        assert_eq!(
+            p1.mouth_open, 0.5,
+            "level tracking stays: it is information"
+        );
+        assert_eq!(
+            p1.ear_perk, 1.0,
+            "ear posture stays: it is state signalling"
+        );
     }
 
     #[test]
