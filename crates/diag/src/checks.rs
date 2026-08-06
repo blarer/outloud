@@ -755,14 +755,10 @@ pub struct ModelFiles;
 /// Where models will live. Kept as a function so tests and future config can
 /// override the base directory.
 pub fn model_dir() -> std::path::PathBuf {
-    let home = std::env::var("HOME").unwrap_or_else(|_| ".".into());
-    // DELIBERATELY still `.aqua-oss`, not renamed with the product. The
-    // copy-then-verify migration that is right for a 2KB config file is
-    // indefensible for multi-gigabyte model weights: it either doubles disk
-    // usage or performs a move that is not crash-safe, and a half-moved
-    // model directory after a power cut is a re-download the user never
-    // agreed to. The path is not user-facing. See the rename commit.
-    Path::new(&home).join(".aqua-oss/models")
+    // Renamed to `~/.outloud` after all, by rename rather than by copy; see
+    // config::paths::migrate_model_dir for why that is safe and for the
+    // read-only fallback that keeps a pre-rename cache working.
+    config::model_dir()
 }
 
 impl Check for ModelFiles {

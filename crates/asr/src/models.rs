@@ -4,7 +4,7 @@
 //! hundreds of MB, some carry non-MIT licences (Parakeet weights are
 //! CC-BY-4.0), and users on macOS 26 may never need any of them (Apple's
 //! backend is zero-install). So models are fetched on demand into
-//! `~/.aqua-oss/models`, verified by SHA256, and re-download resumes from
+//! `~/.outloud/models`, verified by SHA256, and re-download resumes from
 //! where it stopped, because a 600MB fetch dying at 95% on hotel Wi-Fi and
 //! restarting from zero is how apps earn one-star reviews.
 //!
@@ -72,11 +72,12 @@ pub fn registry() -> Vec<ModelSpec> {
 }
 
 /// Where models live. Overridable for tests via `base`.
+///
+/// Delegated to `config::paths` so the recognizer, the LLM cache and the
+/// doctor cannot drift apart about the directory, and so the rename from
+/// `~/.aqua-oss` has exactly one migration.
 pub fn default_cache_dir() -> PathBuf {
-    let home = std::env::var_os("HOME")
-        .map(PathBuf::from)
-        .unwrap_or_else(|| PathBuf::from("."));
-    home.join(".aqua-oss").join("models")
+    config::model_dir()
 }
 
 /// Download progress, delivered after every chunk.
@@ -122,7 +123,7 @@ pub fn fetch(
     if final_path.exists() {
         // Present implies verified *if this process put it there*. Files
         // arriving any other way break that: the documented
-        // `curl -o ~/.aqua-oss/models/whisper-base.en ...` shortcut, a
+        // `curl -o ~/.outloud/models/whisper-base.en ...` shortcut, a
         // hand-copied model, and every file cached before its hash was
         // pinned. Those are exactly the paths an attacker or a bad mirror
         // would use, so a pinned model with no verification marker is

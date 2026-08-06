@@ -15,7 +15,7 @@
 //! model). The test looks for a ggml model in this order:
 //!
 //! 1. `$OUTLOUD_WHISPER_MODEL`
-//! 2. `~/.aqua-oss/models/whisper-base.en`, where `asr::models::fetch` puts
+//! 2. `~/.outloud/models/whisper-base.en`, where `asr::models::fetch` puts
 //!    the `whisper-base.en` registry entry.
 //!
 //! With neither present the test reports the fix and passes, so a clone
@@ -61,7 +61,7 @@ fn transcribes_the_fixture_recording() {
     let Some(model) = model_path() else {
         eprintln!(
             "skipping: no whisper model. Fetch one with\n  \
-             curl -L -o ~/.aqua-oss/models/whisper-base.en \\\n    \
+             curl -L -o ~/.outloud/models/whisper-base.en \\\n    \
              https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-base.en.bin\n\
              or set OUTLOUD_WHISPER_MODEL to a ggml .bin."
         );

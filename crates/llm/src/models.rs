@@ -57,10 +57,7 @@ pub fn registry() -> Vec<LlmModelSpec> {
 /// Where models live: shared with the ASR models on purpose, one cache to
 /// manage and one directory for the user to delete.
 pub fn default_cache_dir() -> PathBuf {
-    let home = std::env::var_os("HOME")
-        .map(PathBuf::from)
-        .unwrap_or_else(|| PathBuf::from("."));
-    home.join(".aqua-oss").join("models")
+    config::model_dir()
 }
 
 /// Download progress, delivered after every chunk.

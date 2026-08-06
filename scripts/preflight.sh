@@ -64,13 +64,15 @@ echo
 #
 # Deliberate survivors that must NOT be flagged:
 #   - LEGACY_DIRS in crates/config/src/relocate.rs: frozen migration history.
-#   - .aqua-oss model dir: multi-GB weights, moving them is not crash-safe.
-#   - aqua-speech-helper / AQUA_SPEECH_HELPER: the filename crates/asr
-#     actually looks for (renaming only one side broke transcription once,
-#     see `git log --oneline | grep -i helper`).
+#   - .aqua-oss / AQUA_SPEECH_HELPER / aqua-speech-helper: the pre-rename
+#     names, now read-only fallbacks in config::paths::migrate_model_dir and
+#     asr::backends::apple::find_helper so upgraders keep working.
 #   - dev.hexavoice.* bundle ids: TCC keys grants by identifier; renaming
 #     silently revokes every tester's permission (beta-readiness M8).
 #   - "Aqua Voice" / withaqua.com: the competitor, not us.
+#   - theme::palette AQUA / AQUA_PALE / AQUA_DEEP: the overlay's colour
+#     names, and "macOS Aqua": Apple's name for the GUI session. Neither is
+#     a product name.
 #   - scripts/bundle-macos.sh: internal harness, documented as deliberately
 #     not renamed in its own header.
 #   - audit/readiness docs and docs/planning: dated snapshots that quote old
@@ -93,7 +95,7 @@ check_stale_names() {
     doc_hits="$(grep -rIn --include='*.md' --include='*.sh' \
                 -iE 'hexavoice|\bhexad\b|\baqua\b' \
                 README.md docs scripts 2>/dev/null \
-        | grep -viE 'aquaspike|aqua[-_ ]?voice|withaqua\.com|\.aqua-oss|aqua[-_]speech[-_]helper|dev\.hexavoice' \
+        | grep -viE 'aquaspike|aqua[-_ ]?voice|withaqua\.com|\.aqua-oss|aqua[-_]speech[-_]helper|dev\.hexavoice|theme::palette|AQUA_PALE|AQUA_DEEP|palette::(PAPER|AQUA)|macOS Aqua' \
         | grep -vE '^scripts/(bundle-macos|uninstall-macos|preflight)\.sh' \
         | grep -vE '^docs/(planning/|pre-release-audit|beta-readiness|release-readiness|release-checklist|M0-results|competitive-analysis|macos-quickstart|overlay-redesign)' \
         )" || true

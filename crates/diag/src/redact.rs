@@ -160,12 +160,12 @@ mod tests {
     #[test]
     fn free_text_scrub_removes_home_and_username() {
         let s = scrub_free_text(
-            "model at /Users/jane/.aqua-oss/models missing; user jane should download",
+            "model at /Users/jane/.outloud/models missing; user jane should download",
             "/Users/jane",
             "jane",
         );
         assert!(!s.contains("jane"), "scrubbed: {s}");
-        assert!(s.contains("~/.aqua-oss/models"));
+        assert!(s.contains("~/.outloud/models"));
     }
 
     #[test]
@@ -174,7 +174,7 @@ mod tests {
             Report {
                 name: "model-files",
                 outcome: CheckOutcome::warn(
-                    "no model in /Users/jane/.aqua-oss/models",
+                    "no model in /Users/jane/.outloud/models",
                     ErrorClass::Configuration,
                     "download the model",
                 ),

@@ -9,7 +9,7 @@
 //! touch the filesystem except [`ensure_user_config`], which is explicitly a
 //! create-if-missing helper.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 /// The product's directory name under the config root. One constant, so the
 /// daemon, the docs, and the relocation logic cannot disagree about where
@@ -71,6 +71,126 @@ pub fn system_config_path() -> PathBuf {
 /// The vocabulary folder, beside the user's config file.
 pub fn vocabulary_dir() -> Option<PathBuf> {
     Some(user_config_path()?.parent()?.join("vocabulary"))
+}
+
+/// The directory holding downloaded model weights: `~/.outloud/models`.
+///
+/// Not under `~/.config`: these are multi-gigabyte artifacts, not settings,
+/// and a user who backs up or syncs their dotfiles should not silently be
+/// syncing 1.5GB of GGUF.
+pub const MODEL_HOME_DIR: &str = ".outloud";
+
+/// The name this directory had before the product was renamed to OutLoud.
+///
+/// Frozen history: only ever read, and only until [`migrate_model_dir`] has
+/// moved a user across.
+pub const LEGACY_MODEL_HOME_DIR: &str = ".aqua-oss";
+
+/// Where model weights live for this machine.
+///
+/// Returns the legacy `~/.aqua-oss/models` when that is the only directory
+/// present, so a build that has not run [`migrate_model_dir`] (a test, a
+/// one-shot CLI, a host that starts differently) still finds an existing
+/// 1.5GB download instead of re-fetching it.
+pub fn model_dir() -> PathBuf {
+    let home = home_dir().map(PathBuf::from).unwrap_or_else(|| ".".into());
+    model_dir_in(&home)
+}
+
+/// [`model_dir`] against an explicit home, for tests and for hosts that
+/// relocate the whole tree.
+pub fn model_dir_in(home: &Path) -> PathBuf {
+    let current = home.join(MODEL_HOME_DIR);
+    let legacy = home.join(LEGACY_MODEL_HOME_DIR);
+    if !current.exists() && legacy.exists() {
+        return legacy.join("models");
+    }
+    current.join("models")
+}
+
+/// What [`migrate_model_dir`] did, so a host can say it out loud.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ModelDirMigration {
+    /// No legacy directory, or the move already happened. The common case,
+    /// and the one that must not print anything.
+    NothingToDo,
+    /// `~/.aqua-oss` became `~/.outloud`.
+    Renamed { from: PathBuf, to: PathBuf },
+    /// Both exist. The new one wins and the old one is left untouched.
+    BothPresent { legacy: PathBuf },
+    /// The rename failed; the legacy directory is still readable.
+    Failed { from: PathBuf, error: String },
+}
+
+impl std::fmt::Display for ModelDirMigration {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::NothingToDo => write!(f, "model directory needs no migration"),
+            Self::Renamed { from, to } => {
+                write!(f, "moved models from {} to {}", from.display(), to.display())
+            }
+            Self::BothPresent { legacy } => write!(
+                f,
+                "{} still exists alongside the current model directory and was left alone;                  delete it once you are sure nothing needs it",
+                legacy.display()
+            ),
+            Self::Failed { from, error } => write!(
+                f,
+                "could not move {} to the new model directory ({error}); still reading the old one",
+                from.display()
+            ),
+        }
+    }
+}
+
+/// Move `~/.aqua-oss` to `~/.outloud` once, at startup.
+///
+/// A rename rather than the copy-then-verify used for config files: model
+/// weights are gigabytes, so copying either doubles disk usage or leaves a
+/// half-written duplicate after a power cut, and both directories are under
+/// `$HOME` on the same volume where rename is atomic and free.
+///
+/// Never clobbers. If `~/.outloud` already exists the legacy directory is
+/// left exactly where it is, because merging two model caches is a decision
+/// only the user can make, and deleting the loser is not this function's
+/// call. [`model_dir`] keeps reading the current directory in that case.
+///
+/// Idempotent, and safe to call from every process at startup: the second
+/// call finds nothing to do.
+pub fn migrate_model_dir() -> ModelDirMigration {
+    let Some(home) = home_dir().map(PathBuf::from) else {
+        return ModelDirMigration::NothingToDo;
+    };
+    migrate_model_dir_in(&home)
+}
+
+/// [`migrate_model_dir`] against an explicit home, for tests.
+pub fn migrate_model_dir_in(home: &Path) -> ModelDirMigration {
+    let legacy = home.join(LEGACY_MODEL_HOME_DIR);
+    let current = home.join(MODEL_HOME_DIR);
+    if !legacy.exists() {
+        // Nothing to migrate. Note what is NOT here: no create_dir_all. A
+        // machine that has never downloaded a model ends startup with no
+        // model directory at all, because an empty directory in $HOME is
+        // clutter that claims a download happened.
+        return ModelDirMigration::NothingToDo;
+    }
+    if current.exists() {
+        return ModelDirMigration::BothPresent { legacy };
+    }
+    match std::fs::rename(&legacy, &current) {
+        Ok(()) => ModelDirMigration::Renamed {
+            from: legacy,
+            to: current,
+        },
+        // Losing the race against another process that just migrated is a
+        // success, not a failure: the models are where they should be.
+        Err(_) if current.exists() => ModelDirMigration::NothingToDo,
+        Err(e) => ModelDirMigration::Failed {
+            from: legacy,
+            error: e.to_string(),
+        },
+    }
 }
 
 /// Read the user's config, creating a commented starter file if there is
@@ -201,6 +321,90 @@ fn starter_file() -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A machine that has never downloaded a model must end startup with no
+    /// model directory at all: creating one advertises a download that did
+    /// not happen, and leaves clutter in $HOME for users who never need
+    /// weights (macOS 26 uses the OS recognizer).
+    #[test]
+    fn a_fresh_home_gets_no_directories() {
+        let home = test_home("fresh");
+        assert_eq!(migrate_model_dir_in(&home), ModelDirMigration::NothingToDo);
+        assert!(!home.join(MODEL_HOME_DIR).exists());
+        assert!(!home.join(LEGACY_MODEL_HOME_DIR).exists());
+        // The path is still answerable: it is where a download would go.
+        assert_eq!(model_dir_in(&home), home.join(".outloud").join("models"));
+    }
+
+    /// The upgrade path. A rename, so 1.5GB does not get copied.
+    #[test]
+    fn a_legacy_only_home_is_renamed_in_place() {
+        let home = test_home("legacy-only");
+        let legacy = home.join(LEGACY_MODEL_HOME_DIR).join("models");
+        std::fs::create_dir_all(&legacy).unwrap();
+        std::fs::write(legacy.join("whisper-base.en"), b"weights").unwrap();
+
+        match migrate_model_dir_in(&home) {
+            ModelDirMigration::Renamed { .. } => {}
+            other => panic!("expected a rename, got {other:?}"),
+        }
+        assert!(!home.join(LEGACY_MODEL_HOME_DIR).exists());
+        assert_eq!(
+            std::fs::read(home.join(".outloud/models/whisper-base.en")).unwrap(),
+            b"weights"
+        );
+        assert_eq!(model_dir_in(&home), home.join(".outloud").join("models"));
+
+        // Idempotent: startup runs this every launch.
+        assert_eq!(migrate_model_dir_in(&home), ModelDirMigration::NothingToDo);
+    }
+
+    /// Both present is the case that must not destroy anything. Merging two
+    /// model caches is the user's decision, and the new directory is already
+    /// the one in use.
+    #[test]
+    fn both_present_leaves_the_legacy_directory_untouched() {
+        let home = test_home("both");
+        let legacy = home.join(LEGACY_MODEL_HOME_DIR).join("models");
+        std::fs::create_dir_all(&legacy).unwrap();
+        std::fs::write(legacy.join("old-model"), b"old").unwrap();
+        let current = home.join(MODEL_HOME_DIR).join("models");
+        std::fs::create_dir_all(&current).unwrap();
+        std::fs::write(current.join("new-model"), b"new").unwrap();
+
+        assert_eq!(
+            migrate_model_dir_in(&home),
+            ModelDirMigration::BothPresent {
+                legacy: home.join(LEGACY_MODEL_HOME_DIR)
+            }
+        );
+        assert_eq!(std::fs::read(legacy.join("old-model")).unwrap(), b"old");
+        assert_eq!(std::fs::read(current.join("new-model")).unwrap(), b"new");
+        // The current directory wins for reads.
+        assert_eq!(model_dir_in(&home), current);
+    }
+
+    /// Read-only fallback: a process that never ran the migration (a test, a
+    /// one-shot CLI) still finds an existing download instead of fetching
+    /// 148MB again.
+    #[test]
+    fn without_migration_the_legacy_directory_is_still_read() {
+        let home = test_home("fallback");
+        let legacy = home.join(LEGACY_MODEL_HOME_DIR).join("models");
+        std::fs::create_dir_all(&legacy).unwrap();
+        assert_eq!(model_dir_in(&home), legacy);
+    }
+
+    fn test_home(tag: &str) -> PathBuf {
+        let home = std::env::temp_dir().join(format!(
+            "outloud-modeldir-{tag}-{}-{:?}",
+            std::process::id(),
+            std::thread::current().id()
+        ));
+        let _ = std::fs::remove_dir_all(&home);
+        std::fs::create_dir_all(&home).unwrap();
+        home
+    }
 
     #[test]
     fn xdg_wins_over_home() {

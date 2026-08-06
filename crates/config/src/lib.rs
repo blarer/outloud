@@ -34,7 +34,8 @@ pub mod watch;
 pub use layers::{Config, Layer, Provenance, ENV_PREFIX, LEGACY_ENV_PREFIX};
 pub use migrate::{migrate, Migration};
 pub use paths::{
-    ensure_user_config, system_config_path, user_config_path, vocabulary_dir, APP_DIR,
+    ensure_user_config, migrate_model_dir, model_dir, system_config_path, user_config_path,
+    vocabulary_dir, ModelDirMigration, APP_DIR,
 };
 pub use profile::{AppIdentity, Matcher, Profile, WinReason};
 pub use schema::{schema, Value, SCHEMA_VERSION};
