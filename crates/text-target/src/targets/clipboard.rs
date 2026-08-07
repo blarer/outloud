@@ -17,6 +17,22 @@ use std::process::{Command, Stdio};
 
 use crate::{Capabilities, Snapshot, TargetError, TextTarget, Tier};
 
+/// Why this tier refuses on a platform with no paste-keystroke synthesis.
+///
+/// One constant, used both by the pre-flight check and by the keystroke
+/// path's own fallback, so the two cannot drift into disagreeing about
+/// whether pasting is possible.
+const NO_PASTE_KEYSTROKE: &str =
+    "paste keystroke synthesis needs the synthetic-keys tier on this platform";
+
+/// Whether this build has a paste-keystroke path compiled into it.
+///
+/// The single place that answers the question, so `ensure_paste_supported`
+/// and `send_paste_keystroke` cannot drift apart.
+fn platform_can_paste() -> bool {
+    cfg!(target_os = "macos") || cfg!(all(target_os = "windows", feature = "display"))
+}
+
 /// Which external tools move text in and out of the clipboard here.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Backend {
@@ -104,6 +120,13 @@ impl Backend {
 pub struct ClipboardTarget {
     backend: Backend,
     saved: Option<String>,
+    /// Whether this build can synthesize the paste keystroke.
+    ///
+    /// A field rather than a `cfg!` read inline, so the refusal path is
+    /// reachable in a test on any host. The bug this guards against only
+    /// occurs where pasting is impossible, which is precisely where the
+    /// developer's machine cannot run the test.
+    can_paste: bool,
 }
 
 impl ClipboardTarget {
@@ -122,6 +145,7 @@ impl ClipboardTarget {
         Ok(ClipboardTarget {
             backend,
             saved: None,
+            can_paste: platform_can_paste(),
         })
     }
 
@@ -166,6 +190,15 @@ impl ClipboardTarget {
         Ok(())
     }
 
+    /// Refuse unless this build can synthesize the paste keystroke.
+    fn ensure_paste_supported(&self) -> Result<(), TargetError> {
+        if self.can_paste {
+            Ok(())
+        } else {
+            Err(TargetError::Unsupported(NO_PASTE_KEYSTROKE))
+        }
+    }
+
     fn send_paste_keystroke(&self) -> Result<(), TargetError> {
         // macOS: post Cmd+V ourselves via CGEvent when trusted. This is both
         // ~100ms faster than spawning osascript and more reliable: System
@@ -198,9 +231,7 @@ impl ClipboardTarget {
             return send_ctrl_v();
         }
         #[allow(unreachable_code)]
-        Err(TargetError::Unsupported(
-            "paste keystroke synthesis needs the synthetic-keys tier on this platform",
-        ))
+        Err(TargetError::Unsupported(NO_PASTE_KEYSTROKE))
     }
 }
 
@@ -271,6 +302,12 @@ impl TextTarget for ClipboardTarget {
     }
 
     fn insert(&mut self, text: &str) -> Result<(), TargetError> {
+        // Refuse BEFORE touching the clipboard. This tier looks portable --
+        // `insert` is not cfg-gated and every backend can copy -- but the
+        // paste keystroke is macOS/Windows only. Discovering that after the
+        // copy left the user with no text delivered and their clipboard
+        // destroyed, which is strictly worse than not running at all.
+        self.ensure_paste_supported()?;
         // Save before clobbering; the caller restores after the destination
         // has consumed the paste.
         if self.saved.is_none() {
@@ -284,5 +321,62 @@ impl TextTarget for ClipboardTarget {
         Err(TargetError::Unsupported(
             "clipboard paste cannot address existing text; select it first via another tier",
         ))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A target that believes it cannot paste, regardless of host.
+    ///
+    /// The bug being guarded happens only where paste synthesis is missing,
+    /// which on this project is Linux -- a platform the developer's machine
+    /// cannot execute. Injecting the capability makes the refusal path
+    /// reachable everywhere, so the test actually runs in CI and locally
+    /// instead of being compiled out exactly where it matters.
+    fn target_that_cannot_paste() -> ClipboardTarget {
+        ClipboardTarget {
+            backend: Backend::Pasteboard,
+            saved: None,
+            can_paste: false,
+        }
+    }
+
+    /// `insert` must refuse BEFORE it writes to the clipboard.
+    ///
+    /// This tier's `insert` is not cfg-gated, so it reads as portable. Before
+    /// the fix it copied the text in and only then found it could not paste,
+    /// leaving nothing typed and the user's clipboard destroyed -- worse than
+    /// declining outright. `saved` staying `None` is the observable proof the
+    /// refusal came first: `insert` fills it immediately before the first
+    /// write, so a `Some` here means the clipboard had already been read to
+    /// be overwritten.
+    #[test]
+    fn refuses_before_touching_the_clipboard() {
+        let mut target = target_that_cannot_paste();
+        let err = target.insert("hello").expect_err("cannot paste here");
+        assert!(
+            matches!(err, TargetError::Unsupported(_)),
+            "expected Unsupported, got {err:?}"
+        );
+        assert!(
+            target.saved.is_none(),
+            "clipboard was saved, so it had already been overwritten"
+        );
+    }
+
+    /// The capability field must reflect the platform for a real target.
+    ///
+    /// Without this, `can_paste` could be wired to a constant and the test
+    /// above would still pass while the shipped binary misbehaved.
+    #[test]
+    fn a_real_target_reports_the_platform_capability() {
+        let target = ClipboardTarget::new().expect("a clipboard backend");
+        assert_eq!(
+            target.can_paste,
+            platform_can_paste(),
+            "the capability field disagrees with the compiled keystroke path"
+        );
     }
 }
