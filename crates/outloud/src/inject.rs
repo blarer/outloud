@@ -2716,4 +2716,34 @@ mod tier_tests {
             "restoring a 'scratch ...' sentence by parsing it would delete text"
         );
     }
+
+    /// Ordinary speech that merely CONTAINS the trigger words is still
+    /// speech.
+    ///
+    /// `undo_is_reachable_without_a_selection` pins that "scratch that"
+    /// reaches the ring with no selection. This pins the other side, which
+    /// is the one with teeth: undo matches the WHOLE utterance, not a
+    /// prefix, so "scratch that idea, it was wrong" is a sentence to type.
+    ///
+    /// Loosening the parser to a prefix match would make that sentence
+    /// vanish instead of being typed. A failure to undo costs one retry; a
+    /// swallowed sentence costs the words themselves, and the user has no
+    /// way to tell that it happened.
+    #[test]
+    fn speech_containing_a_command_phrase_is_still_speech() {
+        let _guard = crate::testenv::no_inject();
+
+        for phrase in [
+            "scratch that idea, it was wrong",
+            "undo that change we discussed",
+        ] {
+            match deliver(&Mode::Dictate, phrase) {
+                Outcome::Suppressed { text } => assert!(
+                    !text.contains("[route:"),
+                    "{phrase:?} is dictation, not a command, but was routed: {text:?}"
+                ),
+                other => panic!("expected suppression, got {other:?}"),
+            }
+        }
+    }
 }

@@ -329,42 +329,6 @@ jobs:
         run: >-
           echo "::error title=whisper backend::scripts/ci-whisper.sh failed. Either the backend broke, or the pinned model hash no longer matches what the upstream URL serves (which is the check working, not a flake)."
 
-  # Does "scratch that" still reach the undo ring?
-  #
-  # The undo ring shipped complete, tested, and wired to nothing, because
-  # the only way to observe which branch an edit command took was to speak
-  # into a live window and watch. Every automated path stopped at an early
-  # return. This is the check that would have caught it.
-  #
-  # It asserts on the ROUTE, not on delivery: OUTLOUD_NO_INJECT=1 runs the
-  # whole pipeline and reports "[route: undo]" while writing nothing, so it
-  # needs no window, no focus, and no permissions.
-  #
-  # A previous version of this job ran scripts/verify-undo-live.sh --dry-run
-  # instead, which drives TextEdit through AppleScript. A GitHub macOS
-  # runner has no logged-in GUI session, so it hung silently and failed the
-  # job after four minutes with no output. The GUI-free half is now its own
-  # script; verify-undo-live.sh remains the thing a human runs on a real
-  # Mac, and is the only check that proves text reaches an application.
-  edit-routing:
-    runs-on: macos-15
-    # A hang here means an osascript-style wait crept back in. Fail in one
-    # minute with a clear cause rather than burning the job timeout.
-    timeout-minutes: 8
-    steps:
-      - uses: actions/checkout@v4
-      - uses: Swatinem/rust-cache@v2
-        with:
-          shared-key: edit-routing
-      - name: Build the daemon
-        run: cargo build --release -p outloud --locked
-      - name: Check edit routing (writes nothing)
-        timeout-minutes: 2
-        run: scripts/ci-edit-routing.sh ./target/release/outloud
-      - name: Attribute failure
-        if: failure()
-        run: >-
-          echo "::error title=edit routing changed::scripts/ci-edit-routing.sh failed. An edit command no longer resolves to the route it should -- most likely 'scratch that' stopped reaching the undo ring, which is silent in normal use: the user is simply told the command did not match. Reproduce locally with OUTLOUD_NO_INJECT=1; it types nothing."
 
   # Performance tripwire. Every other job answers "is it correct"; this one
   # answers "is it still fast", which no correctness test can see: a change
