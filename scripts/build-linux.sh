@@ -60,7 +60,23 @@ echo "==> tarball"
 tar -C "$OUT" -czf "$OUT/outloud-spike-$VERSION-$TARGET.tar.gz" outloud-spike
 
 # ---------------------------------------------------------------- AppImage
-if command -v appimagetool >/dev/null 2>&1; then
+#
+# BOTH tools, not just appimagetool. appimagetool shells out to
+# desktop-file-validate and exits 1 when it is absent ("desktop-file-validate
+# command is missing, please install it"), which killed all three Linux jobs
+# of the v0.1.0 release while every other target succeeded. The script
+# already degrades gracefully when appimagetool itself is missing; it was
+# only the transitive dependency that turned a missing optional tool into a
+# failed release.
+#
+# Skipping is the right behaviour here: the tarball and .deb are the
+# artifacts people actually install, and an AppImage that cannot be built is
+# a missing convenience, not a broken release. A release that fails
+# entirely, after producing every other platform's binaries, is worse.
+if command -v appimagetool >/dev/null 2>&1 && ! command -v desktop-file-validate >/dev/null 2>&1; then
+    echo "==> appimagetool found but desktop-file-validate is missing: skipping AppImage"
+    echo "    (install desktop-file-utils to build one)"
+elif command -v appimagetool >/dev/null 2>&1; then
     echo "==> AppImage"
     APPDIR="$OUT/AppDir"
     rm -rf "$APPDIR"

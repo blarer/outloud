@@ -161,7 +161,12 @@ jobs:
       - name: Install packaging tools
         run: |
           sudo apt-get update
-          sudo apt-get install -y musl-tools rpm binutils
+          # desktop-file-utils supplies desktop-file-validate, which
+          # appimagetool shells out to and refuses to run without. Omitting
+          # it failed all three Linux jobs of the v0.1.0 release AFTER every
+          # other platform had built successfully, with the only clue being
+          # "desktop-file-validate command is missing" 200 lines into a log.
+          sudo apt-get install -y musl-tools rpm binutils desktop-file-utils
           # appimagetool: single static binary, pinned release.
           curl -fsSL -o /usr/local/bin/appimagetool \
             https://github.com/AppImage/appimagetool/releases/download/1.9.0/appimagetool-x86_64.AppImage
