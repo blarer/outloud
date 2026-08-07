@@ -93,3 +93,42 @@ strangers download.
 - Verify by mounting the produced DMG and running
   `Contents/MacOS/<name> --version`, not by reading the script. The whole
   point of this note is that reading it is what went wrong.
+
+## Follow-up: on Linux, `outloud` cannot type at all
+
+Before the "ship `outloud` instead" option could be taken seriously, the
+obvious question is whether `outloud` even works on the platforms where the
+spike is currently shipped. Checked rather than assumed.
+
+It **compiles** for Linux: `scripts/ci-check-linux.sh` passes, which
+clippy-builds `-p outloud` for `x86_64-unknown-linux-gnu`.
+
+It **cannot deliver a single character** there. Every text tier is gated to
+macOS or Windows and returns `Unsupported` on Linux:
+
+| tier | Linux behaviour |
+|------|-----------------|
+| synthetic keys | `Err(Unsupported)` -- "CGEvent synthesis exists only on macOS display builds" / "SendInput exists only on Windows display builds" |
+| accessibility  | `Err(Unsupported)` |
+| IME            | `Err(Unsupported)` |
+| clipboard      | sets the clipboard, then `send_paste_keystroke()` returns `Unsupported`: "paste keystroke synthesis needs the synthetic-keys tier on this platform" |
+
+The clipboard tier is the interesting one. Its `insert` is not cfg-gated, so
+it looks cross-platform at a glance, and it *does* overwrite the user's
+clipboard before discovering it cannot paste. On Linux that is strictly
+worse than refusing: the text never arrives and the clipboard is gone.
+
+### What this does to the options
+
+"Ship `outloud` on Linux" is not a shipping decision, it is a feature
+request: it needs an X11/Wayland key-synthesis backend that does not exist
+yet (`ax-edit/src` holds `macos.rs` and nothing else). So the real choices
+are now:
+
+1. **macOS**: ship `outloud`. It works there, and it is the product.
+2. **Linux**: either keep shipping the spike, clearly labelled as a harness
+   with no speech recognition, or stop publishing Linux artifacts until a
+   delivery backend exists. Shipping a binary named `outloud` that silently
+   eats the clipboard and types nothing would be the worst of the three.
+
+Still not decided here: what to publish is a product call.
