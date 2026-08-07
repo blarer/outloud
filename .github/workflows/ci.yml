@@ -392,3 +392,18 @@ jobs:
         if: failure()
         run: >-
           echo "::error title=repro job failed::Either the workspace failed to compile on x86_64 Linux (see the first 'error' line above) or the double build produced different hashes; the script prints both hashes and suggests diffoscope."
+
+  # The installer is the first thing a stranger runs and, until now, the only
+  # public interface with no check at all. The previous one lived solely on a
+  # feature branch, so the published one-liner would 404 the moment that
+  # branch was deleted, and nothing in CI could have noticed.
+  install:
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install from the live release into a temp directory
+        run: scripts/test-install.sh
+      - name: Attribute failure
+        if: failure()
+        run: >-
+          echo "::error title=install job failed::scripts/install.sh could not install the published release, or the app it installed was not the outloud daemon with its speech helper. Run scripts/test-install.sh locally; it installs into a temp dir and never touches /Applications."

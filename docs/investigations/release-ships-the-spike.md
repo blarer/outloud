@@ -132,3 +132,45 @@ are now:
    eats the clipboard and types nothing would be the worst of the three.
 
 Still not decided here: what to publish is a product call.
+
+## Correction: the *published* download is the real product
+
+Checked 2026-08-07 by downloading the latest release rather than reasoning
+from the workflow. The distinction matters and I had blurred it.
+
+The finding above is about `scripts/build-macos-release.sh`, the CI path.
+That is still true: it packages `spike-cli` as `OutLoudSpike.app`.
+
+But the release people actually download does **not** come from that path.
+`v2026.08.06-1649` carries two assets, and its DMG is not among them:
+
+    Install-OutLoud.command
+    OutLoud-macos-arm64.tar.gz
+
+That tarball holds the real thing:
+
+    $ tar -xzf OutLoud-macos-arm64.tar.gz
+    $ ./OutLoud.app/Contents/MacOS/OutLoud --version
+    outloud 0.1.0
+    $ ./OutLoud.app/Contents/MacOS/OutLoud --help
+    outloud: hold the hotkey, speak, release, text appears
+
+`OutLoud.app/Contents/MacOS/` contains `OutLoud` and
+`outloud-speech-helper` -- the daemon and its Swift recognizer. Nobody
+downloading this release gets the spike.
+
+So the correct statement is narrower than the title of this file: **the CI
+release pipeline builds the wrong macOS artifact, and that artifact is not
+what was published.** The published one was produced out-of-band by
+`scripts/release-macos.sh` (which lives only on the cat-mascot branch, and
+so is not on `main`).
+
+That reframes the severity. It is not "users are downloading a tool that
+cannot dictate" -- they are not. It is "the automated pipeline cannot
+produce a shippable macOS build, so releases depend on a script that is not
+on `main`". Still worth fixing, but it is a release-engineering gap rather
+than a live user-facing defect.
+
+Linux is unchanged and is the genuine user-facing problem: its packages contain
+`spike-cli` under the name `outloud-spike`, and `outloud` itself cannot type
+on Linux at all (see the section above).

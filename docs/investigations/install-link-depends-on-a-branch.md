@@ -52,3 +52,44 @@ asked for rather than assumed.
 
     $ curl .../refs/heads/main/scripts/install.sh              -> HTTP 404
     $ curl .../refs/heads/overlay/cat-mascot/scripts/install.sh -> HTTP 200 (209 lines)
+
+## Resolved: a fresh installer now lives on `main`
+
+Written from scratch on `main`, sharing no commits with the cat-mascot
+branch, so the constraint holds. `scripts/install.sh` is built against the
+facts of the published release, each verified by downloading it rather than
+assumed:
+
+  - the asset is `OutLoud-macos-arm64.tar.gz`, not a DMG
+  - it unpacks to `OutLoud.app` carrying the daemon AND the Swift
+    `outloud-speech-helper`
+  - it is ad-hoc signed with no Team ID
+  - Apple Silicon only; `LSMinimumSystemVersion` is 13.0, but a usable
+    recognizer needs macOS 26+
+
+It refuses early and by name on a platform it cannot serve, on the wrong
+architecture, and on an unwritable destination, rather than failing halfway
+through. It quits a running copy before replacing one, since installing over
+a running app leaves the old binary resident.
+
+`scripts/test-install.sh` runs it for real against the live release, into a
+temp directory, never touching `/Applications`. It is wired into CI as the
+`install` job on `macos-15`.
+
+Proven by sabotage rather than by a green run:
+
+| broken thing | result |
+|---|---|
+| removed the bundle removal, so reinstall merges | FAIL "the old bundle was merged into rather than replaced" |
+| removed the architecture guard | FAIL "expected an architecture refusal" |
+| deleted `scripts/install.sh` entirely (the original defect) | FAIL "scripts/install.sh is missing -- this is the exact defect this file guards" |
+
+The last row is the point: the failure that started all of this now breaks
+the build.
+
+Still to do, and not doable from here: the published release notes for
+`v2026.08.06-1649` still point at the branch. Editing them is a GitHub
+action on a live public release, so it is left to the maintainer. The new
+one-liner is:
+
+    curl -fsSL https://raw.githubusercontent.com/blarer/outloud/main/scripts/install.sh | bash
