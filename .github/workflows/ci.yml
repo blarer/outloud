@@ -44,6 +44,21 @@ jobs:
       - uses: actions/checkout@v4
       # rustup reads rust-toolchain.toml automatically; no toolchain action
       # needed for the default case, which is one less pinned dependency.
+      # The app icon, on macOS only (qlmanage/sips/iconutil are macOS tools).
+      #
+      # Nothing else in normal CI looks at it, so a broken logo.svg would
+      # have surfaced at RELEASE time, which is the worst moment to learn
+      # your app icon is blank. That is not hypothetical: a double hyphen in
+      # the SVG's leading comment is illegal XML, and Quick Look answers by
+      # rendering nothing, writing a PNG anyway, and exiting 0. The bundle
+      # shipped an empty icon and every check downstream agreed with it.
+      #
+      # Renders to a temp path and asserts the raster is not blank; it does
+      # not touch the repo.
+      - name: App icon renders (not blank)
+        if: runner.os == 'macOS'
+        run: scripts/make-icon.sh "$RUNNER_TEMP/ci-icon.icns"
+
       - name: Install Linux system dependencies
         if: runner.os == 'Linux'
         run: scripts/ci-install-linux-deps.sh
