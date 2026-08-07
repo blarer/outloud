@@ -215,6 +215,25 @@ jobs:
       - uses: actions/download-artifact@v4
         with:
           path: artifacts
+      # The double-click installer is a source file, not a build output, so
+      # nothing in the matrix produces it and it was absent from every
+      # release. The one attached to v2026.08.06-1649 was uploaded by hand
+      # and fetched install.sh from a feature branch; the next release would
+      # simply have dropped the install path the notes recommend first.
+      - uses: actions/checkout@v4
+        with:
+          path: repo
+      - name: Attach the double-click installer
+        run: cp repo/scripts/Install-OutLoud.command artifacts/
+      - name: Refuse to publish an installer pinned to a branch
+        # A release is the one artifact nobody re-reads before strangers use
+        # it. This is the defect that broke the last one.
+        run: |
+          if grep -q 'raw.githubusercontent.com/[^"]*refs/heads/' artifacts/Install-OutLoud.command; then
+            grep -n 'refs/heads/' artifacts/Install-OutLoud.command
+            echo "::error title=installer pinned to a branch::Install-OutLoud.command fetches install.sh from a branch ref. Use /main/, or the installer breaks when that branch is deleted."
+            exit 1
+          fi
       - name: Generate checksums
         run: |
           cd artifacts
@@ -224,5 +243,29 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           draft: true   # a human sanity-checks artifacts before publishing
+          # Written here rather than by hand on the release page. The
+          # hand-written notes on the last release pointed at a feature
+          # branch, and nothing could notice: notes are not code, so no
+          # check ever read them. Generating them from the workflow means
+          # the install instructions are reviewed like everything else.
+          body: |
+            ### Install
+
+            Download **Install-OutLoud.command** below, then double-click it.
+
+            The first time, macOS may say it is from an unidentified
+            developer. Right-click the file and choose **Open**, then
+            **Open** again.
+
+            Apple Silicon, macOS 26 or newer.
+
+            <details><summary>Terminal alternative</summary>
+
+            ```
+            curl -fsSL https://raw.githubusercontent.com/blarer/outloud/main/scripts/install.sh | bash
+            ```
+
+            macOS 26 may block pasting this; the download above avoids that.
+            </details>
           files: |
             artifacts/**/*
