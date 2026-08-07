@@ -34,8 +34,8 @@ use objc2::{
     define_class, msg_send, sel, AllocAnyThread, DefinedClass, MainThreadMarker, MainThreadOnly,
 };
 use objc2_app_kit::{
-    NSBezierPath, NSColor, NSControlStateValueOff, NSControlStateValueOn, NSImage, NSLineCapStyle,
-    NSLineJoinStyle, NSMenu, NSMenuItem, NSStatusBar, NSStatusItem, NSVariableStatusItemLength,
+    NSBezierPath, NSColor, NSControlStateValueOff, NSControlStateValueOn, NSImage, NSMenu,
+    NSMenuItem, NSStatusBar, NSStatusItem, NSVariableStatusItemLength, NSWindingRule,
 };
 use objc2_foundation::{NSObject, NSPoint, NSSize, NSString};
 
@@ -231,27 +231,18 @@ impl MacStatusItem {
         colour.setFill();
         colour.setStroke();
 
-        // The horn is FILLED: a stroked outline collapses into scribble at
-        // this size, and the solid horn is the anchor that keeps the glyph
-        // legible across the room (mark.rs's module doc).
-        let horn = NSBezierPath::bezierPath();
-        for (i, p) in m.horn.iter().enumerate() {
-            let at = NSPoint::new(p.x, p.y);
-            if i == 0 {
-                horn.moveToPoint(at);
-            } else {
-                horn.lineToPoint(at);
-            }
-        }
-        horn.closePath();
-        horn.fill();
-
-        // The sound arcs are STROKED with round caps, matching the logo's
-        // arc treatment. Round caps also stop the arc ends reading as
-        // clipped at 15pt.
-        for wave in &m.waves {
-            let path = NSBezierPath::bezierPath();
-            for (i, p) in wave.iter().enumerate() {
+        // ONE path: the skull outline plus both sockets as sub-paths, filled
+        // even-odd so the sockets come out as real holes.
+        //
+        // Filling the outline and then painting sockets over it would need a
+        // background colour, and this is a template image: the system
+        // renders it from ALPHA and paints it white on a dark menu bar. A
+        // socket painted in any colour is still opaque alpha, so it would
+        // fill in solid and the skull would lose its eyes exactly when the
+        // menu bar goes dark. The holes have to be holes.
+        let path = NSBezierPath::bezierPath();
+        let sub = |pts: &[crate::layout::Point]| {
+            for (i, p) in pts.iter().enumerate() {
                 let at = NSPoint::new(p.x, p.y);
                 if i == 0 {
                     path.moveToPoint(at);
@@ -259,13 +250,14 @@ impl MacStatusItem {
                     path.lineToPoint(at);
                 }
             }
-            path.setLineWidth(mark::GLYPH_LINE_WIDTH);
-            path.setLineCapStyle(NSLineCapStyle::Round);
-            // Round joins: the arc is sampled as short segments, and mitre
-            // spikes at the joints would fuzz the curve.
-            path.setLineJoinStyle(NSLineJoinStyle::Round);
-            path.stroke();
+            path.closePath();
+        };
+        sub(&m.outline);
+        for hole in &m.holes {
+            sub(hole);
         }
+        path.setWindingRule(NSWindingRule::EvenOdd);
+        path.fill();
 
         #[allow(deprecated)]
         image.unlockFocus();

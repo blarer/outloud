@@ -39,9 +39,8 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use windows::core::PCWSTR;
 use windows::Win32::Foundation::{COLORREF, HWND, LPARAM, LRESULT, POINT, WPARAM};
 use windows::Win32::Graphics::Gdi::{
-    CreateBitmap, CreateCompatibleDC, CreateSolidBrush, DeleteDC, DeleteObject, ExtCreatePen,
-    Polygon, Polyline, SelectObject, BS_SOLID, HBITMAP, HGDIOBJ, LOGBRUSH, PS_ENDCAP_ROUND,
-    PS_GEOMETRIC,
+    CreateBitmap, CreateCompatibleDC, CreateSolidBrush, DeleteDC, DeleteObject, PolyPolygon,
+    SelectObject, SetPolyFillMode, ALTERNATE, CREATE_POLYGON_RGN_MODE, HBITMAP, HGDIOBJ,
 };
 use windows::Win32::UI::Shell::{
     Shell_NotifyIconW, NIF_ICON, NIF_MESSAGE, NIF_TIP, NIM_ADD, NIM_DELETE, NIM_SETVERSION,
@@ -514,48 +513,50 @@ fn draw_mark_icon(tint: Option<Color>) -> anyhow::Result<HICON> {
 
         let m = mark::mark_in(size as f64);
 
-        // The horn: filled solid polygon. A stroked outline collapses into
-        // scribble at tray-icon size (see mark.rs's module doc).
+        // The skull: outline and both sockets as ONE polygon set, filled
+        // alternate (GDI's even-odd), so the sockets are cut out rather than
+        // painted over.
+        //
+        // `PolyPolygon` with ALTERNATE, not one `Polygon` call per shape:
+        // filling the sockets in a background colour would need to know what
+        // is behind the icon, and on a tray that is a user-chosen wallpaper
+        // or an accent colour. Cutting them leaves the alpha channel clear,
+        // which is the same guarantee the AppKit path gets from
+        // `NSWindingRule::EvenOdd`.
         let brush = CreateSolidBrush(colorref);
         let old_brush = SelectObject(mem_dc, HGDIOBJ(brush.0));
         let pen = create_solid_pen_compat(colorref);
         let old_pen = SelectObject(mem_dc, HGDIOBJ(pen.0));
-        let horn_pts: Vec<POINT> = m
-            .horn
-            .iter()
-            .map(|p| POINT {
-                x: p.x.round() as i32,
-                y: p.y.round() as i32,
-            })
-            .collect();
-        let _ = Polygon(mem_dc, &horn_pts);
-        SelectObject(mem_dc, old_brush);
-        SelectObject(mem_dc, old_pen);
-        let _ = DeleteObject(HGDIOBJ(brush.0));
-        let _ = DeleteObject(HGDIOBJ(pen.0));
 
-        // The wave arcs: stroked polylines with round caps (`ExtCreatePen`,
-        // since plain `CreatePen` has no cap-style control), matching the
-        // AppKit path's `NSLineCapStyle::Round`.
-        let logbrush = LOGBRUSH {
-            lbStyle: BS_SOLID,
-            lbColor: colorref,
-            lbHatch: 0,
-        };
-        let arc_pen = ExtCreatePen(PS_GEOMETRIC | PS_ENDCAP_ROUND, 2, &logbrush, None);
-        let old_arc_pen = SelectObject(mem_dc, HGDIOBJ(arc_pen.0));
-        for wave in &m.waves {
-            let pts: Vec<POINT> = wave
-                .iter()
+        let to_pts = |poly: &[crate::layout::Point]| -> Vec<POINT> {
+            poly.iter()
                 .map(|p| POINT {
                     x: p.x.round() as i32,
                     y: p.y.round() as i32,
                 })
-                .collect();
-            let _ = Polyline(mem_dc, &pts);
+                .collect()
+        };
+
+        // PolyPolygon takes one flat point array plus per-polygon counts.
+        let mut pts: Vec<POINT> = Vec::new();
+        let mut counts: Vec<i32> = Vec::new();
+        for poly in std::iter::once(&m.outline).chain(m.holes.iter()) {
+            let p = to_pts(poly);
+            counts.push(p.len() as i32);
+            pts.extend(p);
         }
-        SelectObject(mem_dc, old_arc_pen);
-        let _ = DeleteObject(HGDIOBJ(arc_pen.0));
+        // SetPolyFillMode returns the PREVIOUS mode as a plain i32, so it
+        // has to be converted back to the enum to restore it. Restoring
+        // matters: `mem_dc` is reused for later drawing, and leaving it in
+        // ALTERNATE would silently change how anything else fills.
+        let old_fill = CREATE_POLYGON_RGN_MODE(SetPolyFillMode(mem_dc, ALTERNATE));
+        let _ = PolyPolygon(mem_dc, pts.as_ptr(), &counts);
+        SetPolyFillMode(mem_dc, old_fill);
+
+        SelectObject(mem_dc, old_brush);
+        SelectObject(mem_dc, old_pen);
+        let _ = DeleteObject(HGDIOBJ(brush.0));
+        let _ = DeleteObject(HGDIOBJ(pen.0));
 
         SelectObject(mem_dc, old);
         let _ = DeleteDC(mem_dc);

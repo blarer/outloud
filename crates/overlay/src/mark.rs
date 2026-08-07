@@ -1,150 +1,166 @@
-//! The menu-bar mark: the OutLoud megaphone, as pure geometry.
+//! The menu-bar mark: the OutLoud skull, as pure geometry.
 //!
-//! This is the product's brand mark (`docs/assets/logo.svg`, also the app
-//! icon and the README image) reduced to what survives at menu-bar size: a
-//! filled horn pointing right and two sound arcs. The logo's handle and
-//! third arc are deliberately dropped — at ~15 points they turn to mud, and
-//! SF Symbols' own speaker glyphs make the same cut (`speaker.wave.2.fill`
-//! keeps two waves, not three, for exactly this reason). Simplified, not
-//! scaled.
+//! # Why a skull and not the megaphone
 //!
-//! Why a hand-drawn path instead of an SF Symbol like `megaphone.fill`:
-//! an SF Symbol exists only on Apple platforms, and the point of keeping
-//! the geometry here, apart from AppKit, is that it is testable on every
-//! platform including headless CI, and the Windows tray backend can consume
-//! the identical points rather than reimplementing a horn that drifts
-//! subtly from the macOS one. An SF Symbol would break that shared-geometry
-//! property, so it stays a documented fallback, not the implementation.
+//! This was a megaphone horn with two sound arcs, and the module doc argued
+//! at length that a horn-with-arcs silhouette could not be confused with the
+//! waveform icons around it. The user reported the opposite: "it just looks
+//! like a speaker icon so it's kinda confusing with the other audio apps".
 //!
-//! Recognisability across the room: the old mark argued that a menu bar is
-//! full of waveform icons and the glyph must not be confusable with them.
-//! That argument survives the redesign: the silhouette here is a *horn with
-//! arcs*, not a bar-graph waveform, and the filled horn gives it a solid
-//! visual anchor no waveform icon has. It answers "is it on?" by tint
-//! (see [`crate::menu::glyph_tint`]) exactly as before — the shape is
-//! constant across states, the colour carries the state, so the geometry
-//! needs no per-state variants.
+//! That argument lost to evidence. A menu bar is full of audio apps, and
+//! every one of them is entitled to a horn: Music, Volume, AirPlay, Zoom,
+//! Discord. Being a *nicer* horn does not help, because the user is not
+//! comparing shapes, they are scanning for something that is not a horn.
 //!
-//! Two kinds of path, because they are drawn differently:
+//! The skull is already this product's mascot: it is the on-screen overlay
+//! ([`crate::skull`]), the thing that opens its jaw while you dictate. So
+//! this is not a new idea to learn, it is the same identity in the one place
+//! it was missing, and nothing else in a menu bar is a skull.
 //!
-//! * [`Mark::horn`] is a closed polygon meant to be **filled**. A stroked
-//!   outline horn collapses into scribble at 15pt; a filled one reads.
-//! * [`Mark::waves`] are open polylines meant to be **stroked** with round
-//!   caps. Arcs are pre-sampled into line segments here rather than
-//!   returned as curve control points, so a backend with no Bézier support
-//!   (Win32 tray drawing) renders the same shape as AppKit.
+//! # What survives 15 points
+//!
+//! Not the overlay skull. That one has articulated jaw, teeth, nasal
+//! aperture, and eye glows, all of which turn to mud at menu-bar size for
+//! the same reason the megaphone dropped the logo's third arc.
+//!
+//! What survives is the *silhouette*: a cranium that flares wide at the
+//! temples and narrows to a jaw, with two eye sockets punched out of it. Two
+//! dark holes in a pale rounded shape is the most recognisable part of a
+//! skull at any size, which is why emoji and road signs both keep exactly
+//! that and drop the rest.
+//!
+//! Drawn as one filled path with the sockets as reversed sub-paths, so the
+//! holes are cut by the even-odd fill rule rather than painted over. Painting
+//! over needs a background colour, and this glyph is a *template image*: the
+//! system renders it from alpha alone and paints it white on a dark menu bar.
+//! A hole must be a real hole or it fills in the moment the menu bar goes
+//! dark.
+//!
+//! Same purity rule as before: no AppKit here, so the headless build compiles
+//! it, CI asserts its properties without a display, and the Windows tray
+//! renders the identical points instead of a hand-ported cousin that drifts.
 
 use crate::layout::Point;
 
-/// The mark's geometry: one filled polygon plus stroked arcs, all in the
-/// same top-left-origin, y-down coordinate space.
+/// The mark's geometry: one filled outline with holes punched in it, all in
+/// the same top-left-origin, y-down coordinate space.
+///
+/// Field names are deliberately shape-neutral rather than `horn`/`waves`:
+/// the backends draw "fill this, then cut these", and naming them after the
+/// current drawing means the next redesign is a rename across three
+/// platforms instead of an edit here.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Mark {
-    /// The megaphone horn, pointing right, as a closed polygon (first point
-    /// repeated last). Fill it.
-    pub horn: Vec<Point>,
-    /// Sound arcs radiating from the horn mouth, inner first. Stroke them
-    /// with round caps.
-    pub waves: Vec<Vec<Point>>,
+    /// The skull silhouette: cranium flaring at the temples down to a jaw,
+    /// as a closed polygon (first point repeated last). Fill it.
+    pub outline: Vec<Point>,
+    /// Eye sockets, left then right, as closed polygons. Cut these OUT of
+    /// the outline (even-odd fill), never paint over them: this is a
+    /// template image, so a socket painted in a background colour fills
+    /// solid the moment the menu bar is dark.
+    pub holes: Vec<Vec<Point>>,
 }
 
 // The design, as fractions of a unit square (0.0..=1.0, y down). Fractions
 // rather than absolute points so one set of numbers serves every glyph size
 // a menu bar height or DPI setting asks for.
-//
-// The shape is the logo's horn path (`M34 52 L34 76 L48 76 L70 92 L70 36
-// L48 52 Z` in a 128 box) re-proportioned for a square glyph: throat at the
-// left, bell flaring to the right, mouth just past centre so the waves get
-// the right half of the box.
 
-/// Left edge of the horn's throat.
-const THROAT_LEFT: f64 = 0.08;
-/// Vertical extent of the throat (the narrow back of the horn).
-const THROAT_TOP: f64 = 0.34;
-const THROAT_BOTTOM: f64 = 0.66;
-/// Where the throat ends and the bell starts flaring.
-const BELL_START: f64 = 0.30;
-/// The horn's mouth: its x position and vertical extent.
-const MOUTH_X: f64 = 0.52;
-const MOUTH_TOP: f64 = 0.16;
-const MOUTH_BOTTOM: f64 = 0.84;
+/// Half-width of the cranium at its widest (the temples), as a fraction.
+const TEMPLE_HALF_W: f64 = 0.40;
+/// Half-width at the jaw. Narrower than the temples: that taper is what
+/// makes the silhouette read as a skull rather than a circle or a bear.
+const JAW_HALF_W: f64 = 0.24;
+/// Top of the cranium and bottom of the jaw.
+const CROWN_Y: f64 = 0.04;
+const CHIN_Y: f64 = 0.96;
+/// Where the cranium stops being round and starts tapering to the jaw.
+const CHEEK_Y: f64 = 0.58;
+/// Horizontal centre.
+const CX: f64 = 0.50;
 
-/// The arcs' shared centre. On the horn's mouth line, at the glyph's
-/// vertical centre, so the waves visibly *emanate from the horn* rather
-/// than floating beside it.
-const WAVE_CENTRE: Point = Point { x: 0.50, y: 0.50 };
-/// Arc radii, inner then outer. Two arcs, not the logo's three: the third
-/// does not survive 15pt (see module doc).
-const WAVE_RADII: [f64; 2] = [0.22, 0.40];
-/// Half-angle of each arc, radians. 45 degrees either side of horizontal
-/// matches the bell's flare angle, which is what makes the waves read as
-/// coming *out of* the horn.
-const WAVE_HALF_ANGLE: f64 = std::f64::consts::FRAC_PI_4;
-/// Line segments per arc. Eight is visually indistinguishable from a true
-/// arc at menu-bar size and keeps the polyline cheap for the Win32 backend.
-const WAVE_SEGMENTS: usize = 8;
+/// Eye socket centres and radii. Large relative to the head, and set wide:
+/// small eyes vanish at 15pt, and close-set eyes read as a bear or an owl.
+/// Cartoon-skull proportions rather than anatomical ones, for the same
+/// reason the overlay skull is a cartoon.
+const EYE_DX: f64 = 0.175;
+const EYE_CY: f64 = 0.44;
+const EYE_RX: f64 = 0.115;
+const EYE_RY: f64 = 0.135;
 
-/// The mark in the unit square, y down.
+/// Segments per sampled curve. Enough that the cranium reads as round at
+/// 2x scale without generating points a Win32 polygon call would choke on.
+const SEGMENTS: usize = 24;
+
+/// The mark in a unit square.
+///
+/// Curves are pre-sampled into line segments here rather than returned as
+/// Bézier control points, so a backend with no curve support (Win32 tray
+/// drawing) renders exactly the same shape as AppKit.
 pub fn unit_mark() -> Mark {
-    let horn = vec![
-        Point {
-            x: THROAT_LEFT,
-            y: THROAT_TOP,
-        },
-        Point {
-            x: THROAT_LEFT,
-            y: THROAT_BOTTOM,
-        },
-        Point {
-            x: BELL_START,
-            y: THROAT_BOTTOM,
-        },
-        Point {
-            x: MOUTH_X,
-            y: MOUTH_BOTTOM,
-        },
-        Point {
-            x: MOUTH_X,
-            y: MOUTH_TOP,
-        },
-        Point {
-            x: BELL_START,
-            y: THROAT_TOP,
-        },
-        // Closed explicitly, so a backend that draws polylines verbatim
-        // (rather than calling a close-path primitive) still closes it.
-        Point {
-            x: THROAT_LEFT,
-            y: THROAT_TOP,
-        },
-    ];
+    let mut outline = Vec::with_capacity(SEGMENTS + 8);
 
-    let waves = WAVE_RADII
-        .iter()
-        .map(|&r| {
-            (0..=WAVE_SEGMENTS)
-                .map(|i| {
-                    // Sweep from -half to +half angle around horizontal.
-                    // cos/sin in y-down space: positive angles bow the arc
-                    // downward, so the sweep is symmetric about the centre
-                    // line, which the tests pin.
-                    let t = -WAVE_HALF_ANGLE
-                        + (i as f64 / WAVE_SEGMENTS as f64) * 2.0 * WAVE_HALF_ANGLE;
-                    Point {
-                        x: WAVE_CENTRE.x + r * t.cos(),
-                        y: WAVE_CENTRE.y + r * t.sin(),
-                    }
-                })
-                .collect()
-        })
-        .collect();
+    // The cranium: a half-ellipse from the left cheek, over the crown, to
+    // the right cheek. Walked left-to-right over the top.
+    let rx = TEMPLE_HALF_W;
+    let ry = CHEEK_Y - CROWN_Y;
+    for i in 0..=SEGMENTS {
+        // pi (left) -> 0 (right), i.e. over the top in a y-down space.
+        let a = std::f64::consts::PI * (1.0 - i as f64 / SEGMENTS as f64);
+        outline.push(Point {
+            x: CX + rx * a.cos(),
+            y: CHEEK_Y - ry * a.sin(),
+        });
+    }
 
-    Mark { horn, waves }
+    // Down the right cheek to the jaw, across the chin, and back up the
+    // left. The chin corners are eased with one intermediate point each so
+    // the jaw reads as a rounded box rather than a wedge.
+    let jaw_top = CHEEK_Y;
+    outline.push(Point {
+        x: CX + JAW_HALF_W,
+        y: jaw_top + (CHIN_Y - jaw_top) * 0.55,
+    });
+    outline.push(Point {
+        x: CX + JAW_HALF_W * 0.80,
+        y: CHIN_Y,
+    });
+    outline.push(Point {
+        x: CX - JAW_HALF_W * 0.80,
+        y: CHIN_Y,
+    });
+    outline.push(Point {
+        x: CX - JAW_HALF_W,
+        y: jaw_top + (CHIN_Y - jaw_top) * 0.55,
+    });
+
+    // Close the polygon explicitly. Backends differ on whether an unclosed
+    // fill path is closed for you, and an open one leaves a visible notch
+    // at the left cheek on the ones that do not.
+    let first = outline[0];
+    outline.push(first);
+
+    let socket = |cx: f64| -> Vec<Point> {
+        let mut pts: Vec<Point> = (0..SEGMENTS)
+            .map(|i| {
+                let a = i as f64 / SEGMENTS as f64 * std::f64::consts::TAU;
+                Point {
+                    x: cx + EYE_RX * a.cos(),
+                    y: EYE_CY + EYE_RY * a.sin(),
+                }
+            })
+            .collect();
+        let first = pts[0];
+        pts.push(first);
+        pts
+    };
+
+    Mark {
+        outline,
+        holes: vec![socket(CX - EYE_DX), socket(CX + EYE_DX)],
+    }
 }
 
-/// The mark scaled to fit a square of `size` points. The design already
-/// leaves enough margin that a stroke of [`GLYPH_LINE_WIDTH`] does not clip
-/// at [`GLYPH_SIZE`]; `scaling_leaves_room_for_the_stroke` asserts it.
+/// The mark scaled to fit a square of `size` points.
 pub fn mark_in(size: f64) -> Mark {
     let scale = |p: &Point| Point {
         x: p.x * size,
@@ -152,11 +168,11 @@ pub fn mark_in(size: f64) -> Mark {
     };
     let unit = unit_mark();
     Mark {
-        horn: unit.horn.iter().map(scale).collect(),
-        waves: unit
-            .waves
+        outline: unit.outline.iter().map(scale).collect(),
+        holes: unit
+            .holes
             .iter()
-            .map(|w| w.iter().map(scale).collect())
+            .map(|h| h.iter().map(scale).collect())
             .collect(),
     }
 }
@@ -166,128 +182,187 @@ pub fn mark_in(size: f64) -> Mark {
 /// system icons beside it.
 pub const GLYPH_SIZE: f64 = 15.0;
 
-/// Stroke width for the wave arcs. Heavier than the old star's stroke
-/// because two short arcs carry less ink than a five-line star and would
-/// otherwise disappear next to the filled horn.
+/// Stroke width, kept for backends that outline rather than fill.
+///
+/// The skull is a filled silhouette with cut holes, so nothing strokes it
+/// today. Retained because the Windows tray path still references it and
+/// removing it is a separate change from redrawing the mark.
 pub const GLYPH_LINE_WIDTH: f64 = 1.6;
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
+    /// Both the outline and every socket must be explicitly closed.
+    ///
+    /// Backends disagree about whether an unclosed fill path is closed for
+    /// you. On the ones that do not, the outline shows a notch at the left
+    /// cheek and a socket leaks into the face.
     #[test]
-    fn the_horn_is_a_closed_polygon() {
+    fn every_polygon_is_closed() {
         let m = unit_mark();
-        let first = m.horn[0];
-        let last = *m.horn.last().unwrap();
-        assert!((first.x - last.x).abs() < 1e-9, "horn does not close");
-        assert!((first.y - last.y).abs() < 1e-9, "horn does not close");
-        // Six distinct vertices plus the closing repeat: the simplified
-        // horn. More would mean detail crept back in that 15pt cannot
-        // carry; fewer would mean the bell/throat distinction was lost.
-        assert_eq!(m.horn.len(), 7);
-    }
-
-    #[test]
-    fn the_horn_points_right() {
-        // Orientation is a product decision (the logo's horn points right,
-        // "speech travelling toward the text"), and it would survive an
-        // accidental x-flip in every other test, so it is pinned: the
-        // widest part of the horn (the mouth) must be on the RIGHT.
-        let m = unit_mark();
-        let mouth_x = m.horn.iter().fold(f64::NEG_INFINITY, |acc, p| acc.max(p.x));
-        let throat_x = m.horn.iter().fold(f64::INFINITY, |acc, p| acc.min(p.x));
-        assert!(mouth_x > 0.5, "mouth is not on the right half: {m:?}");
-        assert!(throat_x < 0.2, "throat is not on the left: {m:?}");
-        // The mouth is taller than the throat: that flare is what makes it
-        // a megaphone rather than a rectangle with a nub. Measured from the
-        // geometry, not the constants, so a bad edit cannot pass by
-        // agreeing with itself.
-        let height_at = |x: f64| {
-            let ys: Vec<f64> = m
-                .horn
-                .iter()
-                .filter(|p| (p.x - x).abs() < 1e-9)
-                .map(|p| p.y)
-                .collect();
-            ys.iter().cloned().fold(f64::NEG_INFINITY, f64::max)
-                - ys.iter().cloned().fold(f64::INFINITY, f64::min)
-        };
-        assert!(height_at(mouth_x) > 1.5 * height_at(throat_x));
-    }
-
-    #[test]
-    fn the_horn_has_area() {
-        // Shoelace: a degenerate (self-intersecting or zero-area) polygon
-        // fills as nothing or as garbage, and no compile-time check would
-        // notice.
-        let m = unit_mark();
-        let mut twice_area = 0.0;
-        for pair in m.horn.windows(2) {
-            twice_area += pair[0].x * pair[1].y - pair[1].x * pair[0].y;
+        for (name, poly) in std::iter::once(("outline", &m.outline)).chain(
+            m.holes.iter().enumerate().map(|(i, h)| {
+                if i == 0 {
+                    ("left socket", h)
+                } else {
+                    ("right socket", h)
+                }
+            }),
+        ) {
+            let first = poly[0];
+            let last = *poly.last().unwrap();
+            assert!(
+                (first.x - last.x).abs() < 1e-9 && (first.y - last.y).abs() < 1e-9,
+                "{name} does not close"
+            );
         }
+    }
+
+    /// Two sockets, and they must be HOLES rather than decoration.
+    ///
+    /// The count is the assertion with teeth: a skull with one eye is a
+    /// different character, and a skull with none is a potato. Both must
+    /// also sit inside the outline's bounding box, or they cut nothing.
+    #[test]
+    fn there_are_two_sockets_inside_the_head() {
+        let m = unit_mark();
+        assert_eq!(m.holes.len(), 2, "a skull has two eye sockets");
+
+        let (mut lo_x, mut hi_x) = (f64::INFINITY, f64::NEG_INFINITY);
+        let (mut lo_y, mut hi_y) = (f64::INFINITY, f64::NEG_INFINITY);
+        for p in &m.outline {
+            lo_x = lo_x.min(p.x);
+            hi_x = hi_x.max(p.x);
+            lo_y = lo_y.min(p.y);
+            hi_y = hi_y.max(p.y);
+        }
+        for (i, hole) in m.holes.iter().enumerate() {
+            for p in hole {
+                assert!(
+                    p.x > lo_x && p.x < hi_x && p.y > lo_y && p.y < hi_y,
+                    "socket {i} escapes the head at ({}, {})",
+                    p.x,
+                    p.y
+                );
+            }
+        }
+    }
+
+    /// The sockets are set wide and left/right of centre.
+    ///
+    /// Close-set eyes read as an owl or a bear at 15pt, which is exactly the
+    /// "looks like some other app's icon" problem this mark was redrawn to
+    /// fix. Pinning the separation keeps a future tweak from drifting back.
+    #[test]
+    fn the_sockets_are_set_wide() {
+        let m = unit_mark();
+        let centre = |h: &Vec<Point>| h.iter().map(|p| p.x).sum::<f64>() / h.len() as f64;
+        let left = centre(&m.holes[0]);
+        let right = centre(&m.holes[1]);
+        assert!(left < 0.5 && right > 0.5, "sockets must straddle centre");
         assert!(
-            twice_area.abs() > 0.2,
-            "horn area is implausibly small: {twice_area}"
+            right - left > 0.25,
+            "sockets too close together ({:.3}); reads as an animal, not a skull",
+            right - left
         );
     }
 
+    /// The silhouette must TAPER: wide at the temples, narrow at the jaw.
+    ///
+    /// This is the single property that makes the shape read as a skull
+    /// rather than a circle, and it is the one a well-meaning simplification
+    /// would remove first.
     #[test]
-    fn the_waves_emanate_from_the_horn_mouth() {
+    fn the_head_tapers_to_a_jaw() {
         let m = unit_mark();
-        assert_eq!(m.waves.len(), 2, "two arcs, by design (see module doc)");
-        for (i, wave) in m.waves.iter().enumerate() {
-            assert_eq!(wave.len(), WAVE_SEGMENTS + 1);
-            // Every sample sits on its circle around the wave centre.
-            for p in wave {
-                let r = ((p.x - WAVE_CENTRE.x).powi(2) + (p.y - WAVE_CENTRE.y).powi(2)).sqrt();
-                assert!((r - WAVE_RADII[i]).abs() < 1e-9, "point off its arc: {p:?}");
-            }
-            // Arcs open to the RIGHT of the horn mouth: every point at or
-            // past the mouth's x. Waves behind the horn would read as the
-            // megaphone sucking sound in.
-            for p in wave {
-                assert!(p.x >= MOUTH_X - 1e-9, "wave point behind the mouth: {p:?}");
-            }
-            // Symmetric about the centre line: first and last points mirror
-            // in y. Asymmetric arcs read as a rendering bug at small sizes.
-            let (first, last) = (wave[0], *wave.last().unwrap());
-            assert!((first.y + last.y - 1.0).abs() < 1e-9, "arc not symmetric");
-        }
-        // Inner arc before outer, measured from the samples: the order is
-        // part of the contract (a Windows backend may thin the outer arc).
-        let r_of = |w: &[Point]| {
-            let p = w[0];
-            ((p.x - WAVE_CENTRE.x).powi(2) + (p.y - WAVE_CENTRE.y).powi(2)).sqrt()
+        let width_near = |y: f64| -> f64 {
+            let band: Vec<f64> = m
+                .outline
+                .iter()
+                .filter(|p| (p.y - y).abs() < 0.06)
+                .map(|p| p.x)
+                .collect();
+            assert!(!band.is_empty(), "no outline points near y={y}");
+            band.iter().fold(f64::NEG_INFINITY, |a, &x| a.max(x))
+                - band.iter().fold(f64::INFINITY, |a, &x| a.min(x))
         };
-        assert!(r_of(&m.waves[0]) < r_of(&m.waves[1]));
+        let temples = width_near(CHEEK_Y - 0.10);
+        let jaw = width_near(CHIN_Y - 0.02);
+        assert!(
+            temples > jaw * 1.3,
+            "skull must taper: temples {temples:.3} vs jaw {jaw:.3}"
+        );
     }
 
+    /// The whole mark stays inside its box at the size actually drawn.
+    ///
+    /// Nothing strokes this mark, so the old margin-for-a-stroke argument is
+    /// gone; what remains is that a filled shape which touches the edge gets
+    /// visually clipped against the menu bar's own padding.
     #[test]
-    fn scaling_leaves_room_for_the_stroke() {
-        // A stroke that clips at the edge reads as a broken icon, and the
-        // menu bar gives no room to fix it visually. The horn is filled
-        // (no stroke overhang) but is held to the same bound for slack.
+    fn scaling_stays_inside_the_glyph_box() {
         let m = mark_in(GLYPH_SIZE);
-        let lo = GLYPH_LINE_WIDTH / 2.0;
-        let hi = GLYPH_SIZE - GLYPH_LINE_WIDTH / 2.0;
-        let all = m.horn.iter().chain(m.waves.iter().flatten());
-        for p in all {
-            assert!(p.x >= lo - 1e-9 && p.x <= hi + 1e-9, "{p:?}");
-            assert!(p.y >= lo - 1e-9 && p.y <= hi + 1e-9, "{p:?}");
+        for p in m.outline.iter().chain(m.holes.iter().flatten()) {
+            assert!(
+                p.x >= 0.0 && p.x <= GLYPH_SIZE && p.y >= 0.0 && p.y <= GLYPH_SIZE,
+                "point ({}, {}) escapes the {GLYPH_SIZE}pt box",
+                p.x,
+                p.y
+            );
         }
     }
 
+    /// Scaling is uniform: the unit design times the size, nothing else.
     #[test]
-    fn nothing_here_describes_a_star() {
-        // Regression pin for the rename: the pentagram was Hexavoice's mark
-        // and its geometry must not resurface. A five-pointed star's
-        // outline visits five vertices; the horn has six plus the close,
-        // and no path in the mark self-intersects the way a unicursal star
-        // must. Cheap proxy: the horn polygon is convex-ish enough that
-        // consecutive edge cross-products never alternate sign more than
-        // the flare requires. Simpler and sufficient: just assert the
-        // vertex count is not five.
-        assert_ne!(unit_mark().horn.len() - 1, 5, "the star is back");
+    fn scaling_is_proportional() {
+        let unit = unit_mark();
+        let scaled = mark_in(GLYPH_SIZE);
+        assert_eq!(unit.outline.len(), scaled.outline.len());
+        for (u, sc) in unit.outline.iter().zip(scaled.outline.iter()) {
+            assert!((u.x * GLYPH_SIZE - sc.x).abs() < 1e-9);
+            assert!((u.y * GLYPH_SIZE - sc.y).abs() < 1e-9);
+        }
+    }
+
+    /// The mark is no longer a megaphone.
+    ///
+    /// The previous mark was a horn with sound arcs, and its module doc
+    /// argued it could not be confused with the audio icons around it. The
+    /// user reported exactly that confusion, which is how this became a
+    /// skull. This test exists so the reasoning is not quietly re-litigated:
+    /// the old shape had a rightward-pointing widest point and two open
+    /// polylines, and a skull has neither.
+    #[test]
+    fn nothing_here_describes_a_megaphone() {
+        let m = unit_mark();
+        // A horn's widest span is at its mouth, off to one side. A skull's
+        // is at the temples, straddling the centre.
+        let widest_y = {
+            let mut best = (0.0f64, 0.0f64);
+            for p in &m.outline {
+                let span = m
+                    .outline
+                    .iter()
+                    .filter(|q| (q.y - p.y).abs() < 0.04)
+                    .fold(f64::NEG_INFINITY, |a, q| a.max(q.x))
+                    - m.outline
+                        .iter()
+                        .filter(|q| (q.y - p.y).abs() < 0.04)
+                        .fold(f64::INFINITY, |a, q| a.min(q.x));
+                if span > best.1 {
+                    best = (p.y, span);
+                }
+            }
+            best.0
+        };
+        assert!(
+            widest_y < CHEEK_Y,
+            "the widest part must be the cranium, not a horn mouth"
+        );
+        // Every sub-path is a closed polygon; the megaphone's arcs were open.
+        for hole in &m.holes {
+            assert!(hole.len() > 3, "a socket must be a polygon, not a stroke");
+        }
     }
 }
