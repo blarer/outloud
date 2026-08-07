@@ -142,6 +142,20 @@ while an admin app has focus and recovers when focus moves. Details in
 
 ## Install
 
+The quickest path, which downloads the latest release and needs no toolchain:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/blarer/outloud/main/scripts/install.sh | bash
+```
+
+Apple Silicon only, and it will tell you by name if your machine cannot run
+it rather than failing halfway through. It installs to `/Applications`
+(override with `OUTLOUD_INSTALL_DIR`), quits a running copy first, and
+prints the two permissions macOS will not prompt loudly for.
+
+To build from source instead, which is what the rest of this section
+covers:
+
 Requires macOS 13 or newer. On 26+ the recognizer is built in and needs no
 download; on 13-25 it needs a whisper model (see above). Also needs a Rust
 toolchain, and Xcode Command Line Tools for `swiftc`. Windows builds and
