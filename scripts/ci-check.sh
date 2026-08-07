@@ -81,6 +81,13 @@ echo "==> platform cfg stubs"
 # type, which a Mac-only `cargo check` cannot see.
 scripts/ci-check-cfg.sh
 
+echo "==> tests that assume a host resource"
+# A test of mine unwrapped ClipboardTarget::new(), which needs a real
+# clipboard tool. Every dev machine has one; a headless Linux runner does
+# not, so it passed here and failed CI. ci-check-linux.sh could not catch
+# it: clippy never executes tests.
+scripts/ci-check-host-assumptions.py
+
 echo "==> cargo fmt --check"
 cargo fmt --all -- --check
 
