@@ -50,6 +50,26 @@ if OUTLOUD_INSTALL_DIR=/System/nope bash "$INSTALLER" >/tmp/install-test-unwrita
 fi
 pass "non-zero exit when it cannot install"
 
+echo "==> no install path is pinned to a branch"
+# The defect that started all of this: the published one-liner and the
+# double-click installer both fetched from refs/heads/overlay/cat-mascot,
+# and the script did not exist on main at all. Deleting a stale branch --
+# routine housekeeping -- would have broken installation for everyone.
+for f in "$ROOT/scripts/Install-OutLoud.command" "$ROOT/README.md"; do
+    [ -f "$f" ] || continue
+    if grep -q "raw.githubusercontent.com/[^\"]*refs/heads/" "$f"; then
+        grep -n "refs/heads/" "$f" >&2
+        fail "$(basename "$f") fetches from a branch ref; use /main/ so it survives that branch being deleted"
+    fi
+done
+pass "install paths point at main, not a branch"
+
+echo "==> the double-click installer is present and parses"
+CMD="$ROOT/scripts/Install-OutLoud.command"
+[ -f "$CMD" ] || fail "scripts/Install-OutLoud.command is missing; the release asset would have no source on main"
+bash -n "$CMD" || fail "Install-OutLoud.command does not parse"
+pass "Install-OutLoud.command parses"
+
 # Everything past here needs the network and the real release.
 if ! curl -fsSL --max-time 10 -o /tmp/install-test-api.json \
         https://api.github.com/repos/blarer/outloud/releases/latest 2>/dev/null; then
