@@ -72,6 +72,44 @@ APPLESCRIPT
 
 # --- one case ---------------------------------------------------------------
 
+# --- consent -----------------------------------------------------------------
+#
+# This script SPEAKS AND TYPES on the machine running it. The daemon writes
+# into whatever window is focused, so for the next few seconds the user's
+# typing will fight it. Announce and wait rather than starting instantly: a
+# run that began while someone was mid-sentence in another app put a test
+# phrase into their window. Set OUTLOUD_LIVE_YES=1 to skip when unattended.
+if [[ "${OUTLOUD_LIVE_YES:-}" != "1" ]]; then
+  cat >&2 <<'BANNER'
+
+  ABOUT TO DICTATE ON THIS MACHINE
+  --------------------------------
+  This uses the real microphone path and TYPES INTO TEXTEDIT.
+  Stop typing until it finishes.
+
+  Press Return to start, or Ctrl-C to cancel.
+
+BANNER
+  read -r _ || exit 1
+fi
+
+# Focus is not ours to keep: the user can click away between the focus call
+# and the dictation. Checked immediately before each utterance rather than
+# assumed, because the cost of being wrong lands in their window.
+require_textedit_focused() {
+  local front docs
+  front="$(osascript -e 'tell application "System Events" to name of first application process whose frontmost is true' 2>/dev/null || true)"
+  docs="$(osascript -e 'tell application "TextEdit" to count documents' 2>/dev/null || echo 0)"
+  if [[ "$front" != "TextEdit" ]]; then
+    echo "ABORTING: $front is frontmost, not TextEdit. Nothing was written." >&2
+    exit 1
+  fi
+  if [[ "$docs" -lt 1 ]]; then
+    echo "ABORTING: TextEdit has no open document." >&2
+    exit 1
+  fi
+}
+
 pass=0
 fail=0
 
@@ -89,6 +127,7 @@ run_case() {
 
   # No OUTLOUD_NO_INJECT here: this run must reach the transport. That is
   # the whole point, and it is why TextEdit is focused above.
+  require_textedit_focused
   "$BIN" --once --say "$spoken" --no-overlay 2>&1 | sed 's/^/    | /' || true
   sleep 0.5
 

@@ -68,12 +68,24 @@ EDITED="the slow brown fox"
 te() { osascript -e "tell application \"TextEdit\" to $1"; }
 
 open_doc() {
-  osascript >/dev/null <<'APPLESCRIPT'
+  # `activate` returns before TextEdit has finished launching, so the
+  # document count read immediately after it can be 0 for an app that is
+  # about to restore windows, or stale for one still starting. Waiting for
+  # the process first, then verifying a document exists, removes both races.
+  osascript >/dev/null 2>&1 <<'APPLESCRIPT'
+tell application "TextEdit" to activate
+delay 0.5
 tell application "TextEdit"
-  activate
   if (count of documents) = 0 then make new document
 end tell
+delay 0.3
 APPLESCRIPT
+  local docs
+  docs="$(osascript -e 'tell application "TextEdit" to count documents' 2>/dev/null || echo 0)"
+  if [[ "$docs" -lt 1 ]]; then
+    echo "could not open a TextEdit document to test against" >&2
+    exit 1
+  fi
 }
 
 set_text() {
@@ -98,6 +110,35 @@ delay 0.3
 APPLESCRIPT
 }
 
+# Refuse to dictate unless TextEdit is frontmost AND has a document.
+#
+# The daemon writes into whatever is focused. Every step here focuses
+# TextEdit first, but focus is not ours to keep: the user can click away, or
+# close the window, between the focus call and the dictation. When that
+# happened during a real run the text went into the window they had switched
+# to, and separately the daemon read TextEdit's title bar ("Untitled") as if
+# it were the document.
+#
+# So this is checked immediately before each utterance rather than assumed.
+# Aborting costs one re-run; typing someone's test sentence into whatever
+# they are actually doing costs their trust, and it has already happened
+# once.
+require_textedit_focused() {
+  local front docs
+  front="$(osascript -e 'tell application "System Events" to name of first application process whose frontmost is true' 2>/dev/null || true)"
+  docs="$(osascript -e 'tell application "TextEdit" to count documents' 2>/dev/null || echo 0)"
+  if [[ "$front" != "TextEdit" ]]; then
+    echo "ABORTING: $front is frontmost, not TextEdit." >&2
+    echo "Dictating now would type into it. Nothing was written." >&2
+    exit 1
+  fi
+  if [[ "$docs" -lt 1 ]]; then
+    echo "ABORTING: TextEdit has no open document." >&2
+    echo "The daemon would read the title bar instead of text." >&2
+    exit 1
+  fi
+}
+
 pass=0
 fail=0
 
@@ -114,6 +155,32 @@ check() {
   fi
 }
 
+# --- consent -----------------------------------------------------------------
+#
+# This script SPEAKS AND TYPES on the machine running it. It synthesizes
+# audio through `say`, and the daemon writes the result into whatever window
+# is focused. It focuses TextEdit first and re-checks before every utterance,
+# but the person at the keyboard needs to know it is about to start, because
+# for the next few seconds their typing will fight it.
+#
+# Announce and wait, rather than starting instantly. This is not paranoia: a
+# run that began while the user was mid-sentence in another app put a test
+# phrase into their window. Set OUTLOUD_LIVE_YES=1 to skip the prompt when
+# running unattended.
+if [[ "${OUTLOUD_LIVE_YES:-}" != "1" ]]; then
+  cat >&2 <<'BANNER'
+
+  ABOUT TO DICTATE ON THIS MACHINE
+  --------------------------------
+  This uses the real microphone path and TYPES INTO TEXTEDIT.
+  It takes about 15 seconds. Stop typing until it finishes.
+
+  Press Return to start, or Ctrl-C to cancel.
+
+BANNER
+  read -r _ || exit 1
+fi
+
 open_doc
 
 # --- 0. the harness itself has to be able to fail ---------------------------
@@ -128,6 +195,7 @@ open_doc
 echo "--- the harness can observe a write at all"
 set_text "$ORIGINAL"
 select_all
+require_textedit_focused
 "$BIN" --once --say "change quick to slow" --no-overlay 2>&1 | sed 's/^/    | /' || true
 sleep 0.8
 edited="$(read_text)"
@@ -150,6 +218,7 @@ echo "    before: $(read_text)"
 # whole point, and is why TextEdit is focused above. The selection is made
 # once; the edit replaces it, and TextEdit leaves the written text selected,
 # so the second utterance still sees a selection and routes as an edit.
+require_textedit_focused
 out="$("$BIN" --once \
   --say "change quick to slow" \
   --say "scratch that" \
@@ -174,6 +243,7 @@ check "undo restored the original text" "$after" "$ORIGINAL"
 echo "--- \"scratch that\" with an empty ring must not write the phrase"
 set_text "$ORIGINAL"
 select_all
+require_textedit_focused
 "$BIN" --once --say "scratch that" --no-overlay 2>&1 | sed 's/^/    | /' || true
 sleep 0.8
 after_empty="$(read_text)"
