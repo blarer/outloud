@@ -93,3 +93,37 @@ action on a live public release, so it is left to the maintainer. The new
 one-liner is:
 
     curl -fsSL https://raw.githubusercontent.com/blarer/outloud/main/scripts/install.sh | bash
+
+## Both live paths were affected, not one
+
+The release offers two install paths and I had only checked one. The
+`Install-OutLoud.command` asset -- which the notes recommend *first*,
+because macOS 26 blocks pasted curl-pipe-bash lines with "Possible Malware,
+Paste Blocked" -- fetches `install.sh` at runtime from the same branch ref.
+So the friendlier path was equally fragile, and had no source on `main`.
+
+Now fixed in the repo: `scripts/Install-OutLoud.command` exists on `main`
+and points at `main`. `scripts/test-install.sh` rejects any install path
+pinned to a branch ref, verified by restoring the old URL, which fails with
+the offending line quoted.
+
+## The published release still needs one command
+
+The repo is correct; the *published* artifacts are not, and they are what
+strangers actually use. Fixing them mutates a live public release, so it is
+prepared rather than done:
+
+    scripts/fix-release-install-links.sh
+
+It rewrites the notes to the `/main/` one-liner and re-uploads the
+`.command` asset. The notes edit is a single line, confirmed by a dry run:
+
+    - curl ...refs/heads/overlay/cat-mascot/scripts/install.sh | bash
+    + curl ...main/scripts/install.sh | bash
+
+The previous notes are saved to `dist/` first, and the old asset remains a
+downloadable file, so both steps are reversible. The `/main/` URL was
+checked live and returns HTTP 200.
+
+Until that runs, deleting `overlay/cat-mascot` breaks installation for
+everyone reading the release page.
