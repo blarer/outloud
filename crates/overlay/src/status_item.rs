@@ -189,7 +189,7 @@ impl MacStatusItem {
         button.setToolTip(Some(&NSString::from_str(&model.tooltip)));
     }
 
-    /// Draw the megaphone mark into an `NSImage`.
+    /// Draw the skull mark into an `NSImage`.
     ///
     /// Drawn rather than loaded: the geometry in `crate::mark` is the
     /// single source shared with the Windows tray backend (an SF Symbol

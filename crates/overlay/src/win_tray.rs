@@ -456,7 +456,7 @@ fn notify_icon_data(hwnd: HWND, icon: HICON, tip: &str) -> NOTIFYICONDATAW {
     data
 }
 
-/// Draw `mark::mark_in()` (the shared megaphone geometry, see `mark.rs`)
+/// Draw `mark::mark_in()` (the shared skull geometry, see `mark.rs`)
 /// into an `HICON` sized for the tray (`SM_CXSMICON`, DPI-aware — the tray
 /// genuinely scales on high-DPI displays, unlike a fixed toolbar bitmap).
 ///

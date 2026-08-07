@@ -14,7 +14,7 @@ edited.
 - `crates/overlay/src/menu.rs` (193 lines, entire file) — `MenuId`,
   `MenuItem`, `MenuModel`, `glyph_tint()` — is equally pure. No platform
   code anywhere in it.
-- `crates/overlay/src/mark.rs` (293 lines) — the megaphone glyph as
+- `crates/overlay/src/mark.rs` (293 lines) — the skull glyph as
   fractional-unit-square geometry (`Mark { horn: Vec<Point>, waves:
   Vec<Vec<Point>> }`) — is pure and its own module doc (lines 11-17)
   states it exists specifically so a Windows tray backend can render the

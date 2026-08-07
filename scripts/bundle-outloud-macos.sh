@@ -58,11 +58,20 @@ mkdir -p "$APP_DIR/Contents/MacOS" "$APP_DIR/Contents/Resources"
 # The icon is generated from the same SVG the README renders, so the app and
 # the project page can never drift apart. Failure here is a warning rather than
 # an error: an iconless build is worth shipping, a broken build is not.
-if "$ROOT/scripts/make-icon.sh" "$APP_DIR/Contents/Resources/OutLoud.icns" >/dev/null 2>&1; then
+# stderr is NOT discarded on failure. The warning used to be all you got,
+# with the reason thrown away, and the reason is the whole value: an invalid
+# XML comment in the SVG produces a blank icon that every downstream tool
+# happily agrees with. Losing that message cost an hour of looking at the
+# geometry, which was fine.
+icon_log="$(mktemp)"
+if "$ROOT/scripts/make-icon.sh" "$APP_DIR/Contents/Resources/OutLoud.icns" >"$icon_log" 2>&1; then
     echo "==> icon rendered from docs/assets/logo.svg"
+    grep -E "^ +icon rasterized" "$icon_log" || true
 else
     echo "==> WARNING: could not render the icon; the bundle will use the generic one"
+    sed 's/^/    /' "$icon_log" >&2
 fi
+rm -f "$icon_log"
 cp "$ROOT/target/release/outloud" "$APP_DIR/Contents/MacOS/$APP_NAME"
 # NOT renamed with the product: crates/asr's find_helper() looks for this
 # exact filename, and that crate is owned elsewhere. Renaming here alone

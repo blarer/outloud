@@ -39,6 +39,14 @@ if [ ! -f "$master" ]; then
     exit 1
 fi
 
+# A file is not proof of an image.
+#
+# Quick Look writes a PNG even when it fails to PARSE the SVG: near-blank
+# canvas, exit status 0, plausible file size. That shipped an empty app icon
+# and every check downstream agreed, because they were all looking at the
+# same blank PNG.
+"$ROOT/scripts/ci-check-icon-not-blank.py" "$master"
+
 # An iconset is a directory of fixed-name sizes; iconutil refuses anything else.
 # Both 1x and 2x are required or macOS picks a blurry scale on Retina displays.
 iconset="$work/OutLoud.iconset"

@@ -2,13 +2,25 @@
   OutLoud mark: the skull, which is also the dictation overlay's mascot and
   the menu-bar glyph.
 
-  GENERATED. Do not hand-edit: run
-      cargo run -p overlay --bin mark-svg > docs/assets/logo.svg
+  GENERATED. Do not hand-edit. Regenerate with the mark-svg binary:
+      cargo run -p overlay -"-bin mark-svg > docs/assets/logo.svg
+  (the quote in "-bin" is not a typo: a double hyphen is ILLEGAL inside an
+  XML comment, and macOS Quick Look silently renders the whole file blank
+  rather than reporting the error. That is what rasterizes this SVG into
+  the .icns app icon, so the icon came out empty and every tool I checked
+  it with agreed, which made it look like the geometry was wrong.)
+
   The shape comes from `crates/overlay/src/mark.rs`, which is the single
   definition the menu bar, the Windows tray and this file all share. It used
   to be hand-authored separately, and drifted the moment the glyph changed:
   the menu bar became a skull while the app icon, Dock icon and README
   stayed a megaphone.
+
+  WHY width/height say 1024 while the viewBox is 128: macOS Quick Look
+  rasterizes at the declared width, not at the size requested on the command
+  line, so a 128-wide declaration produced a 128px skull sitting in the
+  corner of a 1024px canvas. scripts/make-icon.sh rasterizes through
+  qlmanage, so that is what landed in the .icns.
 
   WHY an SVG rather than a PNG: it is text, so it diffs in review, scales to
   any README width or app icon size without a second asset, and carries no
@@ -20,7 +32,7 @@
   dark mode. This project has already shipped that exact bug once, so every
   colour here is explicit.
 -->
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" width="128" height="128"
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" width="1024" height="1024"
      role="img" aria-label="OutLoud: a skull">
   <defs>
     <linearGradient id="body" x1="0" y1="0" x2="1" y2="1">
