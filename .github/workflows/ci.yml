@@ -329,6 +329,42 @@ jobs:
         run: >-
           echo "::error title=whisper backend::scripts/ci-whisper.sh failed. Either the backend broke, or the pinned model hash no longer matches what the upstream URL serves (which is the check working, not a flake)."
 
+  # The live verification HARNESS, exercised without letting it type.
+  #
+  # scripts/verify-undo-live.sh is the only check that proves undo reaches a
+  # real application, and it can only run on a Mac with a granted binary and
+  # a human who has agreed to stop typing. That means it runs rarely, and
+  # rarely-run scripts rot: this one has already shipped a version that
+  # reported PASS against a binary with no Accessibility grant, an open_doc
+  # that raced TextEdit's launch, and a focus check made once then assumed
+  # to hold forever. Every one of those was found by a real run, on someone's
+  # machine, the expensive way.
+  #
+  # --dry-run exercises the whole harness with delivery suppressed: document
+  # setup, the focus guards, the read-back, the comparison, and the routing
+  # (the daemon reports "[route: undo]" without writing). It cannot prove
+  # undo works and does not claim to. What it protects is the harness, so
+  # that when someone does run it for real, a failure means the product is
+  # broken rather than the script.
+  undo-harness-dry-run:
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: undo-harness
+      - name: Build the daemon
+        run: cargo build --release -p outloud --locked
+      # No Accessibility grant on a CI runner, and none needed: the script
+      # refuses to run ungranted ONLY when it would really write. A dry run
+      # writes nothing, so it is allowed through.
+      - name: Exercise the harness without typing
+        run: scripts/verify-undo-live.sh --dry-run ./target/release/outloud
+      - name: Attribute failure
+        if: failure()
+        run: >-
+          echo "::error title=undo verification harness broke::scripts/verify-undo-live.sh failed its own dry run, which writes nothing. The HARNESS is broken (TextEdit setup, focus guards, or read-back), not necessarily undo. Run it locally with --dry-run to reproduce; no typing involved."
+
   # Performance tripwire. Every other job answers "is it correct"; this one
   # answers "is it still fast", which no correctness test can see: a change
   # that makes the overlay ten times slower produces exactly the same text

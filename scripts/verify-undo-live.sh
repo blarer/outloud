@@ -25,6 +25,25 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
+# --dry-run: exercise the whole harness (document setup, focus checks,
+# read-back, comparison) with delivery suppressed, so nothing is typed
+# anywhere.
+#
+# Worth having because the harness has its own bugs, and every one of them
+# so far was found the expensive way: a run that reported PASS against a
+# binary with no Accessibility grant, an open_doc that raced TextEdit's
+# launch, a focus check that was made once and then assumed to hold. Each
+# needed a real run to find, and a real run types on someone's machine.
+#
+# A dry run proves the plumbing without that cost. It cannot prove undo
+# works -- suppression means no text moves -- so it says so rather than
+# printing a pass.
+DRY_RUN=0
+if [[ "${1:-}" == "--dry-run" ]]; then
+  DRY_RUN=1
+  shift
+fi
+
 BIN="${1:-./target/release/outloud}"
 
 if [[ ! -x "$BIN" ]]; then
@@ -43,8 +62,14 @@ fi
 # 0 failed against a binary with no grants, and the only clue was a refusal
 # line buried in the daemon's own output. A verification that cannot fail is
 # worse than none, because it is believed.
+# A dry run is exempt: the grant matters because an ungranted binary
+# silently fails to write and the comparison then passes vacuously. A dry
+# run writes nothing BY DESIGN and says so instead of claiming a pass, so
+# the hazard does not exist there. Without this exemption the harness could
+# never be exercised on a CI runner, which is the one place it can be
+# checked without someone's keyboard being taken over.
 perms="$("$BIN" --permissions 2>&1 || true)"
-if ! grep -q "^accessibility: *granted" <<<"$perms"; then
+if [[ "$DRY_RUN" == "0" ]] && ! grep -q "^accessibility: *granted" <<<"$perms"; then
   {
     echo "REFUSING TO RUN: this binary has no Accessibility grant."
     echo
@@ -139,11 +164,29 @@ require_textedit_focused() {
   fi
 }
 
+# Every invocation goes through here so the dry-run switch cannot be
+# applied to some utterances and forgotten on others.
+run_outloud() {
+  if [[ "$DRY_RUN" == "1" ]]; then
+    OUTLOUD_NO_INJECT=1 "$BIN" "$@"
+  else
+    "$BIN" "$@"
+  fi
+}
+
 pass=0
 fail=0
 
 check() {
   local label="$1" got="$2" want="$3"
+  # A dry run suppresses delivery, so the document legitimately does not
+  # change. Reporting that as FAIL would train the reader to ignore a red
+  # line from this script, which is the one thing it cannot afford. It is
+  # reported as SKIP, and the run refuses to claim an overall pass.
+  if [[ "$DRY_RUN" == "1" ]]; then
+    echo "    SKIP $label (dry run: nothing was written)"
+    return 0
+  fi
   if [[ "$got" == "$want" ]]; then
     echo "    PASS $label"
     pass=$((pass + 1))
@@ -167,7 +210,7 @@ check() {
 # run that began while the user was mid-sentence in another app put a test
 # phrase into their window. Set OUTLOUD_LIVE_YES=1 to skip the prompt when
 # running unattended.
-if [[ "${OUTLOUD_LIVE_YES:-}" != "1" ]]; then
+if [[ "$DRY_RUN" == "0" && "${OUTLOUD_LIVE_YES:-}" != "1" ]]; then
   cat >&2 <<'BANNER'
 
   ABOUT TO DICTATE ON THIS MACHINE
@@ -196,12 +239,12 @@ echo "--- the harness can observe a write at all"
 set_text "$ORIGINAL"
 select_all
 require_textedit_focused
-"$BIN" --once --say "change quick to slow" --no-overlay 2>&1 | sed 's/^/    | /' || true
+run_outloud --once --say "change quick to slow" --no-overlay 2>&1 | sed 's/^/    | /' || true
 sleep 0.8
 edited="$(read_text)"
 echo "    after:  $edited"
 check "a spoken edit reached the document" "$edited" "$EDITED"
-if [[ "$edited" != "$EDITED" ]]; then
+if [[ "$DRY_RUN" == "0" && "$edited" != "$EDITED" ]]; then
   echo
   echo "ABORTING: the edit never landed, so an unchanged document after" >&2
   echo "\"scratch that\" would prove nothing. Fix delivery first." >&2
@@ -219,7 +262,7 @@ echo "    before: $(read_text)"
 # once; the edit replaces it, and TextEdit leaves the written text selected,
 # so the second utterance still sees a selection and routes as an edit.
 require_textedit_focused
-out="$("$BIN" --once \
+out="$(run_outloud --once \
   --say "change quick to slow" \
   --say "scratch that" \
   --no-overlay 2>&1)" || true
@@ -244,12 +287,18 @@ echo "--- \"scratch that\" with an empty ring must not write the phrase"
 set_text "$ORIGINAL"
 select_all
 require_textedit_focused
-"$BIN" --once --say "scratch that" --no-overlay 2>&1 | sed 's/^/    | /' || true
+run_outloud --once --say "scratch that" --no-overlay 2>&1 | sed 's/^/    | /' || true
 sleep 0.8
 after_empty="$(read_text)"
 echo "    after:  $after_empty"
 check "document untouched by an unbacked undo" "$after_empty" "$ORIGINAL"
 
 echo
+if [[ "$DRY_RUN" == "1" ]]; then
+  echo "DRY RUN: the harness ran end to end and wrote nothing."
+  echo "This proves the plumbing (setup, focus guards, read-back), NOT that"
+  echo "undo works. Re-run without --dry-run for that."
+  exit 0
+fi
 echo "passed: $pass   failed: $fail"
 [[ "$fail" -eq 0 ]]
