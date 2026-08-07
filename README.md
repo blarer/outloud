@@ -395,7 +395,8 @@ evidence in [`docs/beta-readiness.md`](docs/beta-readiness.md).
 | Quiet or distant speech is dropped | Words go missing unless you lean in and enunciate | Raise **Microphone Sensitivity** in the menu bar (or `microphone.sensitivity` in config) |
 | Bluetooth clips the first word | The headset needs ~200ms to start capturing; the daemon warns you once per device | Set `microphone.warm-hold-ms = 2000`, or hold the key a beat before speaking |
 | Freeform edits are not wired up | "tighten this up" reports that it needs the language model | Use the literal commands listed above |
-| Linux does not work; Windows is unexercised | — | macOS only for now |
+| Linux cannot type at all | `outloud` compiles for Linux, but every text delivery tier refuses: there is no X11/Wayland key synthesis. It declines without touching your clipboard | macOS only for now |
+| Windows is unexercised | Built and lint-checked for Windows every commit, but not run there recently | Treat Windows as unverified |
 
 ### Dictating during a call
 
@@ -474,6 +475,8 @@ configuration, or bug, and only the last belongs in an issue.
 | [`docs/ux/`](docs/ux/) | You are designing user-facing behaviour |
 | [`docs/planning/`](docs/planning/) | You are picking up work or planning a milestone |
 | [`CONTRIBUTING.md`](CONTRIBUTING.md) | You are about to write code here |
+| [`docs/investigations/release-ships-the-spike.md`](docs/investigations/release-ships-the-spike.md) | You are about to cut a release, or wonder why the download does not dictate |
+| [`docs/investigations/install-link-depends-on-a-branch.md`](docs/investigations/install-link-depends-on-a-branch.md) | You are about to delete a branch, or the install one-liner 404s |
 
 ## Four traps that will cost you a day each
 
