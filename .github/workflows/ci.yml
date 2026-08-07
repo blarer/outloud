@@ -256,6 +256,7 @@ jobs:
         with:
           shared-key: windows-overlay-smoke
       - name: Run overlay-demo (exercises WinOverlay::new/render for real)
+        id: overlay_smoke
         shell: bash
         run: |
           # Exits 0 on its own after cycling 8 states x2 at 2.5s each
@@ -263,8 +264,13 @@ jobs:
           # against a real hang (e.g. a message-pump deadlock), not the
           # expected path.
           cargo run -p overlay --bin overlay-demo --features display
+      # Only attribute a failure to the overlay if the overlay step is what
+      # failed. This job now has two independent steps, and a blanket
+      # `if: failure()` blamed the Direct2D renderer for a PowerShell syntax
+      # error -- a confident, specific, wrong diagnosis, which is worse than
+      # none because it sends the reader to the wrong file.
       - name: Attribute failure
-        if: failure()
+        if: failure() && steps.overlay_smoke.outcome == 'failure'
         shell: bash
         run: >-
           echo "::error title=windows overlay runtime smoke failed::overlay-demo's Windows path panicked, returned an error, or hung on a real windows-2025 runner. This means the Direct2D renderer built cleanly but failed at runtime (factory/render-target/BindDC/UpdateLayeredWindow) -- check the step output above for the HRESULT or panic message."
