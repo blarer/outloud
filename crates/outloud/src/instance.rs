@@ -153,7 +153,48 @@ impl std::error::Error for Error {}
 /// Not beside the config: this is ephemeral machine state, and putting it in
 /// `~/.config/outloud` would mean a crash leaves litter in a directory the user
 /// is invited to read, edit, and check into a dotfiles repository.
-fn lock_path() -> PathBuf {
+///
+/// On macOS the temp directory is NOT a fixed location. `TMPDIR` is set
+/// per-context: Finder launches inherit the per-user
+/// `/var/folders/.../T/` sandbox, while a terminal may carry an entirely
+/// different value. Two daemons that resolve different temp dirs each take
+/// a DIFFERENT lock, so both start, both bind the hotkey, and both type
+/// what the user said.
+///
+/// Reproduced live: a Finder-launched copy held
+/// `/private/var/folders/.../T/outloud.lock` while a shell-launched copy
+/// held `$TMPDIR/outloud.lock`, and neither saw the other. Forcing both to
+/// the same path made the second refuse correctly.
+///
+/// So macOS uses a fixed per-user directory instead. `~/Library/Caches` is
+/// the platform's own answer for regenerable per-user state: not backed up,
+/// not synced, and not somewhere the user is invited to edit.
+/// Serializes the tests that mutate process-wide environment variables.
+///
+/// `set_var` is process-global, so two such tests running concurrently
+/// under the default test harness corrupt each other's setup.
+#[cfg(all(test, target_os = "macos"))]
+pub(crate) fn tests_env_lock() -> std::sync::MutexGuard<'static, ()> {
+    static LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    LOCK.lock().unwrap_or_else(|e| e.into_inner())
+}
+
+pub(crate) fn lock_path() -> PathBuf {
+    #[cfg(target_os = "macos")]
+    {
+        // $XDG_RUNTIME_DIR still wins when explicitly set, so a test or a
+        // deliberate override keeps working.
+        if let Some(d) = std::env::var_os("XDG_RUNTIME_DIR").filter(|d| !d.is_empty()) {
+            return PathBuf::from(d).join("outloud.lock");
+        }
+        if let Some(home) = std::env::var_os("HOME").filter(|h| !h.is_empty()) {
+            return PathBuf::from(home)
+                .join("Library/Caches/dev.outloud.outloud")
+                .join("outloud.lock");
+        }
+        // No HOME: fall through to the temp dir rather than refusing to
+        // start. A single-instance guard is not worth failing a launch over.
+    }
     let dir = match std::env::var_os("XDG_RUNTIME_DIR") {
         Some(d) if !d.is_empty() => PathBuf::from(d),
         _ => std::env::temp_dir(),
@@ -569,5 +610,53 @@ mod tests {
         assert_eq!(helper_pids_to_reap("\n  42  \n\n", 1), vec![42]);
         // Anything non-numeric is ignored rather than guessed at.
         assert!(helper_pids_to_reap("not-a-pid\n", 1).is_empty());
+    }
+}
+
+#[cfg(all(test, target_os = "macos"))]
+mod lock_path_tests {
+    /// The lock must not move when `TMPDIR` does.
+    ///
+    /// This is the bug a user hit: a Finder-launched daemon and a
+    /// shell-launched one resolved DIFFERENT temp directories, so each took
+    /// its own lock, both started, and both bound the hotkey. The symptom
+    /// was "the second copy shows no menu bar icon and its permissions do
+    /// not work" -- two daemons fighting, not a permissions fault.
+    ///
+    /// Serialized with the other env-mutating test in this module: two
+    /// tests setting `TMPDIR` concurrently would flake.
+    #[test]
+    fn tmpdir_does_not_move_the_lock() {
+        let _guard = crate::instance::tests_env_lock();
+        let before = super::lock_path();
+        let old = std::env::var_os("TMPDIR");
+        // SAFETY: single-threaded within the guard held above.
+        unsafe { std::env::set_var("TMPDIR", "/tmp/outloud-a-different-temp-dir") };
+        let after = super::lock_path();
+        match old {
+            Some(v) => unsafe { std::env::set_var("TMPDIR", v) },
+            None => unsafe { std::env::remove_var("TMPDIR") },
+        }
+        assert_eq!(
+            before, after,
+            "the lock path follows TMPDIR, so two copies can each hold their own lock and both run"
+        );
+    }
+
+    /// An explicit XDG_RUNTIME_DIR still wins, so overrides keep working.
+    #[test]
+    fn explicit_runtime_dir_still_wins() {
+        let _guard = crate::instance::tests_env_lock();
+        let old = std::env::var_os("XDG_RUNTIME_DIR");
+        unsafe { std::env::set_var("XDG_RUNTIME_DIR", "/tmp/outloud-runtime-dir") };
+        let path = super::lock_path();
+        match old {
+            Some(v) => unsafe { std::env::set_var("XDG_RUNTIME_DIR", v) },
+            None => unsafe { std::env::remove_var("XDG_RUNTIME_DIR") },
+        }
+        assert_eq!(
+            path,
+            std::path::Path::new("/tmp/outloud-runtime-dir/outloud.lock")
+        );
     }
 }
