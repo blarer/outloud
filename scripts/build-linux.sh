@@ -130,6 +130,25 @@ else
 fi
 
 # ---------------------------------------------------------------- .rpm
+#
+# The spec below sets two globals that must not be explained inside it:
+#
+#   __os_install_post   rpm's automatic post-install pass. It runs brp-strip,
+#                       which invokes the HOST's /usr/bin/strip on everything
+#                       it packages. Cross-building aarch64 on an x86_64
+#                       runner hands it a foreign ELF and it fails with
+#                       "Unable to recognise the format of the input file",
+#                       taking the whole job down after the binary had
+#                       already built. The release profile strips already, so
+#                       the pass has nothing to do even when it can read the
+#                       file.
+#   debug_package       debuginfo extraction, which shells out to the same
+#                       host-arch tools for the same reason.
+#
+# Why the explanation lives HERE and not in the spec: rpm expands macros
+# inside spec comments. A comment naming a macro is not a comment, it is a
+# command, and mine turned into "Unknown tag: /usr/lib/rpm/brp-compress"
+# which broke all four Linux jobs including the two that had been passing.
 if command -v rpmbuild >/dev/null 2>&1; then
     echo "==> .rpm"
     RPMTOP="$OUT/rpmbuild"
@@ -141,22 +160,6 @@ Version: $VERSION
 Release: 1
 Summary: Local edit-by-voice spike harness
 License: MIT
-
-# Disable rpm's automatic post-install processing.
-#
-# %__os_install_post runs brp-strip, which invokes the HOST's /usr/bin/strip
-# on every binary it finds. Cross-building aarch64 on an x86_64 runner hands
-# it a foreign ELF and it fails:
-#
-#   /usr/bin/strip: Unable to recognise the format of the input file
-#   error: Bad exit status from /var/tmp/rpm-tmp.XXXXXX (%install)
-#
-# which failed both aarch64 release jobs while every other target built. The
-# binary is already stripped by the release profile, so the pass has nothing
-# to do here even when it can read the file.
-#
-# Also turns off debuginfo extraction, which shells out to the same
-# host-arch tools for the same reason.
 %global __os_install_post %{nil}
 %global debug_package %{nil}
 
