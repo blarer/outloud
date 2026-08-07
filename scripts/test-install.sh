@@ -70,6 +70,14 @@ CMD="$ROOT/scripts/Install-OutLoud.command"
 bash -n "$CMD" || fail "Install-OutLoud.command does not parse"
 pass "Install-OutLoud.command parses"
 
+echo "==> the publish job's steps behave as the workflow expects"
+# The publish job is gated on a v* tag, so it has never once executed: every
+# workflow_dispatch run skips it, and the last tagged run was cancelled at
+# the compliance gate. Its steps are the ones that produce what strangers
+# download, so they are exercised here rather than first discovered during
+# a release.
+"$ROOT/scripts/ci-check-publish-steps.py" || fail "the publish job's steps would not behave as intended"
+
 # Everything past here needs the network and the real release.
 if ! curl -fsSL --max-time 10 -o /tmp/install-test-api.json \
         https://api.github.com/repos/blarer/outloud/releases/latest 2>/dev/null; then
