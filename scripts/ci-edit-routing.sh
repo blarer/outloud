@@ -56,10 +56,10 @@ route() {
   local phrase="$1" want="$2" out
   out="$("$BIN" --once --say "$phrase" --no-overlay 2>&1 || true)"
   if grep -q "\[route: $want\]" <<<"$out"; then
-    echo "    PASS ${phrase@Q} -> $want"
+    echo "    PASS "$phrase" -> $want"
     pass=$((pass + 1))
   else
-    echo "    FAIL ${phrase@Q} -> expected [route: $want]"
+    echo "    FAIL "$phrase" -> expected [route: $want]"
     sed 's/^/         | /' <<<"$out" | grep -E "e2e|route" | head -3
     fail=$((fail + 1))
   fi
@@ -83,11 +83,11 @@ no_route() {
   local phrase="$1" out
   out="$("$BIN" --once --say "$phrase" --no-overlay 2>&1 || true)"
   if grep -q "\[route:" <<<"$out"; then
-    echo "    FAIL ${phrase@Q} -> should be plain dictation, but was routed"
+    echo "    FAIL "$phrase" -> should be plain dictation, but was routed"
     sed 's/^/         | /' <<<"$out" | grep -E "e2e" | head -2
     fail=$((fail + 1))
   else
-    echo "    PASS ${phrase@Q} -> plain dictation, not a command"
+    echo "    PASS "$phrase" -> plain dictation, not a command"
     pass=$((pass + 1))
   fi
 }

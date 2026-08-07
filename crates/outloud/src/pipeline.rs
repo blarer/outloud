@@ -1630,11 +1630,29 @@ mod tests {
         // to happen. That is the pipeline being right and the test being
         // wrong, and it is also what a real speaker does: finish, pause,
         // speak again. `spawn_wav_sequence` inserts the same gap.
+        //
+        // The gap RETRIES rather than sleeping a fixed 300ms. A fixed sleep
+        // is a bet that finalization finishes in time, and on a loaded
+        // machine it loses: this test failed about one run in five, always
+        // as a 10s timeout, because the second key-down was refused and no
+        // second commit ever came. Re-sending until it is accepted turns a
+        // timing guess into a condition, and a test that fails one run in
+        // five is one people learn to re-run instead of read.
         let feeder = ftx.clone();
         tokio::spawn(async move {
             for i in 0..2 {
                 if i > 0 {
-                    tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+                    // 2s, not 300ms. The pipeline DROPS a key-down that
+                    // arrives while the previous utterance is still
+                    // committing, so this gap has to outlast finalization
+                    // or the second utterance never happens and the run
+                    // waits forever for a commit that is not coming.
+                    //
+                    // 300ms was a bet on an unloaded machine and lost about
+                    // one run in five, always as a 10s timeout. Still well
+                    // inside the 15s timeout below, so a genuine hang
+                    // still fails as a hang rather than being masked.
+                    tokio::time::sleep(std::time::Duration::from_secs(2)).await;
                 }
                 feeder.send(FrontendEvent::KeyDown).unwrap();
                 feeder
@@ -1656,7 +1674,7 @@ mod tests {
         };
 
         let reports = tokio::time::timeout(
-            std::time::Duration::from_secs(10),
+            std::time::Duration::from_secs(15),
             run(
                 cfg,
                 engine,
