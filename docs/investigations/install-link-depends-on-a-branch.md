@@ -20,53 +20,35 @@ survives. Deleting that branch, which is the normal fate of a merged or
 abandoned feature branch, breaks installation for everyone reading the
 release page. The `Install-OutLoud.command` asset has the same dependency.
 
-## Why this is not just "merge the branch"
+## Ruled out: the cat branch does not touch main
 
-You said to disregard the cat-mascot branch: "the only changes on the other
-branch are the cat". That is not what the branch contains. Of its 21
-commits, six are about the cat glyph. The other fifteen are the entire
-install-and-release story:
+Asked about this, the answer was unambiguous: the cat-mascot branch must not
+touch `main`. That removes merging and cherry-picking, so neither is on the
+table regardless of what else the branch happens to carry.
 
-    feat: a curl installer and a release path that survive having no Developer ID
-    feat: ship a double-clickable installer, because macOS blocks the pasted one
-    feat: guide a first-time user through the two silent permissions
-    fix: build releases in staging so they cannot replace the running app
-    fix: never let a staging build claim the running app's bundle identifier
-    fix: stop this script from silently replacing the developer's running app
-    fix: remove the staged bundle, and its registration, when the release ends
-    fix: show OutLoud's own icon in the welcome dialogs, not a red folder
-    fix: restart instead of insisting a correct switch is wrong
-    test: exercise the installer before a stranger's Mac does
-    test: compile every walkthrough dialog instead of eyeballing it
-    ... and four more
+For the record, the branch does hold more than the cat -- six of its 21
+commits are the glyph, the rest are installer and release work, and four
+scripts exist only there (`install.sh`, `Install-OutLoud.command`,
+`release-macos.sh`, `test-install.sh`). That is context for what has to be
+rebuilt, not an argument to reconsider. It also explains an earlier oddity:
+the release tarball looked hand-uploaded because `release-macos.sh`, the
+script that would have produced it, is not on `main`.
 
-Files that exist ONLY on that branch:
+## What is left
 
-    scripts/install.sh
-    scripts/Install-OutLoud.command
-    scripts/release-macos.sh
-    scripts/test-install.sh
+Two options, both clean of the branch:
 
-Several of those fixes are about not destroying a running app during a
-release, which is the kind of thing you want on `main` regardless of how you
-feel about the cat.
+1. **Write a fresh `scripts/install.sh` on `main` from scratch**, sharing no
+   commits with the branch, then repoint the release one-liner at `main`.
+   The install link stops depending on a branch that may be deleted.
+2. **Leave it.** The published link keeps working until someone deletes
+   `overlay/cat-mascot`, then installation breaks for everyone reading the
+   release page.
 
-## Why I did not act
+Not started, because a new installer is new product surface and should be
+asked for rather than assumed.
 
-Three options, and the choice is yours:
+## Verified, not remembered
 
-1. **Merge the branch.** Gets the installer onto `main` and the link stops
-   depending on a feature branch. Brings the cat glyph with it, which now
-   conflicts with the skull.
-2. **Cherry-pick the fifteen non-cat commits** onto `main`, leave the cat
-   behind. More work, keeps `main` free of a mark you did not choose.
-3. **Leave it.** Works until someone deletes the branch.
-
-I did not merge, because merging a branch you told me to disregard is
-exactly the kind of thing that should not happen without you saying so, and
-because it would reintroduce a cat glyph on top of the skull you just asked
-for.
-
-Note that this is also why my earlier "the release tarball was uploaded by
-hand" finding looked odd: `scripts/release-macos.sh`, the thing that would
-have produced it, is on that branch and not on `main`.
+    $ curl .../refs/heads/main/scripts/install.sh              -> HTTP 404
+    $ curl .../refs/heads/overlay/cat-mascot/scripts/install.sh -> HTTP 200 (209 lines)
