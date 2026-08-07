@@ -141,6 +141,25 @@ Version: $VERSION
 Release: 1
 Summary: Local edit-by-voice spike harness
 License: MIT
+
+# Disable rpm's automatic post-install processing.
+#
+# %__os_install_post runs brp-strip, which invokes the HOST's /usr/bin/strip
+# on every binary it finds. Cross-building aarch64 on an x86_64 runner hands
+# it a foreign ELF and it fails:
+#
+#   /usr/bin/strip: Unable to recognise the format of the input file
+#   error: Bad exit status from /var/tmp/rpm-tmp.XXXXXX (%install)
+#
+# which failed both aarch64 release jobs while every other target built. The
+# binary is already stripped by the release profile, so the pass has nothing
+# to do here even when it can read the file.
+#
+# Also turns off debuginfo extraction, which shells out to the same
+# host-arch tools for the same reason.
+%global __os_install_post %{nil}
+%global debug_package %{nil}
+
 %description
 Milestone-zero harness for reading and rewriting focused text fields.
 %install
