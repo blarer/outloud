@@ -27,6 +27,32 @@ param(
 $ErrorActionPreference = 'Stop'
 $root = Split-Path -Parent $PSScriptRoot
 
+# Announce before taking over the keyboard.
+#
+# The focus watchdog below is good at catching a window that STEALS focus
+# mid-run, but it cannot help the person sitting at the machine who simply
+# did not know a run was starting. On the Mac an equivalent script began
+# while its user was mid-sentence in another app and put a test phrase into
+# their window; the same script had also, on this machine, pasted into a
+# live Discord chat.
+#
+# One prompt costs a keypress. Being surprised by your own keyboard costs
+# trust, and both of those incidents were avoidable this way.
+#
+# -DryRun writes nothing, so it skips the prompt. OUTLOUD_LIVE_YES=1 skips
+# it for unattended/CI runs that have already accepted the risk.
+if (-not $DryRun -and $env:OUTLOUD_LIVE_YES -ne '1') {
+    Write-Host ''
+    Write-Host '  ABOUT TO DICTATE ON THIS MACHINE' -ForegroundColor Yellow
+    Write-Host '  --------------------------------' -ForegroundColor Yellow
+    Write-Host '  This replays speech and TYPES INTO NOTEPAD.'
+    Write-Host '  Stop typing until it finishes (about 20 seconds).'
+    Write-Host ''
+    Write-Host '  Press Return to start, or Ctrl-C to cancel.'
+    Write-Host ''
+    [void](Read-Host)
+}
+
 # Tee everything to a file as well as the console. SendKeys steals focus
 # while this runs, so a console redirect can end up mangled or lost; the
 # result of a verification run must survive being run unattended.

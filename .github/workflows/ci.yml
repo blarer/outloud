@@ -220,6 +220,38 @@ jobs:
     timeout-minutes: 3
     steps:
       - uses: actions/checkout@v4
+
+      # Parse every PowerShell script. Nothing else in CI reads them, and
+      # macOS has no pwsh, so a syntax error in a .ps1 was previously found
+      # by a human running it on the Windows box: the slowest possible
+      # feedback, on the machine least convenient to debug on.
+      #
+      # First step in the job, and before the toolchain cache, because it
+      # needs neither and takes about a second.
+      #
+      # Parsing ONLY. These scripts press keys and type into windows, so a
+      # CI runner must never execute them. `Parser::ParseFile` gives the
+      # syntax check without running a single statement.
+      - name: Parse the PowerShell verification scripts
+        shell: pwsh
+        run: |
+          $bad = 0
+          Get-ChildItem -Path scripts -Filter *.ps1 -Recurse | ForEach-Object {
+              $errs = $null
+              [void][System.Management.Automation.Language.Parser]::ParseFile(
+                  $_.FullName, [ref]$null, [ref]$errs)
+              if ($errs -and $errs.Count -gt 0) {
+                  $bad = 1
+                  foreach ($e in $errs) {
+                      $line = $e.Extent.StartLineNumber
+                      Write-Output "::error file=$($_.FullName),line=$line::$($e.Message)"
+                  }
+              } else {
+                  Write-Output "    ok  $($_.Name)"
+              }
+          }
+          exit $bad
+
       - uses: Swatinem/rust-cache@v2
         with:
           shared-key: windows-overlay-smoke
