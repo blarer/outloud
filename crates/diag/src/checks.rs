@@ -1095,6 +1095,92 @@ impl Check for BundleFreshness {
     }
 }
 
+/// Judge how many OutLoud daemons are running, from their executable paths.
+///
+/// WHY THIS CHECK EXISTS: a user reported "it doesn't appear on the menu
+/// bar, and it asks for permissions but doesn't work". Nothing was wrong
+/// with the permissions. TWO daemons were running -- an installed copy and
+/// a freshly built one -- both binding the same hotkey and both opening the
+/// microphone. The doctor, whose entire job is answering "it doesn't work",
+/// had no check for this and reported everything healthy.
+///
+/// It was possible because the single-instance lock lived in the temp
+/// directory, and on macOS that path is per-context: a Finder launch and a
+/// shell launch resolve different directories, so each copy took its own
+/// lock and neither saw the other. That is fixed, but a daemon started
+/// BEFORE the fix still holds the old path, so the situation outlives the
+/// bug and stays worth detecting.
+///
+/// Pure over a list of paths so it is testable without spawning anything.
+pub fn judge_running_daemons(exe_paths: &[String]) -> CheckOutcome {
+    // The speech helper is a child process, not a second daemon. Counting
+    // it would report two copies for every healthy single run.
+    let daemons: Vec<&String> = exe_paths
+        .iter()
+        .filter(|p| !p.contains("outloud-speech-helper"))
+        .collect();
+
+    match daemons.len() {
+        0 => CheckOutcome::pass("no OutLoud daemon is running"),
+        1 => CheckOutcome::pass(format!("one OutLoud daemon: {}", daemons[0])),
+        n => {
+            // Name the paths. "Two copies are running" sends someone hunting
+            // through Activity Monitor; the paths say which to quit, and
+            // usually reveal that one is a build directory.
+            let list = daemons
+                .iter()
+                .map(|p| p.as_str())
+                .collect::<Vec<_>>()
+                .join(", ");
+            CheckOutcome::fail(
+                format!("{n} OutLoud daemons are running: {list}"),
+                ErrorClass::Configuration,
+                "Quit all but one. Two copies both bind the hotkey and both open \
+                 the microphone, so one keypress records twice and types twice. \
+                 A copy started before the single-instance fix holds the old \
+                 lock path and cannot see the others.",
+            )
+        }
+    }
+}
+
+/// Are two OutLoud daemons running at once?
+pub struct RunningInstances;
+
+impl Check for RunningInstances {
+    fn name(&self) -> &'static str {
+        "running-instances"
+    }
+
+    fn run(&self, _env: &Env) -> CheckOutcome {
+        // `pgrep -lf`, NOT `-af`: on macOS -a is not the "full command
+        // line" flag it is on Linux, and returns bare pids. Using it made
+        // this check report "no daemon is running" on a machine with one
+        // plainly running, which is worse than having no check.
+        //
+        // Absent or failing pgrep is not a diagnosis, so it degrades to a
+        // pass rather than inventing a fault the user cannot act on.
+        let out = match Command::new("pgrep").args(["-lf", "OutLoud"]).output() {
+            Ok(o) => o,
+            Err(_) => return CheckOutcome::pass("pgrep unavailable; cannot count daemons"),
+        };
+        let text = String::from_utf8_lossy(&out.stdout);
+        let paths: Vec<String> = text
+            .lines()
+            .filter_map(|line| {
+                // "PID /path/to/exe [args]" -> the path.
+                let rest = line.split_once(' ')?.1;
+                let path = rest.split_whitespace().next()?;
+                // Only real executables: this must not count the osascript
+                // helper that reads the bundle's icon, or the doctor itself.
+                path.contains("OutLoud.app/Contents/MacOS/")
+                    .then(|| path.to_string())
+            })
+            .collect();
+        judge_running_daemons(&paths)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1403,5 +1489,49 @@ mod tests {
     #[test]
     fn macos_below_the_validated_floor_still_fails() {
         assert_eq!(judge_macos_version("12.7").status, Status::Fail);
+    }
+
+    /// One daemon plus its speech helper is a HEALTHY single instance.
+    ///
+    /// The helper is a child process whose path also contains "outloud", so
+    /// a naive count reports two copies for every normal run. A check that
+    /// cries wolf on the healthy case gets ignored, and then it protects
+    /// nothing.
+    #[test]
+    fn a_daemon_and_its_helper_is_one_instance() {
+        let outcome = judge_running_daemons(&[
+            "/Applications/OutLoud.app/Contents/MacOS/OutLoud".into(),
+            "/Applications/OutLoud.app/Contents/MacOS/outloud-speech-helper".into(),
+        ]);
+        assert_eq!(outcome.status, Status::Pass, "{}", outcome.detail);
+    }
+
+    /// Two daemons is the reported failure, and must FAIL, not warn.
+    ///
+    /// The user saw no menu bar icon and permissions that did nothing. Both
+    /// symptoms came from two copies fighting over the hotkey and the
+    /// microphone, while the doctor reported everything healthy.
+    #[test]
+    fn two_daemons_fail_and_name_both_paths() {
+        let outcome = judge_running_daemons(&[
+            "/Applications/OutLoud.app/Contents/MacOS/OutLoud".into(),
+            "/Users/x/outloud/dist/OutLoud.app/Contents/MacOS/OutLoud".into(),
+        ]);
+        assert_eq!(outcome.status, Status::Fail);
+        assert!(
+            outcome.detail.contains("/Applications/") && outcome.detail.contains("/dist/"),
+            "both paths must be named so the user knows which to quit: {}",
+            outcome.detail
+        );
+        assert!(
+            outcome.remedy.is_some(),
+            "a failure without a remedy is a complaint"
+        );
+    }
+
+    /// No daemon is not a failure: the doctor runs before a first launch.
+    #[test]
+    fn no_daemon_is_not_a_failure() {
+        assert_eq!(judge_running_daemons(&[]).status, Status::Pass);
     }
 }

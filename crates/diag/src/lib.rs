@@ -214,6 +214,11 @@ pub fn registry() -> Vec<Box<dyn Check>> {
         // crash.
         Box::new(checks::InputMonitoringPermission),
         Box::new(checks::MicrophonePermission),
+        // Before the install checks: two daemons make every LATER check
+        // ambiguous, since they report on whichever copy answered. A user
+        // hit exactly this -- no menu bar icon, permissions that did
+        // nothing -- and the doctor called the machine healthy.
+        Box::new(checks::RunningInstances),
         Box::new(checks::CodeSignature),
         Box::new(checks::BundleLaunch),
         // Directly after BundleLaunch: both answer "is the thing you are
