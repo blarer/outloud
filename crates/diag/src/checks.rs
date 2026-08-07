@@ -1144,6 +1144,45 @@ pub fn judge_running_daemons(exe_paths: &[String]) -> CheckOutcome {
     }
 }
 
+/// Turn `pgrep -lf OutLoud` output into a verdict.
+///
+/// Pure so the interesting cases can be tested without spawning daemons on
+/// the developer's machine -- which is itself the bug this check exists to
+/// find.
+pub fn judge_pgrep_output(text: &str) -> CheckOutcome {
+    let paths: Vec<String> = text
+        .lines()
+        .filter_map(|line| {
+            // "PID /path/to/exe [args]" -> the path.
+            let rest = line.split_once(' ')?.1;
+            let path = rest.split_whitespace().next()?;
+            // Only real executables: this must not count the osascript
+            // helper that reads the bundle's icon, or the doctor itself.
+            path.contains("OutLoud.app/Contents/MacOS/")
+                .then(|| path.to_string())
+        })
+        .collect();
+
+    // pgrep matched processes but nothing parsed into a bundle path. That is
+    // NOT "no daemons are running"; it is this check having lost the ability
+    // to tell. Saying so beats a green PASS that means nothing -- precisely
+    // the failure `pgrep -af` produced, where macOS returns bare pids and
+    // the check cheerfully reported an empty machine.
+    if paths.is_empty() && !text.trim().is_empty() {
+        return CheckOutcome::warn(
+            format!(
+                "pgrep matched {} process(es) but none looked like an OutLoud bundle; \
+                 cannot count daemons",
+                text.lines().count()
+            ),
+            ErrorClass::Bug,
+            "Report this with the output of `pgrep -lf OutLoud`: the doctor can no \
+             longer detect two copies running, which is a real and confusing failure.",
+        );
+    }
+    judge_running_daemons(&paths)
+}
+
 /// Are two OutLoud daemons running at once?
 pub struct RunningInstances;
 
@@ -1165,19 +1204,7 @@ impl Check for RunningInstances {
             Err(_) => return CheckOutcome::pass("pgrep unavailable; cannot count daemons"),
         };
         let text = String::from_utf8_lossy(&out.stdout);
-        let paths: Vec<String> = text
-            .lines()
-            .filter_map(|line| {
-                // "PID /path/to/exe [args]" -> the path.
-                let rest = line.split_once(' ')?.1;
-                let path = rest.split_whitespace().next()?;
-                // Only real executables: this must not count the osascript
-                // helper that reads the bundle's icon, or the doctor itself.
-                path.contains("OutLoud.app/Contents/MacOS/")
-                    .then(|| path.to_string())
-            })
-            .collect();
-        judge_running_daemons(&paths)
+        judge_pgrep_output(&text)
     }
 }
 
@@ -1533,5 +1560,57 @@ mod tests {
     #[test]
     fn no_daemon_is_not_a_failure() {
         assert_eq!(judge_running_daemons(&[]).status, Status::Pass);
+    }
+
+    /// Bare pids -- what `pgrep -af` returns on macOS -- must NOT read as
+    /// an empty machine.
+    ///
+    /// This is the exact bug that shipped for one commit: the flag was
+    /// wrong, every line failed to parse, and the check reported "no
+    /// OutLoud daemon is running" on a machine running one. A check that
+    /// silently sees nothing is worse than no check, because it actively
+    /// tells you the thing you are looking for is not there.
+    #[test]
+    fn unparseable_output_warns_instead_of_claiming_an_empty_machine() {
+        let outcome = judge_pgrep_output("66061\n66065\n");
+        assert_eq!(
+            outcome.status,
+            Status::Warn,
+            "bare pids must not read as 'no daemons': {}",
+            outcome.detail
+        );
+        assert_eq!(outcome.class, Some(ErrorClass::Bug));
+    }
+
+    /// Genuinely empty output is genuinely no daemons.
+    #[test]
+    fn empty_output_is_an_empty_machine() {
+        assert_eq!(judge_pgrep_output("").status, Status::Pass);
+        assert_eq!(judge_pgrep_output("   \n").status, Status::Pass);
+    }
+
+    /// The real macOS format parses, and the helper does not inflate it.
+    #[test]
+    fn real_pgrep_output_counts_one_daemon() {
+        let outcome = judge_pgrep_output(
+            "66061 /Applications/OutLoud.app/Contents/MacOS/OutLoud\n\
+             66065 /Applications/OutLoud.app/Contents/MacOS/outloud-speech-helper\n",
+        );
+        assert_eq!(outcome.status, Status::Pass, "{}", outcome.detail);
+        assert!(
+            outcome.detail.contains("one OutLoud daemon"),
+            "{}",
+            outcome.detail
+        );
+    }
+
+    /// Two bundles is the reported failure.
+    #[test]
+    fn two_bundles_in_pgrep_output_fail() {
+        let outcome = judge_pgrep_output(
+            "1 /Applications/OutLoud.app/Contents/MacOS/OutLoud\n\
+             2 /Users/x/outloud/dist/OutLoud.app/Contents/MacOS/OutLoud\n",
+        );
+        assert_eq!(outcome.status, Status::Fail, "{}", outcome.detail);
     }
 }
