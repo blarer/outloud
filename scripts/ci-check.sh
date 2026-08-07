@@ -81,6 +81,14 @@ echo "==> platform cfg stubs"
 # type, which a Mac-only `cargo check` cannot see.
 scripts/ci-check-cfg.sh
 
+echo "==> the cat mascot has not reached main"
+# The mascot lives on overlay/cat-mascot and was explicitly ruled out of
+# main; the product's mark is the skull. Enforced rather than remembered:
+# when two OutLoud icons appeared in the menu bar at once, the reasonable
+# first guess was that the branch had been merged, and nothing in the repo
+# could disprove it quickly.
+scripts/ci-check-no-cat-mascot.py
+
 echo "==> tests that assume a host resource"
 # A test of mine unwrapped ClipboardTarget::new(), which needs a real
 # clipboard tool. Every dev machine has one; a headless Linux runner does
