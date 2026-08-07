@@ -1,6 +1,14 @@
 <!--
-  OutLoud mark: a megaphone whose sound waves double as the "speech leaving
-  your machine and landing as text" idea.
+  OutLoud mark: the skull, which is also the dictation overlay's mascot and
+  the menu-bar glyph.
+
+  GENERATED. Do not hand-edit: run
+      cargo run -p overlay --bin mark-svg > docs/assets/logo.svg
+  The shape comes from `crates/overlay/src/mark.rs`, which is the single
+  definition the menu bar, the Windows tray and this file all share. It used
+  to be hand-authored separately, and drifted the moment the glyph changed:
+  the menu bar became a skull while the app icon, Dock icon and README
+  stayed a megaphone.
 
   WHY an SVG rather than a PNG: it is text, so it diffs in review, scales to
   any README width or app icon size without a second asset, and carries no
@@ -9,31 +17,24 @@
 
   WHY currentColor is NOT used: GitHub renders README images in both light
   and dark themes, and an unresolved currentColor renders black-on-black in
-  dark mode. This project has already shipped that exact bug once, in the
-  menu bar icon, where every programmatic check reported healthy while
-  nothing was visible on screen. Explicit colours only.
+  dark mode. This project has already shipped that exact bug once, so every
+  colour here is explicit.
 -->
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" role="img" aria-label="OutLoud">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" width="128" height="128"
+     role="img" aria-label="OutLoud: a skull">
   <defs>
     <linearGradient id="body" x1="0" y1="0" x2="1" y2="1">
-      <stop offset="0%" stop-color="#3b82f6"/>
-      <stop offset="100%" stop-color="#1d4ed8"/>
+      <stop offset="0%" stop-color="#e2e8f0"/>
+      <stop offset="100%" stop-color="#94a3b8"/>
     </linearGradient>
   </defs>
 
   <!-- Rounded field. Sized so the mark still reads at 16px in a menu bar. -->
   <rect x="4" y="4" width="120" height="120" rx="28" fill="#0f172a"/>
 
-  <!-- Megaphone horn, pointing right: speech travelling toward the text. -->
-  <path d="M34 52 L34 76 L48 76 L70 92 L70 36 L48 52 Z"
-        fill="url(#body)" stroke="#93c5fd" stroke-width="3" stroke-linejoin="round"/>
-
-  <!-- Handle. -->
-  <path d="M44 76 L44 92 Q44 98 50 98 L54 98 Q60 98 60 92 L60 83"
-        fill="none" stroke="#93c5fd" stroke-width="6" stroke-linecap="round"/>
-
-  <!-- Three sound arcs, increasing in radius: the audio becoming words. -->
-  <path d="M82 50 Q90 64 82 78" fill="none" stroke="#60a5fa" stroke-width="6" stroke-linecap="round"/>
-  <path d="M94 42 Q106 64 94 86" fill="none" stroke="#60a5fa" stroke-width="6" stroke-linecap="round" opacity="0.75"/>
-  <path d="M106 34 Q122 64 106 94" fill="none" stroke="#60a5fa" stroke-width="6" stroke-linecap="round" opacity="0.45"/>
+  <!-- Skull: outline plus eye sockets, one path, even-odd so the sockets
+       are cut rather than painted. -->
+  <path d="M25.6 71.7 L25.9 64.9 L26.9 58.3 L28.5 51.8 L30.7 45.8 L33.5 40.1 L36.8 35.0 L40.6 30.6 L44.8 26.8 L49.3 23.8 L54.1 21.6 L59.0 20.3 L64.0 19.8 L69.0 20.3 L73.9 21.6 L78.7 23.8 L83.2 26.8 L87.4 30.6 L91.2 35.0 L94.5 40.1 L97.3 45.8 L99.5 51.8 L101.1 58.3 L102.1 64.9 L102.4 71.7 L87.0 91.7 L82.4 108.2 L45.6 108.2 L41.0 91.7 L25.6 71.7 Z M58.2 58.2 L57.9 61.6 L56.8 64.7 L55.0 67.4 L52.7 69.5 L50.1 70.8 L47.2 71.2 L44.3 70.8 L41.7 69.5 L39.4 67.4 L37.6 64.7 L36.5 61.6 L36.2 58.2 L36.5 54.9 L37.6 51.8 L39.4 49.1 L41.7 47.0 L44.3 45.7 L47.2 45.3 L50.1 45.7 L52.7 47.0 L55.0 49.1 L56.8 51.8 L57.9 54.9 L58.2 58.2 Z M91.8 58.2 L91.5 61.6 L90.4 64.7 L88.6 67.4 L86.3 69.5 L83.7 70.8 L80.8 71.2 L77.9 70.8 L75.3 69.5 L73.0 67.4 L71.2 64.7 L70.1 61.6 L69.8 58.2 L70.1 54.9 L71.2 51.8 L73.0 49.1 L75.3 47.0 L77.9 45.7 L80.8 45.3 L83.7 45.7 L86.3 47.0 L88.6 49.1 L90.4 51.8 L91.5 54.9 L91.8 58.2 Z"
+        fill="url(#body)" fill-rule="evenodd"
+        stroke="#f8fafc" stroke-width="2" stroke-linejoin="round"/>
 </svg>
