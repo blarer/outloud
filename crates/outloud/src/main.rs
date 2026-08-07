@@ -489,6 +489,38 @@ fn report_refusal_to_the_user(_message: &str) {
     // started from a shell where stderr is already visible.
 }
 
+/// Warn a GUI user about a problem the daemon is going to survive.
+///
+/// Distinct from [`report_refusal_to_the_user`] in two ways that matter.
+/// It does not block: the daemon keeps starting while the dialog sits
+/// there, because a modal alert on the startup path would freeze the menu
+/// bar until someone clicked it, and this warning is about a key that does
+/// nothing, not a process that cannot continue. And it is fire-and-forget:
+/// a dialog that fails to appear must not take the daemon down with it.
+#[cfg(target_os = "macos")]
+fn report_startup_warning_to_the_user(message: &str) {
+    // A terminal-attached launch has already seen it on stderr.
+    if std::io::IsTerminal::is_terminal(&std::io::stderr()) {
+        return;
+    }
+    let escaped = message.replace('\\', "\\\\").replace('"', "\\\"");
+    let script = format!(
+        "display dialog \"{escaped}\" with title \"OutLoud\" buttons {{\"OK\"}} \
+         default button \"OK\" with icon caution"
+    );
+    // Detached: `spawn`, not `status`. The daemon must reach its run loop
+    // whether or not anyone is at the keyboard to dismiss this.
+    let _ = std::process::Command::new("osascript")
+        .args(["-e", &script])
+        .spawn();
+}
+
+#[cfg(not(target_os = "macos"))]
+fn report_startup_warning_to_the_user(_message: &str) {
+    // Same reasoning as report_refusal_to_the_user: other platforms start
+    // their daemon from a shell, where stderr is already visible.
+}
+
 fn main() -> anyhow::Result<()> {
     // Runs on EVERY exit path, including the `?` early returns below.
     //
@@ -722,6 +754,24 @@ fn main() -> anyhow::Result<()> {
                                         "outloud: (this is a different permission from \
                                          Accessibility, and ad-hoc rebuilds void both)"
                                     );
+                                    // stderr alone is invisible to a
+                                    // double-click: a Finder launch has no
+                                    // terminal attached, so the daemon came
+                                    // up looking healthy while its hotkey
+                                    // could never fire. Reported as "it asks
+                                    // for permissions but doesn't work".
+                                    //
+                                    // Unlike the single-instance refusal,
+                                    // this does not exit -- the menu bar item
+                                    // is still useful, and the daemon polls
+                                    // the grant so it starts working the
+                                    // moment it is given.
+                                    report_startup_warning_to_the_user(&format!(
+                                        "OutLoud needs Input Monitoring, or {display} will do nothing.\n\n\
+                                         System Settings > Privacy & Security > Input Monitoring, \
+                                         then quit and reopen OutLoud.\n\n\
+                                         This is a different permission from Accessibility."
+                                    ));
                                 }
                             }
                             Err(e) => {

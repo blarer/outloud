@@ -89,6 +89,12 @@ echo "==> the cat mascot has not reached main"
 # could disprove it quickly.
 scripts/ci-check-no-cat-mascot.py
 
+echo "==> startup warnings a GUI user can actually see"
+# A Finder launch has no terminal, so a stderr-only warning is invisible.
+# That is how "it asks for permissions but doesn't work" happened: the
+# Input Monitoring warning printed perfectly, to nobody.
+scripts/ci-check-gui-visible-warnings.py
+
 echo "==> tests that assume a host resource"
 # A test of mine unwrapped ClipboardTarget::new(), which needs a real
 # clipboard tool. Every dev machine has one; a headless Linux runner does
