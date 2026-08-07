@@ -329,41 +329,42 @@ jobs:
         run: >-
           echo "::error title=whisper backend::scripts/ci-whisper.sh failed. Either the backend broke, or the pinned model hash no longer matches what the upstream URL serves (which is the check working, not a flake)."
 
-  # The live verification HARNESS, exercised without letting it type.
+  # Does "scratch that" still reach the undo ring?
   #
-  # scripts/verify-undo-live.sh is the only check that proves undo reaches a
-  # real application, and it can only run on a Mac with a granted binary and
-  # a human who has agreed to stop typing. That means it runs rarely, and
-  # rarely-run scripts rot: this one has already shipped a version that
-  # reported PASS against a binary with no Accessibility grant, an open_doc
-  # that raced TextEdit's launch, and a focus check made once then assumed
-  # to hold forever. Every one of those was found by a real run, on someone's
-  # machine, the expensive way.
+  # The undo ring shipped complete, tested, and wired to nothing, because
+  # the only way to observe which branch an edit command took was to speak
+  # into a live window and watch. Every automated path stopped at an early
+  # return. This is the check that would have caught it.
   #
-  # --dry-run exercises the whole harness with delivery suppressed: document
-  # setup, the focus guards, the read-back, the comparison, and the routing
-  # (the daemon reports "[route: undo]" without writing). It cannot prove
-  # undo works and does not claim to. What it protects is the harness, so
-  # that when someone does run it for real, a failure means the product is
-  # broken rather than the script.
-  undo-harness-dry-run:
+  # It asserts on the ROUTE, not on delivery: OUTLOUD_NO_INJECT=1 runs the
+  # whole pipeline and reports "[route: undo]" while writing nothing, so it
+  # needs no window, no focus, and no permissions.
+  #
+  # A previous version of this job ran scripts/verify-undo-live.sh --dry-run
+  # instead, which drives TextEdit through AppleScript. A GitHub macOS
+  # runner has no logged-in GUI session, so it hung silently and failed the
+  # job after four minutes with no output. The GUI-free half is now its own
+  # script; verify-undo-live.sh remains the thing a human runs on a real
+  # Mac, and is the only check that proves text reaches an application.
+  edit-routing:
     runs-on: macos-15
+    # A hang here means an osascript-style wait crept back in. Fail in one
+    # minute with a clear cause rather than burning the job timeout.
+    timeout-minutes: 8
     steps:
       - uses: actions/checkout@v4
       - uses: Swatinem/rust-cache@v2
         with:
-          shared-key: undo-harness
+          shared-key: edit-routing
       - name: Build the daemon
         run: cargo build --release -p outloud --locked
-      # No Accessibility grant on a CI runner, and none needed: the script
-      # refuses to run ungranted ONLY when it would really write. A dry run
-      # writes nothing, so it is allowed through.
-      - name: Exercise the harness without typing
-        run: scripts/verify-undo-live.sh --dry-run ./target/release/outloud
+      - name: Check edit routing (writes nothing)
+        timeout-minutes: 2
+        run: scripts/ci-edit-routing.sh ./target/release/outloud
       - name: Attribute failure
         if: failure()
         run: >-
-          echo "::error title=undo verification harness broke::scripts/verify-undo-live.sh failed its own dry run, which writes nothing. The HARNESS is broken (TextEdit setup, focus guards, or read-back), not necessarily undo. Run it locally with --dry-run to reproduce; no typing involved."
+          echo "::error title=edit routing changed::scripts/ci-edit-routing.sh failed. An edit command no longer resolves to the route it should -- most likely 'scratch that' stopped reaching the undo ring, which is silent in normal use: the user is simply told the command did not match. Reproduce locally with OUTLOUD_NO_INJECT=1; it types nothing."
 
   # Performance tripwire. Every other job answers "is it correct"; this one
   # answers "is it still fast", which no correctness test can see: a change
