@@ -2517,8 +2517,27 @@ mod tier_tests {
         let flag = Arc::clone(&restored);
         // Stands in for the real restore: sleeps past the point a
         // short-lived process would have exited, then does its work.
+        // Two halves, and they need opposite things:
+        //
+        //   - the PRECONDITION ("not done yet") must be a fact, not a
+        //     race. A fixed sleep is a bet that the main thread gets there
+        //     first, and on a loaded CI runner it lost: the restore had
+        //     already completed, and the test failed asserting the
+        //     opposite of the truth.
+        //   - the ASSERTION ("drain waited") must still fail when drain
+        //     forgets instead of joining. If the thread finishes promptly
+        //     once released, a drain that merely drops the handle passes
+        //     by luck, which is how the first fix silently removed this
+        //     test's teeth.
+        //
+        // So: block on a channel for the precondition, then keep working
+        // long enough after release that only a real join can observe the
+        // result. Verified by sabotage in both directions.
+        let (release, blocked) = std::sync::mpsc::channel::<()>();
         register_pending_restore(std::thread::spawn(move || {
-            std::thread::sleep(std::time::Duration::from_millis(120));
+            let _ = blocked.recv();
+            // Long enough that a drain which does NOT join returns first.
+            std::thread::sleep(std::time::Duration::from_millis(300));
             flag.store(true, Ordering::SeqCst);
         }));
 
@@ -2527,6 +2546,7 @@ mod tier_tests {
             "the restore should still be pending; the test proves nothing otherwise"
         );
 
+        drop(release);
         drain_pending_restores();
 
         assert!(
