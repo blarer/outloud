@@ -64,7 +64,29 @@ PLIST
 
 # --identifier pins the designated requirement to the bundle id so the TCC
 # grant survives rebuilds (as far as an ad-hoc signature allows).
-codesign --force --sign - --identifier "$BUNDLE_ID" "$APP_DIR" 2>/dev/null
+# Sign the doctor the SAME way the app is signed, when an identity exists.
+#
+# The doctor runs from its own bundle, so its code-signature check reports on
+# ITSELF. Ad-hoc signing it while the app is identity-signed made the doctor
+# warn "signature is AD-HOC: the grant will die on the next rebuild" about a
+# correctly signed app -- a confident, specific, wrong diagnosis of exactly
+# the problem it exists to detect.
+#
+# This is the same class of bug as the doctor reporting its own TCC grants as
+# the app's, which cost an hour previously. A diagnostic that describes
+# itself while appearing to describe the subject is worse than no diagnostic.
+DOCTOR_SIGN_ID="${OUTLOUD_SIGN_IDENTITY:-}"
+if [ -z "$DOCTOR_SIGN_ID" ]; then
+    DOCTOR_SIGN_ID="$(security find-identity -v -p codesigning 2>/dev/null \
+        | grep -E '"(Apple Development|Developer ID Application):' \
+        | head -1 \
+        | sed -E 's/^[[:space:]]*[0-9]+\)[[:space:]]*([0-9A-F]+).*/\1/')"
+fi
+if [ -n "$DOCTOR_SIGN_ID" ]; then
+    codesign --force --sign "$DOCTOR_SIGN_ID" --identifier "$BUNDLE_ID" "$APP_DIR" 2>/dev/null
+else
+    codesign --force --sign - --identifier "$BUNDLE_ID" "$APP_DIR" 2>/dev/null
+fi
 
 : > "$LOG"
 # OUTLOUD_LAUNCHED_VIA_LS tells the doctor it is genuinely under LaunchServices:

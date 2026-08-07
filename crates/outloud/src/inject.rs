@@ -2533,6 +2533,9 @@ mod tier_tests {
         // So: block on a channel for the precondition, then keep working
         // long enough after release that only a real join can observe the
         // result. Verified by sabotage in both directions.
+        // Same lock as `draining_nothing_is_harmless`: see there for why.
+        let _guard = crate::testenv::deliver_lock();
+
         let (release, blocked) = std::sync::mpsc::channel::<()>();
         register_pending_restore(std::thread::spawn(move || {
             let _ = blocked.recv();
@@ -2558,8 +2561,18 @@ mod tier_tests {
     /// Draining twice, or with nothing pending, must not panic or hang.
     /// It runs from a Drop guard on every exit path, including error
     /// returns, so it has to be safe to call unconditionally.
+    ///
+    /// Serialised against the sibling test: PENDING_RESTORES is
+    /// process-global, so whichever test drains first takes the OTHER's
+    /// thread. That made `exiting_waits_for_a_pending_clipboard_restore`
+    /// fail in the full suite while passing alone -- this test drained its
+    /// pending restore, so its `drain` found an empty queue and returned
+    /// before the flag was set. The failure looked like the drain not
+    /// waiting, which is the exact bug that test guards, so the false
+    /// alarm was maximally misleading.
     #[test]
     fn draining_nothing_is_harmless() {
+        let _guard = crate::testenv::deliver_lock();
         drain_pending_restores();
         drain_pending_restores();
     }

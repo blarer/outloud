@@ -23,7 +23,11 @@ Anyone who downloads it and expects to dictate finds an app that cannot.
 | Built by | `scripts/bundle-outloud-macos.sh` | `scripts/build-macos-release.sh` |
 | Reaches a release | no | yes |
 
-Linux has the same shape: `build-linux.sh` packages only `spike-cli`.
+Linux packages only `spike-cli` too, but names its artifacts
+`outloud-spike`, which is at least honest, and the README already says
+"Linux does not work yet". macOS is the misleading one: it calls the
+harness `OutLoudSpike` inside a DMG, on the one platform where the real
+product works.
 
 **Windows already does the right thing.** `build-windows.sh` builds both
 packages and ships `outloud.exe` alongside `outloud-spike.exe`. That is the
@@ -44,6 +48,22 @@ Corroborating evidence: the `OutLoud-macos-arm64.tar.gz` on the current
 release page is not produced by any script in this repo. It was built and
 uploaded by hand — which is what you would expect if the automated path
 produced the wrong artifact and somebody worked around it once.
+
+## One mitigation already in place
+
+`publish` creates the release as a **draft** ("a human sanity-checks
+artifacts before publishing"). So this defect cannot reach the public
+without someone looking first. That is why the current release page has a
+hand-built tarball on it: a human did look, saw the artifact was wrong, and
+worked around it.
+
+It also means the fix is not urgent, only overdue. What it costs today is a
+manual step on every release, forever, plus the risk that the next person to
+look does not know `OutLoudSpike` is not the product.
+
+The release body is also empty: every artifact is uploaded with no note
+saying which one a user should download. Worth fixing alongside, whichever
+option is chosen.
 
 ## Why this is not fixed yet
 

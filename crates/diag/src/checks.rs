@@ -234,7 +234,11 @@ impl Check for CodeSignature {
             }
         };
         // codesign prints its human-readable details on stderr, not stdout.
-        let out = match Command::new("codesign").arg("-dv").arg(&exe).output() {
+        // -dvv, not -dv: `Authority=` lines only appear at the second
+        // verbosity level. With -dv this check could never name ANY
+        // identity and reported "signed by unknown identity" for a
+        // correctly signed app, which reads like a problem and is not one.
+        let out = match Command::new("codesign").arg("-dvv").arg(&exe).output() {
             Ok(o) => o,
             Err(e) => {
                 return CheckOutcome::warn(
@@ -268,17 +272,36 @@ pub fn classify_codesign_output(success: bool, stderr: &str) -> CheckOutcome {
              cdhash and will silently die on the next rebuild (toggle will still read 'on')",
             ErrorClass::Configuration,
             format!(
-                "after every rebuild run `tccutil reset Accessibility {}` and re-grant; long \
-                 term, sign with a Developer ID certificate so the grant survives rebuilds",
+                "after every rebuild run `tccutil reset Accessibility {}` and re-grant. To \
+                 stop this permanently, sign with ANY codesigning identity: a free Apple \
+                 Development certificate is enough (Developer ID is for distributing to \
+                 other machines, not for TCC identity on your own). \
+                 scripts/bundle-outloud-macos.sh picks one up automatically if the keychain \
+                 has it",
                 crate::BUNDLE_ID
             ),
         );
     }
+    // The FIRST Authority line is the leaf certificate (the signer). The
+    // rest are the chain up to Apple's root, which nobody needs here.
     let identity = stderr
         .lines()
         .find_map(|l| l.trim().strip_prefix("Authority="))
         .unwrap_or("unknown identity");
-    CheckOutcome::pass(format!("signed by {identity}"))
+    // The team identifier is what actually decides whether a grant survives
+    // a rebuild: with one, the designated requirement names the certificate
+    // rather than this build's hash. Saying so turns a bare "signed by X"
+    // into an answer to the question the user actually has.
+    let team = stderr
+        .lines()
+        .find_map(|l| l.trim().strip_prefix("TeamIdentifier="))
+        .filter(|t| *t != "not set");
+    match team {
+        Some(t) => CheckOutcome::pass(format!(
+            "signed by {identity} (team {t}); grants survive rebuilds"
+        )),
+        None => CheckOutcome::pass(format!("signed by {identity}")),
+    }
 }
 
 // ---------------------------------------------------------------------------

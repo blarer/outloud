@@ -1642,17 +1642,41 @@ mod tests {
         tokio::spawn(async move {
             for i in 0..2 {
                 if i > 0 {
-                    // 2s, not 300ms. The pipeline DROPS a key-down that
-                    // arrives while the previous utterance is still
-                    // committing, so this gap has to outlast finalization
-                    // or the second utterance never happens and the run
-                    // waits forever for a commit that is not coming.
+                    // RETRY the key-down rather than sleeping a guessed
+                    // duration.
                     //
-                    // 300ms was a bet on an unloaded machine and lost about
-                    // one run in five, always as a 10s timeout. Still well
-                    // inside the 15s timeout below, so a genuine hang
-                    // still fails as a hang rather than being masked.
-                    tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+                    // The pipeline DROPS a key-down that arrives while the
+                    // previous utterance is still committing, so the second
+                    // utterance has to arrive after finalization or it never
+                    // happens and the run waits for a commit that is not
+                    // coming. How long finalization takes depends on machine
+                    // load, so every fixed gap is a bet: 300ms lost about one
+                    // run in five, 2s still lost under a parallel cargo
+                    // build.
+                    //
+                    // Re-sending until one is accepted turns the bet into a
+                    // condition. Extra key-downs before the first accepted
+                    // one are dropped by the same rule being tested, which is
+                    // exactly what a person retrying would do.
+                    for _ in 0..40 {
+                        tokio::time::sleep(std::time::Duration::from_millis(250)).await;
+                        if feeder.send(FrontendEvent::KeyDown).is_err() {
+                            return; // run() finished; nothing left to feed
+                        }
+                        // The chunk and key-up are harmless when the
+                        // key-down was ignored: with no utterance in
+                        // flight the pipeline discards them too.
+                        if feeder
+                            .send(FrontendEvent::Chunk(vec![0.0; 16_000]))
+                            .is_err()
+                        {
+                            return;
+                        }
+                        if feeder.send(FrontendEvent::KeyUp).is_err() {
+                            return;
+                        }
+                    }
+                    return;
                 }
                 feeder.send(FrontendEvent::KeyDown).unwrap();
                 feeder
