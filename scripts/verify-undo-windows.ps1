@@ -218,5 +218,3 @@ Start-Sleep -Milliseconds 300
 Start-Sleep -Milliseconds 400
 # "Save changes?" if the buffer is dirty: discard, this is a scratch file.
 [System.Windows.Forms.SendKeys]::SendWait('%n')
-
-if ($broken -eq {
