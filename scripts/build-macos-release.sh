@@ -60,6 +60,28 @@ cp dist/spike-cli-universal "$APP_DIR/Contents/MacOS/$APP_NAME"
 # Info.plist matches scripts/bundle-macos.sh (the canonical definition of the
 # bundle identity); duplicated rather than sourced because that script also
 # rebuilds for host arch only, which is exactly what a release must not do.
+# The icon. Without this a downloaded release shows the generic blank
+# document icon in Finder and the Dock, while a locally built bundle shows
+# the skull -- so the version strangers see is the one nobody tests.
+#
+# Non-fatal, matching scripts/bundle-outloud-macos.sh: an iconless build is
+# worth shipping, a failed release is not. But stderr is NOT discarded, or
+# the reason is lost and a blank icon looks identical to a missing one.
+mkdir -p "$APP_DIR/Contents/Resources"
+icon_log="$(mktemp)"
+if "$ROOT/scripts/make-icon.sh" "$APP_DIR/Contents/Resources/$APP_NAME.icns" \
+        >"$icon_log" 2>&1; then
+    echo "==> icon rendered from docs/assets/logo.svg"
+    grep -E "^ +icon rasterized" "$icon_log" || true
+    ICON_KEY="    <key>CFBundleIconFile</key>
+    <string>$APP_NAME</string>"
+else
+    echo "==> WARNING: could not render the icon; the release will use the generic one" >&2
+    sed 's/^/    /' "$icon_log" >&2
+    ICON_KEY=""
+fi
+rm -f "$icon_log"
+
 cat > "$APP_DIR/Contents/Info.plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -75,6 +97,7 @@ cat > "$APP_DIR/Contents/Info.plist" <<PLIST
     <string>$APP_NAME</string>
     <key>CFBundlePackageType</key>
     <string>APPL</string>
+$ICON_KEY
     <key>CFBundleVersion</key>
     <string>$VERSION</string>
     <key>CFBundleShortVersionString</key>
