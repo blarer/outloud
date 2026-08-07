@@ -3,7 +3,7 @@
   the menu-bar glyph.
 
   GENERATED. Do not hand-edit. Regenerate with the mark-svg binary:
-      cargo run -p overlay -"-bin mark-svg > docs/assets/logo.svg
+      cargo run -p overlay --bin mark-svg > docs/assets/logo.svg
   (the quote in "-bin" is not a typo: a double hyphen is ILLEGAL inside an
   XML comment, and macOS Quick Look silently renders the whole file blank
   rather than reporting the error. That is what rasterizes this SVG into
