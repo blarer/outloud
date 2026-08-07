@@ -114,28 +114,61 @@ cat > "$APP_DIR/Contents/Info.plist" <<PLIST
 </plist>
 PLIST
 
-echo "==> Signing ad-hoc"
-# --identifier sets the bundle id. It does NOT make the TCC grant survive a
-# rebuild, and an earlier version of this comment claimed it did, which sent
-# a user chasing a permission bug that was really this:
+# Sign with a real identity when one exists, ad-hoc when it does not.
 #
-#   $ codesign -d -r- dist/OutLoud.app
-#   designated => cdhash H"19c2e3f9..."
+# This is what decides whether your Accessibility grant survives a rebuild,
+# and the difference is visible in the designated requirement:
 #
-# An ad-hoc signature has no signing identity, so the Designated Requirement
-# degenerates to the hash of one exact binary. Every rebuild is a different
-# app as far as macOS is concerned: it denies the new one and leaves the old
-# entry sitting in System Settings still switched on, which reads as
-# "already granted" while nothing works.
+#   ad-hoc:    designated => cdhash H"2729d243..."
+#   identity:  designated => identifier "dev.outloud.outloud" and anchor
+#              apple generic and certificate leaf[subject.CN] = "Apple
+#              Development: ..." and certificate 1[...] exists
 #
-# The real fix is a Developer ID certificate, where the requirement becomes
-# the identity rather than a hash and grants persist. Until then, re-granting
-# after every rebuild is unavoidable, so the script clears the stale entries
-# for you rather than letting them accumulate and mislead.
-codesign --force --sign - --identifier "$BUNDLE_ID" "$APP_DIR"
+# An ad-hoc signature has no signing identity, so the requirement degenerates
+# to the hash of one exact binary. Every rebuild is a different app as far as
+# macOS is concerned: it denies the new one and leaves the old entry in
+# System Settings still switched on, which reads as "already granted" while
+# nothing works. That behaviour cost real debugging time and is why this
+# script used to reset the grants on every build.
+#
+# With an identity the requirement names the CERTIFICATE, so a rebuild is the
+# same app and the grant persists. An Apple Development certificate is enough
+# for this: Developer ID is about distribution to other machines, not about
+# TCC identity on your own.
+#
+# Overrides:
+#   OUTLOUD_SIGN_IDENTITY  use a specific identity (hash or full name)
+#   OUTLOUD_SIGN_ADHOC=1   force ad-hoc even when an identity is available
+SIGN_ID="${OUTLOUD_SIGN_IDENTITY:-}"
+if [[ -z "$SIGN_ID" && "${OUTLOUD_SIGN_ADHOC:-0}" != "1" ]]; then
+    # First Apple Development / Developer ID identity in the keychain.
+    # `find-identity -v` lists only valid ones, so an expired certificate
+    # does not silently become the signer.
+    SIGN_ID="$(security find-identity -v -p codesigning 2>/dev/null \
+        | grep -E '"(Apple Development|Developer ID Application):' \
+        | head -1 \
+        | sed -E 's/^[[:space:]]*[0-9]+\)[[:space:]]*([0-9A-F]+).*/\1/')"
+fi
+
+if [[ -n "$SIGN_ID" ]]; then
+    echo "==> Signing with identity ${SIGN_ID:0:12}..."
+    codesign --force --sign "$SIGN_ID" --identifier "$BUNDLE_ID" "$APP_DIR"
+    SIGNED_WITH_IDENTITY=1
+else
+    echo "==> Signing ad-hoc (no codesigning identity found)"
+    echo "    Grants will NOT survive a rebuild; see the comment above."
+    codesign --force --sign - --identifier "$BUNDLE_ID" "$APP_DIR"
+    SIGNED_WITH_IDENTITY=0
+fi
 codesign --verify --verbose=2 "$APP_DIR" 2>&1 | sed 's/^/    /'
 
-if [[ "${OUTLOUD_KEEP_TCC:-0}" != "1" ]]; then
+# Only reset when the signature could not carry the grant forward.
+#
+# An identity-signed rebuild IS the same app to macOS, so resetting would
+# throw away a working grant and force the user through System Settings for
+# no reason. Ad-hoc rebuilds still need it: the old entry is dead but still
+# displayed as enabled, which is worse than absent.
+if [[ "$SIGNED_WITH_IDENTITY" == "0" && "${OUTLOUD_KEEP_TCC:-0}" != "1" ]]; then
     # Best-effort: fails harmlessly when nothing was granted yet.
     tccutil reset Accessibility "$BUNDLE_ID" >/dev/null 2>&1 || true
     tccutil reset ListenEvent "$BUNDLE_ID" >/dev/null 2>&1 || true
@@ -214,8 +247,32 @@ Grant BOTH permissions. They are different, and each fails differently:
   Input Monitoring  -> without it the hotkey never fires. Nothing happens
   Accessibility     -> without it text lands via clipboard paste, not in place
 
+EOF
+
+# The signing note has to match what actually happened, or it teaches the
+# wrong thing. An earlier version printed the ad-hoc warning unconditionally
+# and told the user their grants had been cleared even on a build that kept
+# them.
+if [[ "$SIGNED_WITH_IDENTITY" == "1" ]]; then
+    cat <<'EOF'
+
+Signed with a real identity, so the Designated Requirement names the
+certificate rather than this build's hash. Future rebuilds are the SAME app
+to macOS and these grants will persist: this should be the last time you
+grant them.
+
+One exception: moving from ad-hoc to identity signing changes the identity,
+so a grant made against the old ad-hoc build does not carry over. That is a
+one-time cost, today only.
+EOF
+else
+    cat <<'EOF'
+
 Ad-hoc signing note: the Designated Requirement is this build's cdhash, so
 EVERY REBUILD invalidates both grants. The stale entries have already been
-cleared for you; re-add the app in both panes. A Developer ID certificate is
-what makes this stop.
+cleared for you; re-add the app in both panes.
+
+To stop this, get a signing certificate (a free Apple Development one is
+enough) and rebuild; the script picks it up automatically.
 EOF
+fi
