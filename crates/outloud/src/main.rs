@@ -122,12 +122,85 @@ fn route_probe_line(_app: Option<&str>) -> String {
     "--route is implemented on Windows display builds only".into()
 }
 
+/// The recognizer used when `--asr` is not given.
+///
+/// Per-platform because the backends are. `apple` is Apple's
+/// `SpeechTranscriber` behind a Swift helper binary that exists only on
+/// macOS, so defaulting to it everywhere meant double-clicking outloud.exe on
+/// Windows died instantly with "aqua-speech-helper not found", advising the
+/// user to run `swiftc`. The daemon worked fine the moment `--asr whisper`
+/// was passed, so the product looked broken purely because of its default.
+///
+/// whisper.cpp is the backend that actually runs on Windows and Linux, and it
+/// needs a model path; when that is missing the error now says so, which is a
+/// question the user can answer, unlike being asked for a Swift compiler.
+#[cfg(target_os = "macos")]
+const DEFAULT_ASR: &str = "apple";
+#[cfg(not(target_os = "macos"))]
+const DEFAULT_ASR: &str = "whisper";
+
+/// Look for a whisper ggml model in the obvious places.
+///
+/// The model path was env-var-only, which is fine from a shell and impossible
+/// from a double-click: Explorer sets no variables, so the daemon refused to
+/// start for the one launch method a non-developer uses. Guessing a location
+/// is normally worse than asking, but "a .bin sitting right next to the
+/// executable" is not a guess about the user's filesystem, it is the layout a
+/// release archive ships.
+///
+/// Ordered so an explicit choice always wins: the caller checks the env var
+/// first, and within here the exe's own directory beats the working
+/// directory, since the latter is whatever Explorer happened to set.
+fn discover_whisper_model() -> Option<String> {
+    let mut roots: Vec<std::path::PathBuf> = Vec::new();
+    if let Ok(exe) = std::env::current_exe() {
+        if let Some(dir) = exe.parent() {
+            roots.push(dir.to_path_buf());
+            // A cargo build leaves the exe in target/release, three levels
+            // below the checkout the model is usually kept in.
+            for up in [1usize, 2, 3] {
+                if let Some(a) = dir.ancestors().nth(up) {
+                    roots.push(a.to_path_buf());
+                }
+            }
+        }
+    }
+    if let Ok(cwd) = std::env::current_dir() {
+        roots.push(cwd);
+    }
+
+    for root in roots {
+        let Ok(entries) = std::fs::read_dir(&root) else {
+            continue;
+        };
+        // Deterministic: a directory listing is not ordered, and picking a
+        // different model between runs would look like the recognizer got
+        // randomly better or worse.
+        let mut found: Vec<std::path::PathBuf> = entries
+            .flatten()
+            .map(|e| e.path())
+            .filter(|p| {
+                p.extension().is_some_and(|x| x.eq_ignore_ascii_case("bin"))
+                    && p.file_name()
+                        .and_then(|n| n.to_str())
+                        .is_some_and(|n| n.starts_with("ggml-"))
+            })
+            .collect();
+        found.sort();
+        if let Some(model) = found.into_iter().next() {
+            eprintln!("outloud: using model {}", model.display());
+            return Some(model.to_string_lossy().into_owned());
+        }
+    }
+    None
+}
+
 fn parse_args() -> anyhow::Result<Args> {
     let mut args = Args {
         once: false,
         wav: None,
         say: Vec::new(),
-        asr: "apple".into(),
+        asr: DEFAULT_ASR.into(),
         chord: "right-option".into(),
         chord_from_flag: false,
         no_overlay: false,
@@ -288,12 +361,17 @@ fn make_recognizer_factory(kind: &str, sensitivity: u8) -> anyhow::Result<Recogn
         // asking. OUTLOUD_WHISPER_MODEL is checked first so a shell can
         // override without editing config.
         "whisper" => {
-            let path = std::env::var("OUTLOUD_WHISPER_MODEL").map_err(|_| {
-                anyhow::anyhow!(
-                    "--asr whisper needs a model: set OUTLOUD_WHISPER_MODEL to a ggml \
-                     .bin (see https://huggingface.co/ggerganov/whisper.cpp)"
-                )
-            })?;
+            let path = std::env::var("OUTLOUD_WHISPER_MODEL")
+                .ok()
+                .or_else(discover_whisper_model)
+                .ok_or_else(|| {
+                    anyhow::anyhow!(
+                        "--asr whisper needs a model: put a ggml .bin next to \
+                         outloud (or in the current directory), or set \
+                         OUTLOUD_WHISPER_MODEL to one \
+                         (see https://huggingface.co/ggerganov/whisper.cpp)"
+                    )
+                })?;
             Ok(Box::new(move || {
                 let r = asr::backends::whisper_cpp::WhisperCppRecognizer::new(
                     std::path::Path::new(&path),
