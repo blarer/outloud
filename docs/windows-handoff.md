@@ -91,6 +91,7 @@ The workspace now passes on Windows: 0 failures, `clippy -D warnings` clean.
 powershell -File scripts\verify-doubleclick-windows.ps1   # launches like Explorer does
 powershell -File scripts\verify-undo-windows.ps1 -DryRun  # routing only, writes nothing
 powershell -File scripts\verify-undo-windows.ps1          # real writes into Notepad
+scripts\verify-undo-unattended.bat                        # same, no confirmation prompt
 powershell -File scripts\verify-single-instance.ps1       # second daemon must refuse
 powershell -File scripts\verify-hotkey-windows.ps1        # the real hotkey path
 outloud --route discord                                   # a named app's transport
@@ -108,6 +109,12 @@ recognised the chord, and capture opened. Confirmed on this machine:
 `--route NAME` answers without focusing the app, which matters because
 Windows refuses programmatic foreground changes and because the alternative
 way to find out is dictating into someone's chat window.
+
+The live undo run asks for Return before it starts, on purpose: it types into
+Notepad and whoever is at the keyboard deserves the warning. A background or
+CI caller has no console to answer that and will appear to hang forever, so
+use `verify-undo-unattended.bat` (or set `OUTLOUD_LIVE_YES=1`) there. That
+exact hang cost time during this session, twice.
 
 `verify-undo-windows.ps1` asserts on the FIELD CONTENTS, read back through the
 clipboard, not on log lines: a log proves a value was computed, which is
