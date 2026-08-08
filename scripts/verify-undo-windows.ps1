@@ -122,7 +122,16 @@ Add-Type -Namespace Win32 -Name Focus -MemberDefinition @'
 '@
 $stolenBy = $null
 $reclaims = 0
+# Bounded, because an unbounded wait on another process is a hang, not a
+# check: this loop spun forever when the run did not exit on its own, and a
+# verification script that never returns is worse than one that fails.
+$deadline = (Get-Date).AddSeconds(120)
 while (-not $outloud.HasExited) {
+    if ((Get-Date) -gt $deadline) {
+        Say 'TIMEOUT: the run did not finish within 120s; killing it'
+        try { $outloud.Kill() } catch { }
+        break
+    }
     $fg = [Win32.Focus]::GetForegroundWindow()
     $fgPid = 0
     [Win32.Focus]::GetWindowThreadProcessId($fg, [ref]$fgPid) | Out-Null
