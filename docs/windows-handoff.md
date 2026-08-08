@@ -32,28 +32,42 @@ item found something, and the two most serious were invisible from macOS:
 
 What the run actually turned up, worst first:
 
-1. **`"scratch that"` was typed into the user's document instead of undoing.**
+1. **Double-clicking `outloud.exe` never worked at all.** The default
+   recognizer was a hardcoded `"apple"`, which is Apple's `SpeechTranscriber`
+   behind a Swift helper binary that cannot exist off macOS. The daemon died
+   in under a second telling the user to run `swiftc`, so nothing appeared
+   and the app looked like it simply failed to launch. Reported by the user,
+   not by any check here, because every command in this document passes
+   `--asr` explicitly and so could never see it. The model path was also
+   environment-variable-only, and Explorer sets no variables, so fixing the
+   default alone still left it broken. Both fixed; `scripts\verify-doubleclick-windows.ps1`
+   reproduces the Explorer launch that a terminal cannot.
+2. **`"scratch that"` was typed into the user's document instead of undoing.**
    Undo was gated on `Mode::Edit`, meaning on there being a selection. Our own
    write *replaces* the selection, so by the time anyone asks to undo there is
    only a caret: the gate made undo unreachable in exactly the sequence it
    exists for. Measured against Notepad: an edit landed, then the field read
    `the slow brown foxscratch that`.
-2. **`OUTLOUD_NO_INJECT` silently did nothing under `cmd.exe`.** It was
+3. **`OUTLOUD_NO_INJECT` silently did nothing under `cmd.exe`.** It was
    compared exactly against `"1"`, and `set VAR=1 && prog` assigns `"1 "`,
    trailing space included. The command you run specifically to avoid typing
    into your own windows was the one that typed into them. It pasted into a
    live terminal here before it was found.
-3. **`--say` had no synthesizer on Windows**, so every check the previous
+4. **`--say` had no synthesizer on Windows**, so every check the previous
    version of this document recommended failed with `program not found`
    before reaching anything. Now goes through `System.Speech`.
-4. **A dry run computed the edit route and threw it away**, so `[route: ...]`
+5. **A dry run computed the edit route and threw it away**, so `[route: ...]`
    never reached the user. Same shape as the unreachable undo ring: a correct
    value nothing displays.
-5. **`--permissions` reported a missing macOS grant on every Windows
+6. **`--permissions` reported a missing macOS grant on every Windows
    machine**, telling users to fix a permission that does not exist here.
-6. **Nine tests had never passed on Windows**, all hardcoding macOS tier names
+7. **Nine tests had never passed on Windows**, all hardcoding macOS tier names
    or Linux session types. None found a real defect; together they made a real
    Windows failure impossible to spot.
+
+The first one is the lesson: **every check in this file passed while the
+product was unlaunchable.** They all invoked the binary the way a developer
+does, with flags. Nobody ran it the way a user does, with none.
 
 The workspace now passes on Windows: 0 failures, `clippy -D warnings` clean.
 
@@ -74,6 +88,7 @@ The workspace now passes on Windows: 0 failures, `clippy -D warnings` clean.
 ### Verifying it yourself
 
 ```powershell
+powershell -File scripts\verify-doubleclick-windows.ps1   # launches like Explorer does
 powershell -File scripts\verify-undo-windows.ps1 -DryRun  # routing only, writes nothing
 powershell -File scripts\verify-undo-windows.ps1          # real writes into Notepad
 powershell -File scripts\verify-single-instance.ps1       # second daemon must refuse

@@ -119,20 +119,30 @@ injection wired into the daemon, and a settings UI. See
 
 ### Windows status, precisely
 
-Every Windows backend is implemented and compiles on real `windows-2025` CI
-runners for both x86_64 and aarch64; none has been *run* on Windows hardware,
-because CI compiles but cannot exercise GUI or input code. Treat it as
-untested, not as unwritten:
+Most of it has now been run on real Windows hardware (an RTX 5090 box,
+whisper.cpp with CUDA), and doing that found several defects that CI could not
+see because CI compiles but cannot exercise GUI, input, or focus. What each
+row claims below is what was actually observed, not what compiles:
 
 | Piece | Mechanism | State |
 |---|---|---|
-| Hotkey | `WH_KEYBOARD_LL` hook, `RegisterHotKey` conflict probe | implemented, untested on hardware |
-| Read + in-place write | UI Automation `TextPattern` / `ValuePattern` | implemented, no undo preservation (needs TSF) |
-| Typing fallback | `SendInput` with `KEYEVENTF_UNICODE` | implemented |
-| Clipboard fallback | `clip.exe` / `Get-Clipboard` + synthetic Ctrl+V | implemented |
-| Overlay | layered, click-through, topmost, non-activating window | implemented |
+| Hotkey | `WH_KEYBOARD_LL` hook, `RegisterHotKey` conflict probe | **works on hardware**: chord drives listening -> transcribing -> idle |
+| Read + in-place write | UI Automation `TextPattern` / `ValuePattern` | **works on hardware**; no undo preservation (needs TSF) |
+| Typing fallback | `SendInput` with `KEYEVENTF_UNICODE` | **works on hardware** (live dictation landed this way) |
+| Clipboard fallback | `clip.exe` / `Get-Clipboard` + synthetic Ctrl+V | **works on hardware** (live dictation landed this way) |
+| Undo (`"scratch that"`) | reads the field back, resolves against the ring | **works on hardware**, after a fix: it used to type the words instead |
+| Per-app transport rules | process name -> AX / typing / clipboard | **works on hardware**; check any app with `outloud --route NAME` |
+| Single-instance guard | `Global\` named mutex | **works on hardware**: the second daemon refuses |
+| Overlay | layered, click-through, topmost, non-activating window | draws and runs; **nobody has confirmed how it looks** |
 | Terminal | ConPTY bracketed paste (owned pseudoconsole) | implemented; foreign console needs a helper process |
 | Shell integration | unix-socket bridge | **not ported** (needs named pipe + PSReadLine module) |
+
+Windows needs a whisper model: put a `ggml-*.bin` beside the executable, or
+point `OUTLOUD_WHISPER_MODEL` at one. Apple's recognizer is macOS-only, so
+`--asr whisper` is the default everywhere else.
+
+`docs/windows-handoff.md` has the traps worth knowing before changing any of
+this, and the scripts that verify each row.
 
 The trap that will bite first: **UIPI**. A non-elevated process cannot see keys
 typed into, or inject text into, an *elevated* window. Dictation goes silent
