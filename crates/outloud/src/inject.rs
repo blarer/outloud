@@ -964,17 +964,90 @@ fn write_via_tiers(mode: &Mode, payload: String) -> Outcome {
 
     #[cfg(not(all(target_os = "windows", feature = "display")))]
     {
-        // `mode` is only consulted by the tier ladder above, which this
-        // build does not compile. Naming it here keeps the signature
-        // honest on every target: without this the parameter is unused on
-        // Linux and `-D warnings` fails the build, which is how this
-        // reached CI twice.
+        // `mode` is only consulted by the tier ladders above/below, which
+        // are the only branches that read it. Naming it here keeps the
+        // signature honest on every target: without this the parameter is
+        // unused on a build with neither ladder compiled and `-D warnings`
+        // fails, which is how this reached CI twice before.
+        #[cfg(not(all(target_os = "linux", feature = "display")))]
         let _ = mode;
-        Outcome::Failed {
-            situation_action: format!(
-                "no write transport on this platform/build for \"{payload}\" \
-                 -> use the terminal-native transports via spike-cli"
-            ),
+        #[cfg(not(all(target_os = "linux", feature = "display")))]
+        {
+            Outcome::Failed {
+                situation_action: format!(
+                    "no write transport on this platform/build for \"{payload}\" \
+                     -> use the terminal-native transports via spike-cli"
+                ),
+            }
+        }
+
+        // Linux/Wayland (and X11, though the primary path there is
+        // XTEST/uinput rather than anything built here yet): wtype first,
+        // clipboard-paste as the fallback. Same shape as the Windows ladder
+        // above (insert-only synthetic tier before the universal clipboard
+        // fallback), but with only two rungs, not four: there is no
+        // Linux equivalent of UI Automation wired up yet (AT-SPI2 is still
+        // the stub documented in `text_target::targets::ax::AtspiTarget`),
+        // and no per-app accept/refuse list has been MEASURED on Linux the
+        // way `text_target::targets::keys::accepts` was measured against
+        // real macOS/Windows apps (Discord, Slack, ...), so inventing one
+        // here would be guessing rather than reporting.
+        #[cfg(all(target_os = "linux", feature = "display"))]
+        {
+            use text_target::targets::clipboard::ClipboardTarget;
+            use text_target::targets::keys::WtypeTarget;
+            use text_target::TextTarget;
+
+            // Insert-only: an edit reaching wtype would APPEND the rewrite
+            // next to the original rather than replacing it, the same
+            // corruption `may_use_insert_only_tier`'s doc describes for
+            // SendInput/CGEvent. Edits skip straight to the clipboard,
+            // whose paste keystroke replaces a selection natively.
+            if may_use_insert_only_tier(mode) {
+                let mut keys = WtypeTarget;
+                match keys.insert(&payload) {
+                    Ok(()) => {
+                        return Outcome::Wrote {
+                            text: payload,
+                            via: "linux-wtype".into(),
+                        }
+                    }
+                    Err(e) => {
+                        eprintln!("outloud: wtype refused ({e}); falling back to clipboard")
+                    }
+                }
+            }
+
+            match ClipboardTarget::new() {
+                Ok(mut clip) => match clip.insert(&payload) {
+                    Ok(()) => {
+                        // Let the target consume the paste before handing
+                        // the user's own clipboard back, same settle delay
+                        // the Windows ladder uses.
+                        std::thread::sleep(std::time::Duration::from_millis(150));
+                        let _ = clip.restore();
+                        Outcome::Wrote {
+                            text: payload,
+                            via: "clipboard-paste".into(),
+                        }
+                    }
+                    Err(e) => Outcome::Failed {
+                        situation_action: format!(
+                            "every write tier refused ({e}) -> your text is on the \
+                             clipboard, press Ctrl+V (Hyprland/Sway needed for wtype; \
+                             GNOME/KDE do not implement the virtual-keyboard protocol, \
+                             see `outloud doctor`)"
+                        ),
+                    },
+                },
+                Err(e) => Outcome::Failed {
+                    situation_action: format!(
+                        "every write tier refused and no clipboard ({e}) -> install \
+                         wtype and wl-clipboard (nixpkgs: `wtype`, `wl-clipboard`) and \
+                         re-run `outloud doctor`"
+                    ),
+                },
+            }
         }
     }
 }
