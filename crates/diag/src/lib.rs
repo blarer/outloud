@@ -213,6 +213,10 @@ pub fn registry() -> Vec<Box<dyn Check>> {
         // both are required, and missing this one is indistinguishable from a
         // crash.
         Box::new(checks::InputMonitoringPermission),
+        // Linux's answer to the same question: is there ANY hotkey
+        // mechanism reachable. Placed right after the macOS grant check
+        // since they answer the same user question on different platforms.
+        Box::new(checks::LinuxHotkeyTrigger),
         Box::new(checks::MicrophonePermission),
         // Before the install checks: two daemons make every LATER check
         // ambiguous, since they report on whichever copy answered. A user

@@ -1027,6 +1027,66 @@ impl Check for InputMonitoringPermission {
     }
 }
 
+// ---------------------------------------------------------------------------
+// Linux hotkey trigger (Wayland compositor-exec backend)
+// ---------------------------------------------------------------------------
+
+/// Whether the Linux hotkey-trigger daemon is reachable at all.
+///
+/// This check exists for the same reason `InputMonitoringPermission` does:
+/// a hotkey that never fires must never present as "everything looks fine".
+/// Off Linux there is no macOS-style permission to check, so the doctor
+/// used to say "not macOS: no Input Monitoring grant exists here" and
+/// leave it there, which is TRUE about the permission and silent about the
+/// actual question a Linux user has: does the hotkey work AT ALL. On
+/// Wayland (`docs/hotkeys.md` #7) the answer defaults to no, because
+/// nothing binds a global key without either this crate's compositor-exec
+/// transport or a portal neither Hyprland nor most wlroots compositors
+/// implement, and the only way to know is to ask whether something is
+/// listening on the trigger socket.
+pub struct LinuxHotkeyTrigger;
+
+impl Check for LinuxHotkeyTrigger {
+    fn name(&self) -> &'static str {
+        "linux-hotkey-trigger"
+    }
+
+    fn run(&self, _env: &Env) -> CheckOutcome {
+        if cfg!(any(target_os = "macos", target_os = "windows")) {
+            return CheckOutcome::pass(
+                "not applicable: this platform has its own hotkey backend \
+                 (see input-monitoring-permission above)",
+            );
+        }
+        #[cfg(all(unix, not(target_os = "macos")))]
+        {
+            let socket = hotkey::backend::linux::default_socket_path();
+            if hotkey::backend::linux::daemon_reachable(&socket) {
+                return CheckOutcome::pass(format!(
+                    "trigger daemon reachable at {}",
+                    socket.display()
+                ));
+            }
+            CheckOutcome::fail(
+                format!(
+                    "no hotkey-trigger daemon reachable at {} -- the hotkey will do \
+                     NOTHING until a compositor keybind is wired up and outloud is running",
+                    socket.display()
+                ),
+                ErrorClass::Configuration,
+                "start outloud, then add to your Wayland compositor config (Hyprland \
+                 example):\n  bind  = , F13, exec, outloud trigger press\n  \
+                 bindr = , F13, exec, outloud trigger release\nsee docs/hotkeys.md \
+                 section 7 for sway/river and the XDG portal alternative on KDE/GNOME",
+            )
+        }
+        #[cfg(not(all(unix, not(target_os = "macos"))))]
+        {
+            CheckOutcome::pass("not applicable on this platform")
+        }
+    }
+}
+
 /// Whether the installed bundle is older than the built binary.
 ///
 /// A stale bundle wasted a long stretch of a debugging session: fixes were
