@@ -589,6 +589,198 @@ impl TextTarget for SendInputTarget {
     }
 }
 
+/// Wayland `wtype`: shell out to the `wtype` binary, which speaks the
+/// `zwp_virtual_keyboard_v1` protocol on the caller's behalf.
+///
+/// Why a subprocess instead of binding `zwp_virtual_keyboard_v1` ourselves
+/// (as [`super::ime::WaylandImeTarget`] will eventually bind
+/// `zwp_input_method_v2`): `wtype` already solved the one genuinely hard
+/// part of this tier, which is layout independence. A synthetic
+/// `KEY_A` event on X11/uinput produces whatever the ACTIVE layout maps
+/// physical key A to, so typing "hello" on a Dvorak or Cyrillic layout does
+/// not produce "hello" at all. `wtype` sidesteps this by uploading a THROWAWAY
+/// xkb keymap that maps invented keycodes 1:1 onto the exact characters in
+/// the payload, then presses those, so the compositor never touches the
+/// user's real layout. Reimplementing that (a temp keymap file + XKB
+/// compilation + the virtual-keyboard-unstable-v1 protocol) inside this
+/// crate would be re-deriving a correctness-critical ~500-line C program for
+/// no behavioral gain; shelling out costs one process spawn per utterance,
+/// which is noise next to STT latency.
+///
+/// **The trap that makes this Wayland-only in practice**: `wtype` needs the
+/// compositor to implement `zwp_virtual_keyboard_manager_v1`. Hyprland,
+/// Sway, and other wlroots-based compositors do. GNOME (Mutter) and KDE
+/// (KWin) do **not** expose it to arbitrary clients for the same reason
+/// browsers refuse `document.execCommand('paste')`: an unprivileged virtual
+/// keyboard is a keylogger-adjacent capability. On those compositors
+/// `wtype` fails at the "compositor does not support the virtual keyboard
+/// protocol" message printed by `wtype` itself when `wl_registry` never
+/// advertises the global (see `main.c`'s `if (wtype.manager == NULL)`
+/// check in the upstream source); there is no portal-based alternative the
+/// way RemoteDesktop covers keystroke synthesis on some setups. This is a
+/// compositor policy decision, not a bug in `wtype` or in this crate, and
+/// [`WtypeTarget::available`] cannot distinguish "not installed" from "installed
+/// but the compositor refuses it" without actually running it and reading
+/// stderr, which `available()` deliberately avoids doing (see its own doc).
+///
+/// **Newline and unicode**: `wtype`'s C source (`get_key_code_by_wchar`)
+/// special-cases `'\n'` to the `Return` keysym and types arbitrary Unicode
+/// by building a one-off keymap entry per codepoint, so multi-line
+/// transcripts and non-Latin scripts (CJK, Cyrillic, emoji) are typed
+/// correctly with no escaping needed on our side. This is the one respect
+/// in which `wtype` is STRICTLY BETTER than the clipboard-paste fallback:
+/// paste can be intercepted or blocked by an app's paste handler (some
+/// terminals disable bracketed paste by default), while wtype's key events
+/// look identical to a real keyboard to every listener.
+///
+/// **Race**: the destination is whatever has compositor keyboard focus at
+/// the moment `wtype` actually posts its key events, which is AFTER our
+/// hotkey release and the recognizer's transcription latency (hundreds of
+/// ms to seconds). If the user alt-tabs during that window, the text lands
+/// in the new focus target, silently. Nothing in the virtual-keyboard
+/// protocol reports "who is focused now" back to us, so there is no
+/// after-the-fact way to detect this happened; it is the same class of
+/// race every insert-only tier on every platform has (SendInput on Windows,
+/// CGEvent on macOS), just worth naming explicitly here because a Wayland
+/// compositor's focus-follows-mouse configurations make it more likely to
+/// trigger than a click-to-focus desktop.
+///
+/// **Long text**: `wtype` posts one Wayland roundtrip PER KEY EVENT
+/// (`type_keycode` calls `wl_display_roundtrip` twice, once per edge), so a
+/// long transcript costs one IPC round trip per character rather than
+/// landing in a handful of batched events the way macOS CGEvent or Windows
+/// `SendInput` do. [`WtypeTarget::insert`] therefore refuses text over
+/// [`WTYPE_MAX_CHARS`] rather than let a long dictation visibly stream
+/// character by character for seconds; the caller (the tier ladder in
+/// `outloud::inject`) is expected to fall back to clipboard paste for those,
+/// which delivers the whole payload atomically.
+pub struct WtypeTarget;
+
+/// Above this length, typing character-by-character through `wtype`'s
+/// per-key Wayland roundtrip becomes visibly slow (and, on a busy
+/// compositor, worse than the clipboard fallback's flat cost). Conservative:
+/// short enough that even a slow compositor keeps typing under roughly a
+/// second, long enough that ordinary dictated sentences never hit it.
+pub const WTYPE_MAX_CHARS: usize = 500;
+
+/// Whether `text` is short enough for `wtype`'s per-character roundtrip
+/// cost to stay acceptable.
+///
+/// Pure and separated from [`WtypeTarget::insert`] so the length threshold
+/// is asserted on directly, the same discipline `unicode_event_chunks` and
+/// `typing_strategy_for` already follow: a boundary buried inside a
+/// subprocess call can only be tested by actually running `wtype`, which
+/// this macOS-developed crate cannot do.
+pub fn wtype_fits(text: &str) -> bool {
+    text.chars().count() <= WTYPE_MAX_CHARS
+}
+
+impl WtypeTarget {
+    /// Whether `wtype` is on `PATH`.
+    ///
+    /// Deliberately does NOT run `wtype` to probe compositor support: that
+    /// would mean actually typing a (empty or throwaway) payload just to
+    /// check availability, which either does nothing observable (useless
+    /// probe) or briefly steals a keystroke slot from whatever is focused
+    /// (user-visible side effect for a yes/no question). The GNOME/KDE
+    /// refusal case above is therefore only discovered at the first REAL
+    /// `insert`/`replace` call, which surfaces it as a `Transport` error
+    /// naming the compositor's own message.
+    pub fn available() -> bool {
+        use crate::detect::Env as _;
+        crate::detect::SystemEnv.has_command("wtype")
+    }
+
+    /// Run `wtype -` and feed `text` over stdin.
+    ///
+    /// stdin, not an argv text, for two reasons. First, argv has a kernel
+    /// size limit (`ARG_MAX`, a few hundred KiB) that a pasted paragraph
+    /// could reach; a pipe has none. Second, `wtype`'s argv parser treats a
+    /// leading `-` in the text itself as another option, so a transcript
+    /// that happens to start with a hyphen (dictated as punctuation, or a
+    /// literal command-line snippet someone spoke) would be misparsed as
+    /// `wtype`'s own flag; `-` (read text from stdin) sidesteps the whole
+    /// class of argv-quoting bugs the same way `--` would for a single
+    /// argument, but stdin also removes the `ARG_MAX` limit `--` does not.
+    fn run(text: &str) -> Result<(), TargetError> {
+        let mut child = std::process::Command::new("wtype")
+            .arg("-")
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::piped())
+            .spawn()
+            .map_err(|e| {
+                TargetError::Transport(format!(
+                    "could not launch wtype (is it on PATH? {e})"
+                ))
+            })?;
+        {
+            use std::io::Write as _;
+            // Errors writing here (a broken pipe because wtype already
+            // exited, e.g. the compositor refused it before reading stdin)
+            // are swallowed: the exit status checked below is the honest
+            // signal, and it carries wtype's own stderr message, which
+            // names the real cause ("compositor does not support the
+            // virtual keyboard protocol") far better than a raw EPIPE would.
+            let _ = child
+                .stdin
+                .as_mut()
+                .expect("stdin was requested piped")
+                .write_all(text.as_bytes());
+        }
+        // wait() drops stdin first (see std::process::Child::wait docs),
+        // which is what lets wtype see EOF and start typing rather than
+        // blocking on a read that never completes.
+        let out = child
+            .wait_with_output()
+            .map_err(|e| TargetError::Transport(format!("wtype did not exit cleanly: {e}")))?;
+        if !out.status.success() {
+            let stderr = String::from_utf8_lossy(&out.stderr);
+            return Err(TargetError::Transport(format!(
+                "wtype exited with {}: {}",
+                out.status,
+                stderr.trim()
+            )));
+        }
+        Ok(())
+    }
+}
+
+impl TextTarget for WtypeTarget {
+    fn name(&self) -> &'static str {
+        "linux-wtype"
+    }
+
+    fn tier(&self) -> Tier {
+        Tier::SyntheticKeys
+    }
+
+    fn capabilities(&self) -> Capabilities {
+        // wtype needs a running compositor to talk to; it cannot type into
+        // a virtual console or a headless session.
+        Capabilities::insert_only(false)
+    }
+
+    fn read(&mut self) -> Result<Snapshot, TargetError> {
+        Err(TargetError::NotReadable("keystroke synthesis cannot read"))
+    }
+
+    fn insert(&mut self, text: &str) -> Result<(), TargetError> {
+        if !wtype_fits(text) {
+            return Err(TargetError::Unsupported(
+                "text too long for per-character wtype synthesis; use clipboard paste",
+            ));
+        }
+        Self::run(text)
+    }
+
+    fn replace(&mut self, _text: &str) -> Result<(), TargetError> {
+        Err(TargetError::Unsupported(
+            "keystroke synthesis cannot address existing text",
+        ))
+    }
+}
+
 /// Linux uinput virtual keyboard (what `ydotool` wraps). Stub.
 ///
 /// Needs: write access to `/dev/uinput` (root or a udev rule), and a
@@ -1061,5 +1253,84 @@ mod sendinput_tests {
         for name in ["notepad.exe", "Notepad", "Code.exe"] {
             assert_eq!(accepts(Some(name)), Acceptance::AxAndTyping, "{name}");
         }
+    }
+}
+
+#[cfg(test)]
+mod wtype_tests {
+    use super::*;
+
+    /// The pure boundary the subprocess path checks before ever spawning
+    /// `wtype`. Exercised directly because this crate is developed on
+    /// macOS, which cannot run `wtype` at all, let alone drive it long
+    /// enough to observe visible streaming.
+    #[test]
+    fn text_at_or_under_the_limit_fits() {
+        let at_limit = "x".repeat(WTYPE_MAX_CHARS);
+        assert!(wtype_fits(&at_limit), "exactly the limit must still fit");
+        assert!(wtype_fits(""));
+        assert!(wtype_fits("a short dictated sentence"));
+    }
+
+    #[test]
+    fn text_over_the_limit_does_not_fit() {
+        let over_limit = "x".repeat(WTYPE_MAX_CHARS + 1);
+        assert!(!wtype_fits(&over_limit));
+    }
+
+    /// The boundary counts CHARACTERS, not bytes: a long run of multi-byte
+    /// unicode (CJK, emoji) must not be penalized twice, once by wtype's own
+    /// per-character cost (which this bound already accounts for) and again
+    /// by an accidental byte-length check that trips far earlier than
+    /// intended. `wtype_fits` uses `chars().count()`, matching how a human
+    /// reads "500 characters", not `str::len()`'s UTF-8 byte count.
+    #[test]
+    fn limit_counts_characters_not_bytes() {
+        // Each CJK character is 3 bytes in UTF-8, so a byte-length check at
+        // WTYPE_MAX_CHARS would refuse this at roughly a third of the true
+        // character count. 100 CJK characters is 300 bytes, well under a
+        // byte-based misreading of the limit, and this asserts the real
+        // (character-counted) limit is what is actually enforced.
+        let cjk = "日".repeat(WTYPE_MAX_CHARS);
+        assert_eq!(cjk.chars().count(), WTYPE_MAX_CHARS);
+        assert!(wtype_fits(&cjk));
+        let cjk_over = "日".repeat(WTYPE_MAX_CHARS + 1);
+        assert!(!wtype_fits(&cjk_over));
+    }
+
+    /// `name()`/`tier()`/`capabilities()` need no live compositor, so they
+    /// are asserted here rather than left to only be exercised on a real
+    /// Hyprland box.
+    #[test]
+    fn target_identity_and_capabilities() {
+        let target = WtypeTarget;
+        assert_eq!(target.name(), "linux-wtype");
+        assert_eq!(target.tier(), Tier::SyntheticKeys);
+        let caps = target.capabilities();
+        assert!(!caps.can_read);
+        assert!(!caps.can_write_in_place);
+        assert!(!caps.preserves_undo);
+        // wtype needs a live compositor connection; it cannot run headless.
+        assert!(!caps.is_headless);
+    }
+
+    /// `replace` must refuse rather than silently insert-appending: an
+    /// insert-only tier that pretended to replace would corrupt an edit by
+    /// leaving the original text next to the rewrite instead of replacing
+    /// it (see `may_use_insert_only_tier`'s doc in outloud::inject for the
+    /// caller-side half of this contract).
+    #[test]
+    fn replace_is_refused() {
+        let mut target = WtypeTarget;
+        let err = target.replace("anything").unwrap_err();
+        assert!(matches!(err, TargetError::Unsupported(_)));
+    }
+
+    /// `read` must refuse: keystroke synthesis has no read-back channel.
+    #[test]
+    fn read_is_refused() {
+        let mut target = WtypeTarget;
+        let err = target.read().unwrap_err();
+        assert!(matches!(err, TargetError::NotReadable(_)));
     }
 }
