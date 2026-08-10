@@ -130,16 +130,24 @@
               config = {
                 allowUnfree = true;
                 cudaSupport = true;
-                # RTX 5090 is Blackwell, compute capability 12.0 (sm_120).
-                # nixos-unstable's default cudaCapabilities list already
-                # includes it (checked directly:
-                # `cudaPackages.flags.cudaCapabilities` on this pin returns
-                # [ "7.5" "8.0" "8.6" "8.9" "9.0" "10.0" "10.3" "12.0" "12.1" ]),
-                # so no override is needed here. Pinning explicitly anyway
-                # would trade "works for whatever GPUs this nixpkgs pin
-                # already targets" for "silently stops matching new
-                # hardware next pin bump" -- the wrong trade for a flake
-                # nobody is watching daily.
+                # Build kernels for ONE architecture, not nine.
+                #
+                # The default list on this pin is
+                #   [ "7.5" "8.0" "8.6" "8.9" "9.0" "10.0" "10.3" "12.0" "12.1" ]
+                # and nvcc compiles every .cu kernel once per entry, which is
+                # most of an hour of CI and a correspondingly large binary --
+                # for a package whose name says it targets one desktop.
+                #
+                # 12.0 is Blackwell (RTX 5090, sm_120). Override, with the
+                # tradeoff stated plainly: this binary will NOT run on an
+                # older card. That is the right default for a package built
+                # for a known machine, and the fix for anyone else is to
+                # change one string.
+                cudaCapabilities = [ "12.0" ];
+                # Do not also emit PTX for forward compatibility: it roughly
+                # doubles build time to hedge against hardware this package
+                # is not for.
+                cudaForwardCompat = false;
               };
             };
             cudaToolchain =
