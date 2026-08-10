@@ -130,24 +130,20 @@
               config = {
                 allowUnfree = true;
                 cudaSupport = true;
-                # Build kernels for ONE architecture, not nine.
-                #
-                # The default list on this pin is
-                #   [ "7.5" "8.0" "8.6" "8.9" "9.0" "10.0" "10.3" "12.0" "12.1" ]
-                # and nvcc compiles every .cu kernel once per entry, which is
-                # most of an hour of CI and a correspondingly large binary --
-                # for a package whose name says it targets one desktop.
-                #
-                # 12.0 is Blackwell (RTX 5090, sm_120). Override, with the
-                # tradeoff stated plainly: this binary will NOT run on an
-                # older card. That is the right default for a package built
-                # for a known machine, and the fix for anyone else is to
-                # change one string.
-                cudaCapabilities = [ "12.0" ];
-                # Do not also emit PTX for forward compatibility: it roughly
-                # doubles build time to hedge against hardware this package
-                # is not for.
-                cudaForwardCompat = false;
+                # NOTE: nixpkgs' `cudaCapabilities` does NOT reach whisper.cpp
+                # here, which is why it is not set. whisper-rs-sys drives its
+                # own cmake invocation (sys/build.rs sets GGML_CUDA and
+                # CMAKE_CUDA_FLAGS by hand), and ggml's ggml-cuda/CMakeLists
+                # then fills in its own architecture list whenever
+                # CMAKE_CUDA_ARCHITECTURES is undefined:
+                #   50-virtual 61-virtual 70-virtual 75-virtual 80-virtual
+                #   86-real 89-real 90-virtual
+                # That list is eight architectures of nvcc work -- and it
+                # contains no 12.0, so it would not even emit Blackwell
+                # kernels for the card this package exists for. The real
+                # control is the CUDAARCHS environment variable, which cmake
+                # uses to initialise CMAKE_CUDA_ARCHITECTURES; see
+                # `env.CUDAARCHS` on the derivation below.
               };
             };
             cudaToolchain =
@@ -238,6 +234,20 @@
             # (`cargoBuildFeatures` came back empty) rather than by the
             # flake evaluating without error, which it did either way.
             buildFeatures = [ "outloud/whisper-cuda" ];
+
+            # Build Blackwell kernels only (sm_120, the RTX 5090). cmake
+            # seeds CMAKE_CUDA_ARCHITECTURES from CUDAARCHS, which is the
+            # only lever that reaches ggml's CUDA build through
+            # whisper-rs-sys's own cmake run -- see the note on cudaSupport
+            # above for why the nixpkgs-level setting does nothing here.
+            #
+            # "120-real" and not "120": `-real` emits SASS for that
+            # architecture without also embedding PTX. PTX exists so a
+            # future GPU can JIT the kernels, which is a tradeoff worth
+            # making for a redistributable binary and not for one built
+            # against a known card -- it is roughly double the compile for
+            # hardware this package is not for.
+            env.CUDAARCHS = "120-real";
             # The sandbox has no GPU (CUDA's own docs are explicit that the
             # driver's user-mode libraries, libcuda.so included, come from
             # the host driver install and are never part of the CUDA
