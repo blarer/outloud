@@ -214,7 +214,20 @@ const DEFAULT_ASR: &str = "whisper";
 ///
 /// Ordered so an explicit choice always wins: the caller checks the env var
 /// first, and within here the exe's own directory beats the working
-/// directory, since the latter is whatever Explorer happened to set.
+/// directory, which beats the model manager's own cache dir.
+///
+/// `config::model_dir()` (`~/.outloud/models`) is checked LAST, not first,
+/// even though it is the directory `asr::models::fetch` actually writes to
+/// and therefore the one every documented `curl`/`fetch` path lands in. Both
+/// earlier roots are things the user just did on purpose right now (built a
+/// release archive, `cd`ed next to a model to run a one-off command); the
+/// cache dir can quietly accumulate models from a completely different
+/// backend (llm, silero-vad) or a stale download, and picking one of those
+/// over an intentional adjacent file would be surprising. It was previously
+/// not searched at all, which is the actual Linux bug this fixes: a model
+/// fetched exactly per `docs/investigations/whisper-spike.md` step 1 into
+/// `~/.outloud/models/whisper-base.en` was invisible to `--asr whisper`
+/// unless the user also set `OUTLOUD_WHISPER_MODEL` by hand.
 fn discover_whisper_model() -> Option<String> {
     let mut roots: Vec<std::path::PathBuf> = Vec::new();
     if let Ok(exe) = std::env::current_exe() {
@@ -232,6 +245,7 @@ fn discover_whisper_model() -> Option<String> {
     if let Ok(cwd) = std::env::current_dir() {
         roots.push(cwd);
     }
+    roots.push(config::model_dir());
 
     for root in roots {
         let Ok(entries) = std::fs::read_dir(&root) else {
@@ -240,14 +254,31 @@ fn discover_whisper_model() -> Option<String> {
         // Deterministic: a directory listing is not ordered, and picking a
         // different model between runs would look like the recognizer got
         // randomly better or worse.
+        //
+        // Matches both `ggml-*.bin` (the upstream release naming, what a
+        // `curl` from the README produces) and the model manager's own
+        // filename `whisper-base.en` (no extension: `asr::models::fetch`
+        // names the cached file after `ModelSpec::id`, not after the URL).
+        // Requiring one or the other would make one of the two documented
+        // ways to obtain a model invisible to this scan.
         let mut found: Vec<std::path::PathBuf> = entries
             .flatten()
             .map(|e| e.path())
             .filter(|p| {
-                p.extension().is_some_and(|x| x.eq_ignore_ascii_case("bin"))
-                    && p.file_name()
-                        .and_then(|n| n.to_str())
-                        .is_some_and(|n| n.starts_with("ggml-"))
+                let name = p.file_name().and_then(|n| n.to_str()).unwrap_or("");
+                let is_ggml_bin = p.extension().is_some_and(|x| x.eq_ignore_ascii_case("bin"))
+                    && name.starts_with("ggml-");
+                // Excludes `.partial` (an in-progress `asr::models::fetch`
+                // download, which is not yet a usable file and may not even
+                // be complete) and `.verified` (the checksum sidecar, zero
+                // bytes of model). Without this a resumable download in
+                // progress would be handed to whisper.cpp as a model and
+                // fail with a confusing native-library error instead of
+                // this function simply not finding it yet.
+                let is_managed_whisper_model = name.starts_with("whisper-")
+                    && !name.ends_with(".partial")
+                    && !name.ends_with(".verified");
+                is_ggml_bin || is_managed_whisper_model
             })
             .collect();
         found.sort();
@@ -424,21 +455,28 @@ fn make_recognizer_factory(kind: &str, sensitivity: u8) -> anyhow::Result<Recogn
         // The only recognizer that runs off macOS, and the reason Windows
         // and Linux can work at all.
         //
-        // The model path is explicit rather than discovered: whisper ggml
-        // files are 142MiB to 1.6GiB, users keep them wherever they keep
-        // large files, and guessing a location then failing is worse than
-        // asking. OUTLOUD_WHISPER_MODEL is checked first so a shell can
-        // override without editing config.
+        // OUTLOUD_WHISPER_MODEL is checked first so a shell can override
+        // without editing config; discover_whisper_model then tries the
+        // exe's directory, the cwd, and finally the model manager's cache
+        // dir (~/.outloud/models). Only when none of those find anything
+        // does this ask the user, and the ask names the exact fetch command
+        // rather than a URL to go figure out yourself: on Linux especially,
+        // there is no default recognizer at all without this, so a vague
+        // error here means the product looks broken rather than unconfigured.
         "whisper" => {
             let path = std::env::var("OUTLOUD_WHISPER_MODEL")
                 .ok()
                 .or_else(discover_whisper_model)
                 .ok_or_else(|| {
                     anyhow::anyhow!(
-                        "--asr whisper needs a model: put a ggml .bin next to \
-                         outloud (or in the current directory), or set \
-                         OUTLOUD_WHISPER_MODEL to one \
-                         (see https://huggingface.co/ggerganov/whisper.cpp)"
+                        "--asr whisper needs a model. Fetch one:\n  \
+                         mkdir -p {}\n  \
+                         curl -L -o {}/whisper-base.en \\\n    \
+                         https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-base.en.bin\n\
+                         (142MiB, MIT-licensed weights) then rerun, or put a ggml .bin \
+                         next to outloud, or set OUTLOUD_WHISPER_MODEL to one.",
+                        config::model_dir().display(),
+                        config::model_dir().display(),
                     )
                 })?;
             Ok(Box::new(move || {
