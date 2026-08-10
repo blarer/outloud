@@ -171,6 +171,103 @@ truncated at the START of the audio, with a line on stderr saying so, because
 a transcript that begins mid-thought reads as a recognition failure rather
 than a length limit.
 
+### Linux
+
+There is no zero-install recognizer on Linux: Apple's `SpeechTranscriber` is
+macOS-only, so whisper.cpp is not the fallback here, it is the *only* option,
+and `--asr whisper` is the default (see `DEFAULT_ASR` in
+`crates/outloud/src/main.rs`).
+
+Two ways to get a build, in increasing order of reproducibility:
+
+**1. Plain cargo**, same shape as macOS/Windows:
+
+```bash
+cargo build --release -p outloud --features whisper        # CPU
+cargo build --release -p outloud --features whisper-cuda    # NVIDIA
+```
+
+Needs cmake, a C++ toolchain, and (CPU only) `pkg-config` + ALSA dev headers
+for `cpal`. For `whisper-cuda`, additionally the CUDA toolkit (`nvcc` on
+`PATH`) and libclang for bindgen, same requirement as Windows above and for
+the same reason: `whisper-rs-sys`'s build script shells out to both. Link
+step needs `libcuda`, `cudart`, `cublas`, `cublasLt`, `culibos` findable
+under `/usr/local/cuda/lib64` or `/opt/cuda/lib64` (see
+`whisper-rs-sys`'s `build.rs`); a distro CUDA install normally puts them
+there.
+
+**2. The nix flake**, which is what was actually exercised end to end (see
+below for exactly how much):
+
+```bash
+nix build .#default        # CPU, no whisper feature at all, matches every other platform's default
+nix build .#outloud-cuda    # NVIDIA CUDA, x86_64-linux only
+```
+
+`outloud-cuda` is a SEPARATE flake package output, not a flag on `default`.
+Reasons are in `flake.nix`'s own comments, in short: CUDA is unfree and
+multi-gigabyte and `nixpkgs.config` is a single global knob per `pkgs`
+instantiation, so folding it into the default output would mean either that
+config bleeding into every other package this flake builds, or a tangle of
+conditionals not worth the alternative. It mirrors nixpkgs' own
+`pkgs/by-name/wh/whisper-cpp/package.nix` CUDA recipe (the only build in
+nixpkgs solving exactly this problem, and the one nixpkgs CI actually
+exercises): `cudaPackages.backendStdenv` (CUDA imposes an upper bound on the
+host gcc version that whisper-rs's own `cmake` crate does not enforce),
+`cuda_nvcc` + `bindgenHook` + `autoAddDriverRunpath` to build, `cccl` +
+`cuda_cudart` + `libcublas` to link.
+
+**What was actually verified, and what was not.** This was built on macOS,
+where `nix build` cannot produce an x86_64-linux binary at all without a
+remote Linux builder, which was not available. What WAS verified, on this
+Mac, against the real toolchain versions the flake resolves:
+
+- `nix build .#default` (the CPU/no-whisper package every platform shares)
+  really builds, sandboxed, on this machine -- proving the flake restructure
+  needed to add `outloud-cuda` did not disturb the existing reproducibility
+  check.
+- `nix eval .#packages.x86_64-linux.outloud-cuda` evaluates to a real
+  derivation with no errors, and `nix derivation show` on it was inspected
+  directly (not just eyeballed as "looks right") to confirm: the CUDA
+  `cargoBuildFeatures` env var whisper-rs actually reads is `outloud/whisper-cuda`
+  (caught one bug here: `cargoBuildFeatures =` as a `buildRustPackage`
+  argument is silently accepted and does nothing, because that name is the
+  internal derived env var, not the argument -- `buildFeatures =` is), the
+  `stdenv` bound is genuinely `cudaPackages.backendStdenv` and not the plain
+  one (compared store hashes), and `nativeBuildInputs`/`buildInputs` contain
+  exactly the libraries `whisper-rs-sys`'s `build.rs` links against.
+- The `--features whisper` CPU path itself (not the nix packaging around it,
+  the actual whisper.cpp compile-link-run) was verified for real, but on
+  macOS with cmake fetched from the nix store rather than Homebrew: built
+  `-p asr --features whisper`, ran `cargo test -p asr --features whisper`
+  against the real `ggml-base.en.bin`, both passed, including the
+  integration test that transcribes the committed audio fixture. This
+  proves whisper-rs's cmake+bindgen build path itself works when its
+  prerequisites are present; it does not prove anything CUDA-specific, since
+  this Mac has no NVIDIA GPU and Metal is what actually ran.
+
+**What is NOT verified and needs the real machine (NixOS, RTX 5090):**
+
+1. `nix build .#outloud-cuda` actually completing -- nvcc compiling the real
+   `.cu` kernels, the final link against `libcuda`/`cudart`/`cublas`
+   succeeding, no missing dependency surfacing only at link time (a category
+   of failure `nix derivation show` cannot catch, since it only inspects
+   declared inputs, not what the C++ toolchain actually resolves).
+2. The binary running at all: does `outloud --asr whisper` on the produced
+   `outloud-cuda` binary load a model and transcribe, on real hardware, with
+   the real driver's `libcuda.so` (which Nix cannot vendor -- CUDA's own
+   documentation is explicit that the driver's user-mode libraries come from
+   the host driver install, never from the redistributable toolkit
+   packages)?
+3. Whether it is actually accelerated -- the CPU-vs-CUDA latency gap
+   Windows measured (8970ms vs 346-364ms) is the number this build exists to
+   reproduce on Linux, and nothing here measures it.
+4. Model discovery on a real fresh Linux install: `--asr whisper` finding
+   a model fetched via `asr::models::fetch` into `~/.outloud/models`
+   (fixed in `crates/outloud/src/main.rs`'s `discover_whisper_model`,
+   verified end to end on macOS with the real model file, but never
+   exercised through a nix-built binary on Linux).
+
 ## Model and licence audit
 
 The app is MIT. Code licences below are all MIT-compatible. Model *weights*
