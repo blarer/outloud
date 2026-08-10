@@ -407,3 +407,62 @@ jobs:
         if: failure()
         run: >-
           echo "::error title=install job failed::scripts/install.sh could not install the published release, or the app it installed was not the outloud daemon with its speech helper. Run scripts/test-install.sh locally; it installs into a temp dir and never touches /Applications."
+
+  # The Nix packages had no coverage at all, which is how three separate
+  # Linux packaging bugs shipped in a row: a missing pkg-config/alsa-lib, an
+  # ALSA client too old for the host PipeWire, and a CUDA build that compiled
+  # every .cu kernel and then failed the final link on -lcuda. Every one of
+  # those is a BUILD failure, so a runner can catch them; none needs a GPU,
+  # a microphone or a Wayland session.
+  nix:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: DeterminateSystems/nix-installer-action@v16
+      # The default package: proves the workspace builds under Nix on Linux
+      # and that the wtype/wl-clipboard wrapper resolves.
+      - name: Build the default package
+        run: nix build .#default --print-build-logs
+      - name: The wrapper must put wtype and wl-copy on the binary's PATH
+        run: |
+          # wrapProgram replaces bin/outloud with a shell wrapper and moves
+          # the real ELF aside; asserting on the whole bin/ directory instead
+          # of a specific filename keeps this from breaking when nixpkgs
+          # changes the wrapper's naming. Grep, never execute: running the
+          # binary would want a Wayland session and a microphone.
+          set -euo pipefail
+          if ! grep -rqs wtype result/bin/; then
+            echo "::error::wtype is not on the wrapped binary's PATH"
+            ls -la result/bin/
+            exit 1
+          fi
+          if ! grep -rqs wl-clipboard result/bin/; then
+            echo "::error::wl-clipboard is not on the wrapped binary's PATH"
+            exit 1
+          fi
+          echo "wtype and wl-clipboard are both on the wrapped PATH"
+      - name: Attribute failure
+        if: failure()
+        run: >-
+          echo "::error title=nix job failed::The Nix package failed to build on x86_64 Linux, or the Wayland delivery tools are missing from the wrapped binary's PATH."
+
+  # CUDA is split out and allowed to fail the slow way: it compiles
+  # whisper.cpp's CUDA kernels with nvcc, which is minutes of work and a
+  # multi-gigabyte toolchain download. It proves the LINK, which is where
+  # this has broken before (libcuda is a driver stub, not part of the
+  # redistributable toolkit); it cannot prove inference, which needs a real
+  # GPU this runner does not have.
+  nix-cuda:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+      # nvcc plus the CUDA redistributables far exceed the runner's ~14 GB.
+      - uses: wimpysworld/nothing-but-nix@main
+      - uses: DeterminateSystems/nix-installer-action@v16
+      - name: Build the CUDA package (compile + link only; no GPU here)
+        run: nix build .#outloud-cuda --print-build-logs
+      - name: Attribute failure
+        if: failure()
+        run: >-
+          echo "::error title=nix-cuda job failed::whisper.cpp's CUDA build or its final link failed. If the error is 'unable to find library -lcuda', the libcuda stub path in flake.nix is wrong: libcuda ships with the driver, and Nix links against cuda_cudart's stubs directory."
