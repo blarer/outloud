@@ -494,12 +494,22 @@ pub fn globalshortcuts_portal_available() -> bool {
 mod tests {
     use super::*;
 
+    /// A socket path inside a private per-test DIRECTORY, not directly in
+    /// the system temp dir.
+    ///
+    /// `bind` chmods the socket's PARENT to 0700, which is correct in
+    /// production (the parent is our own subdirectory of
+    /// $XDG_RUNTIME_DIR) and impossible in a test that puts the socket
+    /// straight into a shared /tmp: chmodding a directory you do not own
+    /// fails with EPERM, so every one of these tests died with
+    /// `spawn_at: Backend("Operation not permitted (os error 1)")` on a
+    /// CI runner while passing on a single-user laptop where /tmp happens
+    /// to be owned by the test user.
     fn temp_socket(name: &str) -> PathBuf {
-        std::env::temp_dir().join(format!(
-            "outloud-hotkey-test-{}-{name}-{}.sock",
-            std::process::id(),
-            name
-        ))
+        let dir =
+            std::env::temp_dir().join(format!("outloud-hotkey-test-{}-{name}", std::process::id()));
+        std::fs::create_dir_all(&dir).expect("create per-test socket dir");
+        dir.join(format!("{name}.sock"))
     }
 
     /// End-to-end over a real socket: PRESS then RELEASE past the tap
