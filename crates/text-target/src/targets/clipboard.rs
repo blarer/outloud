@@ -25,12 +25,44 @@ use crate::{Capabilities, Snapshot, TargetError, TextTarget, Tier};
 const NO_PASTE_KEYSTROKE: &str =
     "paste keystroke synthesis needs the synthetic-keys tier on this platform";
 
-/// Whether this build has a paste-keystroke path compiled into it.
+/// Whether this build has a paste-keystroke path compiled into it, and (on
+/// Linux) whether the specific runtime prerequisite for it is present.
 ///
-/// The single place that answers the question, so `ensure_paste_supported`
-/// and `send_paste_keystroke` cannot drift apart.
+/// macOS and Windows answer this at COMPILE time: CGEvent/`osascript` and
+/// `SendInput` are always linked into a `display`-feature build of this
+/// crate, so the paste keystroke is either always possible on that binary
+/// or never (the `#[cfg]`-gated `keys` modules cover the "never" case, e.g.
+/// a headless build). Linux is different: `wtype` is a SEPARATE binary that
+/// may or may not be installed, so "can this build paste" is a runtime
+/// question here, not a compile-time one. Folding that into this one
+/// function (rather than a `cfg!` literal) is what keeps
+/// `ensure_paste_supported` honest: without it, `insert` would clobber the
+/// clipboard on a Linux box with no `wtype`, discover the failure only at
+/// the keystroke step, and leave the user with neither their original
+/// clipboard contents nor typed text -- the exact bug
+/// `refuses_before_touching_the_clipboard` below exists to catch, which a
+/// Linux-blind `cfg!(target_os = "linux")` alone would not.
+fn platform_can_paste_with_env(env: &dyn crate::detect::Env) -> bool {
+    if cfg!(target_os = "macos") {
+        return true;
+    }
+    if cfg!(all(target_os = "windows", feature = "display")) {
+        return true;
+    }
+    if cfg!(target_os = "linux") {
+        return env.has_command("wtype");
+    }
+    false
+}
+
+/// [`platform_can_paste_with_env`] against the real environment. Only the
+/// test below calls this zero-argument form; every production call site
+/// threads an explicit [`crate::detect::Env`] through instead (`new_with_env`
+/// takes one directly), so `select()` and construction can never end up
+/// consulting a different `wtype`-on-PATH answer than each other.
+#[cfg(test)]
 fn platform_can_paste() -> bool {
-    cfg!(target_os = "macos") || cfg!(all(target_os = "windows", feature = "display"))
+    platform_can_paste_with_env(&crate::detect::SystemEnv)
 }
 
 /// Which external tools move text in and out of the clipboard here.
@@ -145,7 +177,7 @@ impl ClipboardTarget {
         Ok(ClipboardTarget {
             backend,
             saved: None,
-            can_paste: platform_can_paste(),
+            can_paste: platform_can_paste_with_env(env),
         })
     }
 
@@ -229,6 +261,20 @@ impl ClipboardTarget {
         #[cfg(all(target_os = "windows", feature = "display"))]
         {
             return send_ctrl_v();
+        }
+        // Linux has no OS-provided scripting target for "send this app a
+        // keystroke" the way `osascript`/System Events does on macOS, so
+        // the same `wtype` binary the synthetic-keys tier uses for typing
+        // doubles as the paste-keystroke sender here: `-M ctrl v -m ctrl`
+        // is a real Ctrl+V through the virtual-keyboard protocol, subject
+        // to the identical compositor-support caveat documented on
+        // `WtypeTarget` (Hyprland/Sway yes, GNOME/KDE no). `ensure_paste_supported`
+        // already checked `wtype` is on PATH before this runs; a missing
+        // compositor implementation still surfaces here as a `Transport`
+        // error naming wtype's own refusal message.
+        #[cfg(target_os = "linux")]
+        {
+            return super::keys::WtypeTarget::press_ctrl_v();
         }
         #[allow(unreachable_code)]
         Err(TargetError::Unsupported(NO_PASTE_KEYSTROKE))
@@ -330,11 +376,13 @@ mod tests {
 
     /// A target that believes it cannot paste, regardless of host.
     ///
-    /// The bug being guarded happens only where paste synthesis is missing,
-    /// which on this project is Linux -- a platform the developer's machine
-    /// cannot execute. Injecting the capability makes the refusal path
-    /// reachable everywhere, so the test actually runs in CI and locally
-    /// instead of being compiled out exactly where it matters.
+    /// The bug being guarded happens whenever paste synthesis is
+    /// unavailable, which used to mean "always, on Linux" (a platform the
+    /// developer's machine cannot execute) and now also means "Linux
+    /// without `wtype` on PATH", still not reproducible on this developer's
+    /// machine. Injecting the capability makes the refusal path reachable
+    /// everywhere, so the test actually runs in CI and locally instead of
+    /// being compiled out exactly where it matters.
     fn target_that_cannot_paste() -> ClipboardTarget {
         ClipboardTarget {
             backend: Backend::Pasteboard,
@@ -388,5 +436,58 @@ mod tests {
             platform_can_paste(),
             "the capability field disagrees with the compiled keystroke path"
         );
+    }
+
+    /// A minimal `Env` fake for asserting `platform_can_paste_with_env` as
+    /// a pure function of "is `wtype` on PATH", the same discipline
+    /// `detect.rs`'s own `FakeEnv` uses so environment-dependent decisions
+    /// are testable without a real machine's PATH. Every method besides
+    /// `has_command` is unused by `platform_can_paste_with_env` and returns
+    /// an inert default; a real `Env` implementer would need more, but this
+    /// test asserts exactly one function's exactly one input.
+    struct FakeEnvHasWtype(bool);
+
+    impl crate::detect::Env for FakeEnvHasWtype {
+        fn var(&self, _name: &str) -> Option<String> {
+            None
+        }
+        fn has_command(&self, bin: &str) -> bool {
+            bin == "wtype" && self.0
+        }
+        fn ax_trusted(&self) -> bool {
+            false
+        }
+        fn destination_is_terminal(&self) -> bool {
+            false
+        }
+        fn has_display(&self) -> bool {
+            true
+        }
+        fn has_clipboard(&self) -> bool {
+            true
+        }
+    }
+
+    /// On Linux, whether pasting is possible is a RUNTIME fact (is `wtype`
+    /// installed), not baked into the binary the way it is on macOS/Windows.
+    /// This is the property that makes `refuses_before_touching_the_clipboard`
+    /// matter on Linux specifically: a Linux box without `wtype` must refuse
+    /// up front rather than clobber the clipboard and then discover pasting
+    /// is impossible.
+    #[test]
+    #[cfg(target_os = "linux")]
+    fn linux_paste_capability_follows_wtype_on_path() {
+        assert!(platform_can_paste_with_env(&FakeEnvHasWtype(true)));
+        assert!(!platform_can_paste_with_env(&FakeEnvHasWtype(false)));
+    }
+
+    /// macOS's answer must NOT depend on `wtype`: CGEvent/`osascript` are
+    /// always available in a `display`-feature build, so an env that lacks
+    /// `wtype` (as every real macOS PATH does; it is a Linux-only package)
+    /// must still report pasteable here.
+    #[test]
+    #[cfg(target_os = "macos")]
+    fn macos_paste_capability_ignores_wtype() {
+        assert!(platform_can_paste_with_env(&FakeEnvHasWtype(false)));
     }
 }

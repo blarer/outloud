@@ -691,6 +691,44 @@ impl WtypeTarget {
         crate::detect::SystemEnv.has_command("wtype")
     }
 
+    /// Press and release Ctrl+V through `wtype`'s modifier flags.
+    ///
+    /// Used by [`super::clipboard::ClipboardTarget`]'s Linux paste path: a
+    /// clipboard write alone does nothing until something asks the focused
+    /// app to paste it, and Linux has no `System Events`-equivalent
+    /// scripting target the way macOS does (see that module's
+    /// `send_paste_keystroke`). `wtype -M ctrl v -m ctrl` is the exact
+    /// modifier-combo idiom the upstream README documents (its own example
+    /// is `wtype -M ctrl c -m ctrl` for Ctrl+C): press Ctrl, type the
+    /// literal character `v` while Ctrl is held, release Ctrl. wtype
+    /// releases every modifier automatically when it exits regardless (see
+    /// the crate-level doc's "note that when wtype terminates" warning), so
+    /// the explicit `-m ctrl` here is redundant with that guarantee but
+    /// kept anyway: relying on process-exit cleanup as the ONLY way a
+    /// modifier gets released would leave Ctrl physically "held" for as
+    /// long as wtype's shutdown takes, wide enough for a
+    /// concurrently-arriving real keystroke to combine with it into an
+    /// unintended chord.
+    pub fn press_ctrl_v() -> Result<(), TargetError> {
+        let out = std::process::Command::new("wtype")
+            .args(["-M", "ctrl", "v", "-m", "ctrl"])
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::piped())
+            .output()
+            .map_err(|e| {
+                TargetError::Transport(format!("could not launch wtype (is it on PATH? {e})"))
+            })?;
+        if !out.status.success() {
+            let stderr = String::from_utf8_lossy(&out.stderr);
+            return Err(TargetError::Transport(format!(
+                "wtype ctrl+v exited with {}: {}",
+                out.status,
+                stderr.trim()
+            )));
+        }
+        Ok(())
+    }
+
     /// Run `wtype -` and feed `text` over stdin.
     ///
     /// stdin, not an argv text, for two reasons. First, argv has a kernel
