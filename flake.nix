@@ -53,6 +53,9 @@
           version = "0.1.0";
           src = self;
           cargoLock.lockFile = ./Cargo.lock;
+          # Linux: cpal pulls alsa-sys, which needs pkg-config + alsa headers.
+          nativeBuildInputs = pkgs.lib.optionals pkgs.stdenv.isLinux [ pkgs.pkg-config ];
+          buildInputs = pkgs.lib.optionals pkgs.stdenv.isLinux [ pkgs.alsa-lib ];
           # The sandboxed nix build is itself the reproducibility check:
           # no network, no impure env, pinned inputs. macOS-specific FFI in
           # ax-edit compiles to the Unsupported stub on Linux, so this
