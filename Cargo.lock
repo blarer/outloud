@@ -767,6 +767,7 @@ dependencies = [
  "anyhow",
  "core-foundation",
  "core-foundation-sys",
+ "libc",
 ]
 
 [[package]]

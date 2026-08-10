@@ -20,6 +20,13 @@ anyhow.workspace = true
 core-foundation = "0.10"
 core-foundation-sys = "0.8"
 
+[target.'cfg(all(unix, not(target_os = "macos")))'.dependencies]
+# Peer-credential checks on the trigger socket (SO_PEERCRED), same
+# reasoning and same version pin as shell-bridge's use of it: no safe
+# stdlib surface exists for this one syscall, so a small dependency beats
+# hand-rolled FFI duplicated in a second crate.
+libc = "0.2.189"
+
 [[bin]]
 name = "hotkey-demo"
 path = "src/bin/hotkey-demo.rs"

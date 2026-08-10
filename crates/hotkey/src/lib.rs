@@ -20,6 +20,11 @@ pub mod conflict;
 pub mod keycode;
 pub mod matcher;
 pub mod taphold;
+// Pure trigger-verb/state-machine glue for the Linux compositor-exec
+// backend. Un-cfg-gated (unlike `backend::linux` itself) so it compiles and
+// is unit-tested on every platform, including macOS, which cannot run the
+// Linux backend it belongs to. See its module doc for why.
+pub mod trigger;
 pub mod winmatch;
 
 pub use chord::{Chord, ChordParseError, Key, Modifier};

@@ -87,6 +87,70 @@ fn accessibility_permission_line() -> String {
     }
 }
 
+/// What `--permissions` reports for the "hotkey" row on Linux: whether
+/// there is any global-hotkey mechanism reachable at all, and if not, the
+/// exact next action.
+///
+/// This exists because the honest answer used to be nothing: before the
+/// Linux backend, `hotkey::has_input_monitoring()` unconditionally returns
+/// `true` off macOS (see its doc: "Always `true` off macOS, which has no
+/// such gate"), which is correct about the permission question and
+/// actively misleading about the CAPABILITY question. A user running
+/// `--permissions` on Linux saw `input-monitoring: granted` and reasonably
+/// concluded the hotkey worked, when in fact nothing was listening at all.
+/// That is the exact "silently dead hotkey" failure class `docs/hotkeys.md`
+/// is written to prevent, just reached through the doctor instead of
+/// through the hotkey itself.
+///
+/// On macOS and Windows this row is redundant with the platform-native
+/// mechanism already reported above (`accessibility_permission_line`,
+/// `input-monitoring`), so it says so plainly rather than repeating them.
+fn linux_hotkey_status_line() -> String {
+    #[cfg(target_os = "macos")]
+    {
+        "n/a on macOS (see input-monitoring above; that IS the hotkey's permission)".into()
+    }
+    #[cfg(target_os = "windows")]
+    {
+        "n/a on Windows (the low-level keyboard hook needs no permission grant)".into()
+    }
+    #[cfg(all(unix, not(target_os = "macos")))]
+    {
+        let socket = hotkey::backend::linux::default_socket_path();
+        if hotkey::backend::linux::daemon_reachable(&socket) {
+            // Reachable means SOME outloud process (this one, if it has
+            // already bound the hotkey, or a stale one from a previous run
+            // that never exited) is listening. It does not by itself prove
+            // the compositor keybind is wired up correctly, which is a
+            // config-file fact this process cannot see; the doctor names
+            // that as a manual check because there is no API to read
+            // another process's compositor config.
+            format!(
+                "trigger daemon reachable at {} (compositor `bind`/`bindr` still needs \
+                 manual verification: press the bound key and watch for `outloud: state \
+                 listening`)",
+                socket.display()
+            )
+        } else {
+            format!(
+                "NO trigger daemon reachable at {} -> Wayland has no global hotkey \
+                 protocol (docs/hotkeys.md #7). Add to your compositor config \
+                 (Hyprland example):\n                    \
+                 bind  = , F13, exec, outloud trigger press\n                    \
+                 bindr = , F13, exec, outloud trigger release\n                  \
+                 then reload the compositor and restart outloud. Substitute your own \
+                 key for F13; PING this daemon any time with: \
+                 outloud trigger ping",
+                socket.display()
+            )
+        }
+    }
+    #[cfg(not(any(target_os = "macos", target_os = "windows", unix)))]
+    {
+        "n/a on this platform".into()
+    }
+}
+
 /// What `--route` reports: an app and the transport it would get.
 ///
 /// Names the app as the rules see it, not as the title bar spells it: the
@@ -257,6 +321,7 @@ fn parse_args() -> anyhow::Result<Args> {
                     }
                 );
                 println!("accessibility:    {}", accessibility_permission_line());
+                println!("hotkey:           {}", linux_hotkey_status_line());
                 println!(
                     "bundle:           {}",
                     std::env::current_exe()
@@ -324,7 +389,11 @@ fn parse_args() -> anyhow::Result<Args> {
                      --permissions    report this build's grants and exit\n\
                      --route [APP|N]  which transport APP would get, or whatever\n\
                                       you focus within N seconds (Windows)\n\
-                     --version        print the version and exit"
+                     --version        print the version and exit\n\
+                     \n\
+                     outloud trigger <press|release|ping>\n\
+                     \x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20 Linux/Wayland only: what a compositor exec keybind\n\
+                     \x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20 runs (see docs/hotkeys.md, section 7)"
                 );
                 std::process::exit(0);
             }
@@ -599,6 +668,51 @@ fn report_startup_warning_to_the_user(_message: &str) {
     // their daemon from a shell, where stderr is already visible.
 }
 
+/// `outloud trigger <press|release|ping>`: what a Hyprland/sway `exec`
+/// keybind actually runs. Thin by design: it is one unix-socket round trip
+/// (`hotkey::backend::linux::send_trigger`) to whatever daemon is already
+/// listening, nothing more, so it stays fast enough to bind directly to a
+/// key edge with no perceptible delay.
+///
+/// Unix-only. On macOS/Windows this whole subcommand does not apply (those
+/// platforms have their own backends, see `docs/hotkeys.md`), so it fails
+/// with a message naming what DOES exist here rather than pretending to be
+/// a no-op — a `trigger` subcommand that silently succeeded on the wrong
+/// platform would be indistinguishable from a working one to a compositor
+/// config copied from someone else's machine.
+fn run_trigger_subcommand(args: Vec<String>) -> anyhow::Result<()> {
+    #[cfg(not(all(unix, not(target_os = "macos"))))]
+    {
+        let _ = args;
+        anyhow::bail!(
+            "`outloud trigger` is the Linux Wayland compositor-exec hotkey backend and does \
+             not apply on this platform; see docs/hotkeys.md for the mechanism this platform \
+             actually uses"
+        );
+    }
+    #[cfg(all(unix, not(target_os = "macos")))]
+    {
+        let verb = match args.first().map(String::as_str) {
+            Some("press") => hotkey::trigger::TriggerVerb::Press,
+            Some("release") => hotkey::trigger::TriggerVerb::Release,
+            Some("ping") => hotkey::trigger::TriggerVerb::Ping,
+            other => anyhow::bail!(
+                "usage: outloud trigger <press|release|ping> (got {:?})",
+                other.unwrap_or("<nothing>")
+            ),
+        };
+        let socket = std::env::var_os("OUTLOUD_HOTKEY_TRIGGER_SOCKET")
+            .map(std::path::PathBuf::from)
+            .unwrap_or_else(hotkey::backend::linux::default_socket_path);
+        // send_trigger's own error message already names "is outloud
+        // running?" (see its doc), which is exactly what a compositor's
+        // exec log needs to show for a keypress that silently did nothing.
+        hotkey::backend::linux::send_trigger(&socket, verb)
+            .map_err(|e| anyhow::anyhow!("{e}"))?;
+        Ok(())
+    }
+}
+
 fn main() -> anyhow::Result<()> {
     // Runs on EVERY exit path, including the `?` early returns below.
     //
@@ -615,6 +729,19 @@ fn main() -> anyhow::Result<()> {
         }
     }
     let _restore_guard = RestoreClipboardOnExit;
+
+    // `outloud trigger <press|release|ping>`: the tiny CLI half of the
+    // Linux compositor-exec hotkey backend (`hotkey::backend::linux`). A
+    // subcommand rather than a `--flag`, deliberately, because this is what
+    // the compositor's config execs on every keypress: it must be typeable
+    // in a `bind = , KEY, exec, outloud trigger press` line without a user
+    // reasoning about flag syntax, and it is not itself an OPTION of a
+    // dictation run the way `--chord` or `--once` are. Intercepted before
+    // `parse_args()` because that parser's `--flag` grammar has no verb
+    // concept and would reject `trigger` as an unknown argument.
+    if std::env::args().nth(1).as_deref() == Some("trigger") {
+        return run_trigger_subcommand(std::env::args().skip(2).collect());
+    }
 
     let mut args = parse_args()?;
 
