@@ -168,6 +168,30 @@
               cudaPkgs.cudaPackages.cuda_cudart
               cudaPkgs.cudaPackages.libcublas
             ];
+
+            # `-lcuda` is the DRIVER library, not part of the toolkit: it
+            # ships with the installed NVIDIA driver and is deliberately
+            # absent from anything Nix can vendor. The build still has to
+            # LINK against it, which is what the `stubs` output exists for:
+            # an ABI-compatible libcuda.so that resolves symbols at link
+            # time and is never loaded at runtime. Without this the whole
+            # CUDA build compiles -- cmake, nvcc, every .cu kernel -- and
+            # then dies on the final link with
+            #   rust-lld: error: unable to find library -lcuda
+            # which reads like a missing dependency rather than the
+            # deliberate toolkit/driver split that it is.
+            #
+            # `autoAddDriverRunpath` (in nativeBuildInputs) then rewrites the
+            # finished binary's RUNPATH to /run/opengl-driver/lib, so at
+            # RUNTIME it picks up the real libcuda from the host driver
+            # rather than this stub.
+            # This nixpkgs keeps the stubs INSIDE cuda_cudart's default
+            # output (pkgs/development/cuda-modules/packages/cuda_cudart.nix:
+            # "We have stubs but we don't have an explicit stubs output"), so
+            # the path is $out/lib/stubs and there is no `.stubs` attribute
+            # to reference -- asking for one fails evaluation with
+            # "attribute 'stubs' missing".
+            NIX_LDFLAGS = "-L${cudaPkgs.lib.getLib cudaPkgs.cudaPackages.cuda_cudart}/lib/stubs";
             # `buildFeatures`/`checkFeatures`, not `cargoBuildFeatures`: the
             # latter is `buildRustPackage`'s INTERNAL derived env-var name
             # (see nixpkgs pkgs/build-support/rust/build-rust-package), and
