@@ -268,7 +268,7 @@
             # and then cannot type the result anywhere.
             postFixup = ''
               for _bin in $out/bin/*; do
-                wrapProgram "$_bin" \\
+                wrapProgram "$_bin" \
                   --prefix PATH : ${
                     cudaPkgs.lib.makeBinPath [
                       cudaPkgs.wtype
