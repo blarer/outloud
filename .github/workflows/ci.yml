@@ -312,6 +312,11 @@ jobs:
         run: |
           env -u DISPLAY -u WAYLAND_DISPLAY dist/headless/outloud-spiked-x86_64-unknown-linux-musl dry-run "change hello to goodbye"
 
+      # The compositor-exec hotkey path, across two real processes. See the
+      # script's header for why the in-process unit tests cannot cover it.
+      - name: The trigger CLI reaches a separately running daemon
+        run: scripts/ci-trigger-ipc.sh
+
   # The whisper backend, against a real model. Every other job builds the
   # workspace with default features, where whisper is compiled out entirely,
   # and the transcription test skips when no weights are present. So without
