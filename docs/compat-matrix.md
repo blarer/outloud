@@ -18,6 +18,70 @@ for why terminals invert it):
 | Term | Terminal-native (OSC 52, bracketed paste, multiplexer/emulator IPC, shell line editor) |
 | HL | Headless daemon socket or stdio filter |
 
+## Linux/Wayland delivery
+
+The Keys tier on Linux/Wayland is `wtype`
+(`text_target::targets::keys::WtypeTarget`), not uinput: `wtype` uploads a
+throwaway xkb keymap per invocation so it types the literal characters in
+the payload regardless of the destination's active keyboard layout, the
+same problem raw uinput/`ydotool` scancode injection does not solve.
+`wtype` also doubles as the paste-keystroke sender for the Clip tier
+(`wtype -M ctrl v -m ctrl`), since Linux has no `osascript`/System
+Events-equivalent scripting target.
+
+**Requires the compositor to implement `zwp_virtual_keyboard_manager_v1`.**
+Hyprland, Sway, and other wlroots-family compositors do. GNOME (Mutter) and
+KDE (KWin) deliberately do **not** expose it to arbitrary clients, for the
+same reason a browser refuses an unprivileged
+`document.execCommand('paste')`: an unauthenticated virtual keyboard is a
+keylogger-adjacent capability. On those compositors `wtype` is installed
+and runs, but every invocation fails with wtype's own "compositor does not
+support the virtual keyboard protocol" message. `outloud doctor`'s
+`display-server` check reports this distinction (PASS only means "wtype is
+on PATH", not "the compositor accepts it" -- there is no way to probe
+compositor support without actually typing something).
+
+| Destination | Best tier | Notes |
+|---|---|---|
+| Hyprland / Sway (any focused app) | Keys (wtype) | Primary path. Long text (over `WtypeTarget::WTYPE_MAX_CHARS`, 500 chars) falls back to Clip: `wtype` does one Wayland roundtrip per key edge, so a long payload would visibly stream |
+| GNOME (Mutter) / KDE (KWin) | Clip | `wtype` refuses (no virtual-keyboard protocol); `wl-copy`/`wl-paste` + `wtype -M ctrl v -m ctrl` for the paste keystroke still work, since the clipboard and paste-keystroke synthesis are separate protocols from typing |
+| X11 (any window manager) | Clip (`xclip`/`xsel`) | `wtype` is Wayland-only; an X11 Keys tier (XTEST) is not implemented in this crate yet, see `docs/debugging.md` |
+| No `wtype`, no `wl-clipboard`/`xclip`/`xsel` | none | `outloud doctor`'s `display-server`/`clipboard` checks FAIL and name exactly which package to install (nixpkgs: `wtype`, `wl-clipboard`) |
+
+Traps worth knowing before debugging a "nothing types" report on Linux:
+
+- **Newlines and unicode**: `wtype` special-cases `'\n'` to the `Return`
+  keysym and builds a one-off keymap entry per codepoint, so multi-line
+  transcripts and non-Latin scripts are typed correctly with no escaping on
+  this crate's side. This is one respect in which `wtype` beats the
+  clipboard fallback: paste can be intercepted by an app's own paste
+  handler (some terminals disable bracketed paste by default); a
+  `wtype`-synthesized keystroke looks identical to a real one to every
+  listener.
+- **Clipboard restore**: the Clip tier saves the user's clipboard before
+  writing the dictated text and restores it after a short settle delay
+  (150ms), same as every other platform's Clip implementation. A crash
+  between write and restore leaves the dictated text on the clipboard
+  rather than the user's own content; `outloud::inject::drain_pending_restores`
+  is the shutdown-path guard against the common case of this (process exit
+  racing the restore thread), not against a hard crash.
+- **Focus races**: `wtype`'s key events land wherever the compositor's
+  keyboard focus is at the moment they're actually sent, which is AFTER
+  hotkey release and STT latency (hundreds of ms to seconds). Alt-tabbing
+  during that window sends the text to the new focus target silently; no
+  Wayland protocol reports "who is focused now" back to the client. Same
+  class of race every insert-only tier has on every platform (SendInput,
+  CGEvent), worth naming here because focus-follows-mouse compositor
+  configs make it easier to trigger.
+- **Runtime dependency, not a build dependency**: `wtype` and
+  `wl-copy`/`wl-paste` must be on `PATH` at runtime; this crate only shells
+  out to them; nothing in `text-target`'s own build links against a
+  Wayland client library. Not hardware-verified: this crate is developed on
+  macOS, which cannot run a Wayland session, so nothing here has been
+  exercised against a real `wtype` process. `text-target`'s unit tests
+  cover the pure logic (length-threshold chunking, paste-capability
+  selection) with the subprocess calls themselves left unexercised.
+
 ## Native applications (macOS)
 
 | Destination | Best tier | Read | In-place write | Notes |
