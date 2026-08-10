@@ -180,7 +180,11 @@ impl TriggerState {
     }
 }
 
-pub fn spawn(matcher: Matcher, machine: TapHold, sender: Sender<HotkeyEvent>) -> Result<(), HotkeyError> {
+pub fn spawn(
+    matcher: Matcher,
+    machine: TapHold,
+    sender: Sender<HotkeyEvent>,
+) -> Result<(), HotkeyError> {
     // The pre-compiled macOS matcher speaks CGEvent vocabulary and has
     // nothing to match here: the compositor already decided which
     // physical key mattered, and the trigger protocol carries only PRESS/
@@ -281,7 +285,9 @@ fn handle_connection(
     // rejected anyway.
     if !peer_is_self(&stream)? {
         let _ = stream.write_all(b"ERR peer uid mismatch\n");
-        return Err(std::io::Error::other("rejected connection from foreign uid"));
+        return Err(std::io::Error::other(
+            "rejected connection from foreign uid",
+        ));
     }
 
     let mut line = String::new();
@@ -479,8 +485,7 @@ pub fn globalshortcuts_portal_available() -> bool {
         ])
         .output()
         .map(|o| {
-            o.status.success()
-                && String::from_utf8_lossy(&o.stdout).contains("GlobalShortcuts")
+            o.status.success() && String::from_utf8_lossy(&o.stdout).contains("GlobalShortcuts")
         })
         .unwrap_or(false)
 }
@@ -509,11 +514,17 @@ mod tests {
         spawn_at(&path, machine, tx).expect("spawn_at");
 
         send_trigger(&path, TriggerVerb::Press).expect("press");
-        assert_eq!(rx.recv_timeout(Duration::from_secs(1)).unwrap(), HotkeyEvent::Pressed);
+        assert_eq!(
+            rx.recv_timeout(Duration::from_secs(1)).unwrap(),
+            HotkeyEvent::Pressed
+        );
 
         std::thread::sleep(Duration::from_millis(350)); // past the 300ms tap threshold
         send_trigger(&path, TriggerVerb::Release).expect("release");
-        assert_eq!(rx.recv_timeout(Duration::from_secs(1)).unwrap(), HotkeyEvent::Released);
+        assert_eq!(
+            rx.recv_timeout(Duration::from_secs(1)).unwrap(),
+            HotkeyEvent::Released
+        );
 
         let _ = std::fs::remove_file(&path);
     }
@@ -568,7 +579,10 @@ mod tests {
         unsafe { std::env::remove_var("OUTLOUD_HOTKEY_TRIGGER_WATCHDOG_MS") };
 
         send_trigger(&path, TriggerVerb::Press).expect("press");
-        assert_eq!(rx.recv_timeout(Duration::from_secs(1)).unwrap(), HotkeyEvent::Pressed);
+        assert_eq!(
+            rx.recv_timeout(Duration::from_secs(1)).unwrap(),
+            HotkeyEvent::Pressed
+        );
 
         // No RELEASE ever sent. Within (150ms timeout + 5s poll interval)
         // the watchdog must force it closed.
@@ -602,7 +616,10 @@ mod tests {
         spawn_at(&path, machine, tx).expect("spawn_at");
 
         send_trigger(&path, TriggerVerb::Press).expect("press 1");
-        assert_eq!(rx.recv_timeout(Duration::from_secs(1)).unwrap(), HotkeyEvent::Pressed);
+        assert_eq!(
+            rx.recv_timeout(Duration::from_secs(1)).unwrap(),
+            HotkeyEvent::Pressed
+        );
         send_trigger(&path, TriggerVerb::Press).expect("press 2");
         assert!(
             rx.recv_timeout(Duration::from_millis(200)).is_err(),

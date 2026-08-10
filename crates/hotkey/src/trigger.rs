@@ -295,7 +295,11 @@ mod tests {
         let base = t0();
         let timeout = Duration::from_secs(120);
         assert!(watchdog_expired(base, base + timeout, timeout));
-        assert!(watchdog_expired(base, base + timeout + Duration::from_secs(1), timeout));
+        assert!(watchdog_expired(
+            base,
+            base + timeout + Duration::from_secs(1),
+            timeout
+        ));
     }
 
     #[test]
@@ -308,8 +312,15 @@ mod tests {
         let mut m = TapHold::new(crate::taphold::Timing::default());
         apply(&mut m, TriggerVerb::Press, base);
         assert!(m.capturing());
-        assert!(watchdog_expired(base, ms(base, 120_000), DEFAULT_WATCHDOG_TIMEOUT));
+        assert!(watchdog_expired(
+            base,
+            ms(base, 120_000),
+            DEFAULT_WATCHDOG_TIMEOUT
+        ));
         assert_eq!(m.reset(), vec![HotkeyEvent::Released]);
-        assert!(!m.capturing(), "watchdog recovery must not leave the mic hot");
+        assert!(
+            !m.capturing(),
+            "watchdog recovery must not leave the mic hot"
+        );
     }
 }

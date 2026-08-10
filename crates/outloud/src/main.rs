@@ -745,8 +745,7 @@ fn run_trigger_subcommand(args: Vec<String>) -> anyhow::Result<()> {
         // send_trigger's own error message already names "is outloud
         // running?" (see its doc), which is exactly what a compositor's
         // exec log needs to show for a keypress that silently did nothing.
-        hotkey::backend::linux::send_trigger(&socket, verb)
-            .map_err(|e| anyhow::anyhow!("{e}"))?;
+        hotkey::backend::linux::send_trigger(&socket, verb).map_err(|e| anyhow::anyhow!("{e}"))?;
         Ok(())
     }
 }
