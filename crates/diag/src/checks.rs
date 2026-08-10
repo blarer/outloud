@@ -548,12 +548,7 @@ impl Check for DisplayServer {
                 "Windows interactive desktop (UI Automation and SendInput available)",
             ),
             DisplayKind::X11 => CheckOutcome::pass("X11 session (XTEST injection available)"),
-            DisplayKind::Wayland => CheckOutcome::warn(
-                "Wayland session: synthetic input is blocked by design",
-                ErrorClass::Environment,
-                "injection needs the RemoteDesktop XDG portal (or wlroots virtual-keyboard \
-                 protocol); AT-SPI reads may still work. Not yet implemented here",
-            ),
+            DisplayKind::Wayland => wayland_injection_outcome(),
             DisplayKind::HeadlessOrSsh => CheckOutcome::fail(
                 "headless or SSH session: no local display to read or inject into",
                 ErrorClass::Environment,
@@ -561,6 +556,88 @@ impl Check for DisplayServer {
             ),
         }
     }
+}
+
+/// The Wayland arm of [`DisplayServer`], split out because it is no longer
+/// a single fixed WARN: whether injection actually works here is a runtime
+/// fact (is `wtype` on `PATH`, and separately, does the compositor
+/// implement the virtual-keyboard protocol `wtype` needs), and this
+/// function is where those two questions get an honest answer instead of a
+/// blanket "not yet implemented" that was true when it was Windows-first
+/// (see `crates/text-target/src/targets/keys.rs::WtypeTarget` for the
+/// actual transport this now names).
+///
+/// What this CANNOT determine from here: whether the compositor itself
+/// exposes `zwp_virtual_keyboard_manager_v1`. Hyprland and other wlroots
+/// compositors do; GNOME (Mutter) and KDE (KWin) deliberately do not, for
+/// the same reason a browser refuses an unprivileged
+/// `document.execCommand('paste')` -- an unauthenticated virtual keyboard
+/// is a keylogger-adjacent capability. There is no environment variable or
+/// file to probe for that support; the only way to know is to actually run
+/// `wtype`, which this check will not do (a doctor that types things is a
+/// doctor with side effects). So a PASS here means "wtype is installed and
+/// SHOULD work on a wlroots-family compositor", not "injection is proven to
+/// work"; the WARN case names the gap plainly instead of asserting either
+/// way.
+fn wayland_injection_outcome() -> CheckOutcome {
+    wayland_injection_outcome_for(command_on_path("wtype"), has_wl_clipboard_tools())
+}
+
+/// Same decision as [`wayland_injection_outcome`], with the two `PATH`
+/// facts passed in rather than probed, so the WARN/PASS/FAIL split is
+/// unit-tested directly (the same `_on`/`_for` split
+/// `detect_display`/`detect_display_on` already use in this file): probing
+/// the REAL `PATH` from a test would make the result depend on whatever
+/// happens to be installed on the machine running `cargo test`, which is
+/// exactly the flakiness this pattern exists to avoid.
+fn wayland_injection_outcome_for(has_wtype: bool, has_wl_clipboard: bool) -> CheckOutcome {
+    match (has_wtype, has_wl_clipboard) {
+        (true, _) => CheckOutcome::pass(
+            "Wayland session, wtype on PATH: synthetic-key injection available on \
+             compositors implementing zwp_virtual_keyboard_v1 (Hyprland, Sway, other \
+             wlroots compositors; GNOME and KDE do not expose this protocol, so wtype \
+             will refuse there even though it is installed)",
+        ),
+        (false, true) => CheckOutcome::warn(
+            "Wayland session: wl-clipboard is installed but wtype is not, so only the \
+             clipboard-paste fallback is available (no synthetic-key typing)",
+            ErrorClass::Configuration,
+            "install wtype for the primary typing path (nixpkgs: `wtype`); \
+             clipboard-paste alone still works for insertion but cannot address \
+             existing text for edit-by-voice",
+        ),
+        (false, false) => CheckOutcome::fail(
+            "Wayland session: neither wtype nor wl-clipboard is on PATH, so this build \
+             has no way to deliver text to the focused window at all",
+            ErrorClass::Configuration,
+            "install wtype (primary path) and wl-clipboard (fallback + clipboard \
+             checks): nixpkgs packages `wtype` and `wl-clipboard`",
+        ),
+    }
+}
+
+/// Whether `bin` resolves on `PATH`.
+///
+/// Deliberately duplicated rather than depending on
+/// `text_target::detect::SystemEnv::has_command`: `diag` has no dependency
+/// on `text-target` today (it talks to `ax-edit` and `hotkey` directly, see
+/// `Cargo.toml`), and reaching across for one boolean-returning function
+/// would add a whole crate edge -- with `text-target`'s own `display`
+/// feature and its `ax-edit`/`windows` pulls -- to save four lines. Same
+/// technique (`PATH` split, `.is_file()`) as the original; if this drifts
+/// from `SystemEnv::has_command` in behavior later, that is the day to
+/// promote it to a shared helper instead of before.
+fn command_on_path(bin: &str) -> bool {
+    std::env::var_os("PATH")
+        .map(|paths| std::env::split_paths(&paths).any(|p| p.join(bin).is_file()))
+        .unwrap_or(false)
+}
+
+/// Whether BOTH halves of `wl-clipboard` are on `PATH`. A copy tool with no
+/// paste tool (or the reverse) is not a usable clipboard, so this is one
+/// fact, not two, everywhere it is consulted.
+fn has_wl_clipboard_tools() -> bool {
+    command_on_path("wl-copy") && command_on_path("wl-paste")
 }
 
 // ---------------------------------------------------------------------------
@@ -693,17 +770,18 @@ impl Check for Clipboard {
             // the app's.
             CheckOutcome::pass("Windows clipboard is native; nothing to install")
         } else if env.get("WAYLAND_DISPLAY").is_some() {
-            CheckOutcome::warn(
-                "Wayland clipboard requires wl-clipboard",
-                ErrorClass::Configuration,
-                "install wl-clipboard (`wl-copy`/`wl-paste`)",
-            )
+            // Actually probe for the tool rather than always warning: a
+            // Hyprland box with wl-clipboard installed (the common case
+            // once the nix package ships it as a runtime dep) must read
+            // PASS, not carry a permanent WARN that never resolves no
+            // matter what is on PATH. The prior version warned
+            // unconditionally on Wayland regardless of whether wl-copy/
+            // wl-paste were present, which is the "reports FAIL/WARN under
+            // SSH, correctly, but ALSO under a real graphical session with
+            // everything installed" bug this rewrite closes.
+            linux_clipboard_outcome_for(true, has_wl_clipboard_tools())
         } else if env.get("DISPLAY").is_some() {
-            CheckOutcome::warn(
-                "X11 clipboard requires xclip or xsel",
-                ErrorClass::Configuration,
-                "install xclip (`apt install xclip`) or xsel",
-            )
+            linux_clipboard_outcome_for(false, command_on_path("xclip") || command_on_path("xsel"))
         } else {
             CheckOutcome::fail(
                 "no display: no clipboard",
@@ -711,6 +789,37 @@ impl Check for Clipboard {
                 "run inside a graphical session",
             )
         }
+    }
+}
+
+/// Linux clipboard verdict as a pure function of "which session" and
+/// "is the needed tool present", so the PASS/WARN split is directly
+/// unit-tested rather than only exercisable by actually installing or
+/// uninstalling `wl-clipboard`/`xclip` on the machine running the test
+/// (the same reasoning behind `wayland_injection_outcome_for` above).
+/// `is_wayland` picks which tool name and remedy string apply; `has_tool`
+/// is the already-resolved "is a usable clipboard tool present" fact
+/// (`wl-copy` AND `wl-paste` for Wayland, `xclip` OR `xsel` for X11 -- the
+/// caller decides which combinator applies before calling this).
+fn linux_clipboard_outcome_for(is_wayland: bool, has_tool: bool) -> CheckOutcome {
+    if is_wayland {
+        if has_tool {
+            CheckOutcome::pass("Wayland: wl-clipboard (wl-copy/wl-paste) on PATH")
+        } else {
+            CheckOutcome::warn(
+                "Wayland clipboard requires wl-clipboard",
+                ErrorClass::Configuration,
+                "install wl-clipboard (`wl-copy`/`wl-paste`)",
+            )
+        }
+    } else if has_tool {
+        CheckOutcome::pass("X11: xclip or xsel on PATH")
+    } else {
+        CheckOutcome::warn(
+            "X11 clipboard requires xclip or xsel",
+            ErrorClass::Configuration,
+            "install xclip (`apt install xclip`) or xsel",
+        )
     }
 }
 
@@ -1389,6 +1498,66 @@ mod tests {
         assert_eq!(
             detect_display(&Env::from_pairs(&[("SSH_TTY", "/dev/ttys0")]), true),
             DisplayKind::HeadlessOrSsh
+        );
+    }
+
+    // -- Wayland injection / clipboard verdicts -------------------------------
+
+    /// wtype present is a PASS regardless of wl-clipboard: it is the
+    /// primary path and does not need the clipboard fallback to be usable.
+    #[test]
+    fn wtype_present_passes_even_without_wl_clipboard() {
+        let out = wayland_injection_outcome_for(true, false);
+        assert_eq!(out.status, Status::Pass);
+    }
+
+    /// The exact gap this rewrite closes: a Hyprland box with BOTH tools
+    /// installed must PASS, not carry the permanent WARN the old
+    /// unconditional-warn version gave every Wayland session regardless of
+    /// what was on PATH.
+    #[test]
+    fn wtype_present_with_wl_clipboard_passes() {
+        let out = wayland_injection_outcome_for(true, true);
+        assert_eq!(out.status, Status::Pass);
+    }
+
+    /// No wtype but wl-clipboard present: still usable (clipboard-paste
+    /// fallback), but WARN because the primary typing path is missing.
+    #[test]
+    fn wl_clipboard_without_wtype_warns_not_fails() {
+        let out = wayland_injection_outcome_for(false, true);
+        assert_eq!(out.status, Status::Warn);
+        assert!(out.remedy.unwrap().contains("wtype"));
+    }
+
+    /// Neither tool: this build has no way to deliver text at all, which is
+    /// a FAIL (matches the SSH/headless case being correctly a FAIL too),
+    /// not a WARN that undersells how broken the setup is.
+    #[test]
+    fn neither_tool_fails() {
+        let out = wayland_injection_outcome_for(false, false);
+        assert_eq!(out.status, Status::Fail);
+        assert!(out.remedy.unwrap().contains("wtype"));
+    }
+
+    #[test]
+    fn wayland_clipboard_pass_and_warn_track_the_tool() {
+        assert_eq!(linux_clipboard_outcome_for(true, true).status, Status::Pass);
+        assert_eq!(
+            linux_clipboard_outcome_for(true, false).status,
+            Status::Warn
+        );
+    }
+
+    #[test]
+    fn x11_clipboard_pass_and_warn_track_the_tool() {
+        assert_eq!(
+            linux_clipboard_outcome_for(false, true).status,
+            Status::Pass
+        );
+        assert_eq!(
+            linux_clipboard_outcome_for(false, false).status,
+            Status::Warn
         );
     }
 

@@ -748,9 +748,7 @@ impl WtypeTarget {
             .stderr(std::process::Stdio::piped())
             .spawn()
             .map_err(|e| {
-                TargetError::Transport(format!(
-                    "could not launch wtype (is it on PATH? {e})"
-                ))
+                TargetError::Transport(format!("could not launch wtype (is it on PATH? {e})"))
             })?;
         {
             use std::io::Write as _;
