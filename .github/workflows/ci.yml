@@ -318,25 +318,39 @@ jobs:
   # this job a broken whisper backend passes CI in two different ways at
   # once: not compiled, and not asserted.
   #
-  # macOS because whisper-rs enables Metal there automatically; a Linux
-  # runner would run the same test 20-30x slower on CPU for no extra signal.
+  # Both OSes: macOS gets Metal automatically, and Linux is where whisper is
+  # the ONLY recognizer, so a Linux CPU run is not redundant signal -- it is
+  # the only evidence that dictation can work there at all.
   # Kept out of ci-check.sh because it is the expensive job: whisper.cpp is
   # compiled from source and the model is a 142MiB download, cached here
   # between runs and verified against the registry pin every time.
   whisper:
-    runs-on: macos-15
+    strategy:
+      fail-fast: false
+      matrix:
+        # macOS covers the Metal path. Linux was added when the Linux
+        # backend became real: whisper is the ONLY recognizer off macOS, so
+        # "does whisper actually transcribe on Linux" is the question that
+        # decides whether dictation works there at all, and nothing asked
+        # it. It runs on CPU here, which is slower but is the same code the
+        # CUDA build runs.
+        os: [macos-15, ubuntu-24.04]
+    runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
+      - name: Install Linux system dependencies
+        if: runner.os == 'Linux'
+        run: scripts/ci-install-linux-deps.sh
       - uses: Swatinem/rust-cache@v2
         with:
-          shared-key: whisper
+          shared-key: whisper-${{ matrix.os }}
       # Keyed by the pinned hash, not by a date: a re-pin must miss the cache
       # and fetch the new file, and an unchanged pin must never re-download.
       - name: Cache the ggml model
         uses: actions/cache@v4
         with:
           path: ~/.outloud/models/whisper-base.en
-          key: whisper-base-en-a03779c86df3323075f5e796cb2ce5029f00ec8869eee3fdfb897afe36c6d002
+          key: whisper-base-en-${{ matrix.os }}-a03779c86df3323075f5e796cb2ce5029f00ec8869eee3fdfb897afe36c6d002
       - run: scripts/ci-whisper.sh
         shell: bash
       - name: Attribute failure
