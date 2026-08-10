@@ -111,14 +111,31 @@ By design: a client observing keys typed into other clients is the exact
 keylogger capability Wayland exists to prevent. There is no equivalent of
 XGrabKey. The options all move the binding out of process:
 
-- **GlobalShortcuts XDG portal** (`org.freedesktop.portal.GlobalShortcuts`):
-  the compositor owns the binding and delivers Activated/**Deactivated**
-  signals over DBus, so push-to-talk works. KDE and GNOME ≥ 45; not
-  universal on wlroots compositors.
-- **Compositor config**: sway/Hyprland users bind keys to `exec` a small
-  IPC trigger we ship.
+- **Compositor config** (implemented, `backend/linux.rs`): sway/Hyprland
+  users bind a key in their compositor config to `exec` a tiny CLI we
+  ship (`outloud trigger press` / `outloud trigger release`), which speaks
+  one line over a unix-domain socket to whatever `outloud` daemon is
+  running. The compositor already owns every keybinding on the system and
+  is trusted with arbitrary `exec`, so this needs no portal negotiation, no
+  DBus session, and works identically on every wlroots compositor that can
+  `exec` on a key edge. Chosen as the primary path because it is the ONLY
+  one of the three that is available today on the actual deployment target
+  (Hyprland), with zero new system dependencies, on a machine whose
+  compositor config the user controls entirely.
+- **GlobalShortcuts XDG portal** (`org.freedesktop.portal.GlobalShortcuts`,
+  detection-only stub in `backend/linux.rs`): the compositor owns the
+  binding and delivers Activated/**Deactivated** signals over DBus, so
+  push-to-talk works. KDE and GNOME ≥ 45; not implemented by Hyprland or
+  most wlroots compositors as of this writing, so building the full
+  session/consent/signal-listening integration now would spend the budget
+  on a path this project's own target machine cannot exercise. Worth
+  finishing for a future KDE/GNOME contributor; not blocking the Hyprland
+  path per the task that added it.
 - **evdev read access** (`input` group): works everywhere, but is literally
-  system-wide key visibility and must be an informed opt-in.
+  system-wide key visibility and must be an informed opt-in. Not attempted.
+
+See "Verifying on a real machine (Linux Wayland)" below for the exact
+compositor config snippet and what still needs a human on real hardware.
 
 ### 8. Windows: RegisterHotKey cannot do push-to-talk
 
@@ -171,15 +188,15 @@ The hook's own traps:
 
 ## Per-platform capability table
 
-| Capability | macOS (CGEventTap) | Windows (WH_KEYBOARD_LL + RegisterHotKey probe) | Linux X11 (planned: XGrabKey/XI2) | Linux Wayland (portal) |
+| Capability | macOS (CGEventTap) | Windows (WH_KEYBOARD_LL + RegisterHotKey probe) | Linux X11 (planned: XGrabKey/XI2) | Linux Wayland (compositor-exec, `backend/linux.rs`) |
 |---|---|---|---|---|
-| Status | **implemented** | **implemented** (compiled in CI; untested on real hardware) | stub | stub |
-| Global key down + up | yes | yes (hook) | yes | via portal Activated/Deactivated |
-| Bare modifier binding (right Option) | yes (flagsChanged + device bits) | yes (VK_RMENU etc.) | XI2 raw events, not XGrabKey | compositor-dependent |
-| Fn/Globe key | yes, with traps above | no standard Fn visibility (vendor drivers) | keyboard-dependent (XF86Fn rarely delivered) | no |
-| Conflict detection | symbolichotkeys + static table; other apps invisible | RegisterHotKey fails on collision (reliable) | XGrabKey BadAccess on collision (reliable) | compositor UI owns conflicts |
-| Silent-death mode | tap disabled on timeout: **handled, re-enabled** | hook silently removed on timeout: **handled, 2s watchdog reinstalls + resets** | X server grab persists | portal session can be revoked |
-| Permission required | Accessibility (already required) | none for hook (but AV heuristics flag it) | none | user consent dialog |
+| Status | **implemented** | **implemented** (compiled in CI; untested on real hardware) | stub | **implemented** (compile-checked and cross-linked for `x86_64-unknown-linux-gnu`; **not run on real Wayland/Hyprland hardware**, see below) |
+| Global key down + up | yes | yes (hook) | yes | yes (compositor's `bind`/`bindr` execs `outloud trigger press`/`release`) |
+| Bare modifier binding (right Option) | yes (flagsChanged + device bits) | yes (VK_RMENU etc.) | XI2 raw events, not XGrabKey | whatever the compositor can bind and `exec` on; no keycode/flags matching needed here since the compositor already decided |
+| Fn/Globe key | yes, with traps above | no standard Fn visibility (vendor drivers) | keyboard-dependent (XF86Fn rarely delivered) | whatever the compositor exposes as a bindable key |
+| Conflict detection | symbolichotkeys + static table; other apps invisible | RegisterHotKey fails on collision (reliable) | XGrabKey BadAccess on collision (reliable) | none from this crate: the compositor's own keybind table is the source of truth and already prevents two `bind`s on one key |
+| Silent-death mode | tap disabled on timeout: **handled, re-enabled** | hook silently removed on timeout: **handled, 2s watchdog reinstalls + resets** | X server grab persists | lost RELEASE trigger (no OS signal that one is missing): **handled, watchdog polls and resets after `OUTLOUD_HOTKEY_TRIGGER_WATCHDOG_MS` (default 120s)**, daemon-not-running: **handled, `outloud trigger` names the daemon as the problem instead of failing silently** |
+| Permission required | Accessibility (already required) | none for hook (but AV heuristics flag it) | none | none: unix socket, 0700/0600 perms + `SO_PEERCRED` own-uid check (same defense as `shell-bridge`) |
 
 ## Verifying on a real machine (Windows)
 
@@ -223,3 +240,91 @@ the real tap, matcher, and timing machine run exactly as for physical keys,
 and asserts the Pressed/Released/Latched/Unlatched sequences. It cannot
 synthesize the Fn flags change; Fn needs fingers (or `CGEventPost` of
 keycode 63, which the window server does translate, see the demo notes).
+
+## Verifying on a real machine (Linux Wayland / Hyprland)
+
+**Everything in this section was compile-checked and cross-linked for
+`x86_64-unknown-linux-gnu` from macOS (typecheck, clippy, and a full test
+binary link, using `cargo check`/`clippy`/`test --no-run` against the
+`x86_64-unknown-linux-gnu` target with a cross C toolchain). None of it has
+been executed on a real Linux/Wayland/Hyprland machine.** The unit tests in
+`crates/hotkey/src/backend/linux.rs` (real unix-domain socket, real threads,
+real watchdog timing via an env override) all pass when run natively on
+macOS's own unix-socket stack, which exercises the same std APIs Linux
+provides, but that is not the same claim as "verified on Hyprland" and this
+file will not pretend otherwise.
+
+### 1. Start the daemon
+
+```bash
+cargo build -p outloud --no-default-features   # headless; add --features display for the GUI/tray
+./target/debug/outloud --chord f13              # any bindable key; F13 avoids clashing with anything
+```
+
+### 2. Add the compositor keybind
+
+Hyprland (`~/.config/hypr/hyprland.conf`, or the equivalent block in a NixOS
+flake's `wayland.windowManager.hyprland.settings.bind`):
+
+```
+bind  = , F13, exec, outloud trigger press
+bindr = , F13, exec, outloud trigger release
+```
+
+`bind` fires on the key going down, `bindr` on release; Hyprland supports
+both natively, matching the tap-hold machine's need for both edges (`docs/
+hotkeys.md` intro). Substitute whatever key `--chord` above was given; it
+does not need to match a real `hotkey::Chord` string on the Linux path
+since the compositor, not this crate's matcher, decides which physical key
+fires — see the module doc in `backend/linux.rs` for why no keycode
+matching happens here at all.
+
+sway (`~/.config/sway/config`):
+
+```
+bindsym F13 exec outloud trigger press
+bindsym --release F13 exec outloud trigger release
+```
+
+Reload the compositor (`hyprctl reload`, or restart sway) after editing.
+
+### 3. What to check with your own eyes
+
+CI and this development machine can compile and cross-link this backend but
+never run it; only a human on the target hardware can confirm these:
+
+1. **Both edges fire.** Hold the key: `outloud: state listening` should
+   appear (or `--no-overlay`'s stderr log line) on press, and commit on
+   release. A quick tap should latch (state stays listening after
+   release), a second tap should unlatch — the exact behaviour documented
+   for the macOS/Windows backends, driven here by the trigger socket
+   instead of an OS-level tap or hook.
+2. **`outloud trigger ping` reports liveness honestly.** With the daemon
+   stopped, `outloud trigger press` must fail with a message naming
+   "is `outloud` running?" (`hotkey::backend::linux::send_trigger`'s doc),
+   not a bare `ENOENT` or silent success. With it running, `outloud
+   --permissions` should show `hotkey: trigger daemon reachable at ...`,
+   and `doctor` (`crates/diag`) should report the `linux-hotkey-trigger`
+   check as PASS.
+3. **A lost RELEASE actually recovers.** Bind only the `bind` (press) line,
+   deliberately omit `bindr`, hold the key once, then release it (nothing
+   fires). Set `OUTLOUD_HOTKEY_TRIGGER_WATCHDOG_MS=5000` before starting
+   the daemon to shrink the wait, and confirm the log shows the watchdog
+   forcing the microphone closed within a few seconds rather than staying
+   hot until the process is killed. This is the one failure mode unique to
+   this backend (the others all react to an OS-delivered "your tap/hook
+   died" signal; this one has none, see `crate::trigger`'s module doc) and
+   is the single most important thing to confirm on real hardware before
+   trusting the backend.
+4. **Compositor reload does not wedge the socket.** Reload Hyprland/sway
+   config a few times while the daemon keeps running; `outloud trigger
+   ping` should keep succeeding throughout (the socket is independent of
+   the compositor process).
+
+### What is NOT covered here
+
+- The XDG GlobalShortcuts portal path (KDE/GNOME) is detection-only
+  (`hotkey::backend::linux::globalshortcuts_portal_available`) and has no
+  binding logic; see its doc comment in `backend/linux.rs` for the full
+  scope of what a real implementation would still need.
+- X11 (XGrabKey/XI2) remains an unimplemented stub, unchanged by this work.
