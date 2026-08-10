@@ -46,8 +46,34 @@
           src = self;
           cargoLock.lockFile = ./Cargo.lock;
           # Linux: cpal pulls alsa-sys, which needs pkg-config + alsa headers.
-          nativeBuildInputs = pkgs.lib.optionals pkgs.stdenv.isLinux [ pkgs.pkg-config ];
+          # makeWrapper: see postFixup below.
+          nativeBuildInputs = pkgs.lib.optionals pkgs.stdenv.isLinux [
+            pkgs.pkg-config
+            pkgs.makeWrapper
+          ];
           buildInputs = pkgs.lib.optionals pkgs.stdenv.isLinux [ pkgs.alsa-lib ];
+
+          # Text delivery on Wayland SHELLS OUT: the synthetic-keys tier runs
+          # `wtype` (virtual-keyboard protocol) and the paste fallback runs
+          # `wl-copy`/`wl-paste`. Those are looked up on PATH at runtime, so
+          # without this the package "works" only on machines that happen to
+          # have them installed globally, and degrades to a confusing
+          # no-delivery state on any other -- the exact class of bug a Nix
+          # package exists to prevent. Wrap the binaries so the tools are
+          # always found, while still PREPENDING rather than replacing PATH
+          # so a user's own newer wtype wins if they want it.
+          postFixup = pkgs.lib.optionalString pkgs.stdenv.isLinux ''
+            for _bin in $out/bin/*; do
+              wrapProgram "$_bin" \
+                --prefix PATH : ${
+                  pkgs.lib.makeBinPath [
+                    pkgs.wtype
+                    pkgs.wl-clipboard
+                  ]
+                }
+            done
+          '';
+
           # The sandboxed nix build is itself the reproducibility check:
           # no network, no impure env, pinned inputs. macOS-specific FFI in
           # ax-edit compiles to the Unsupported stub on Linux, so this
@@ -161,6 +187,8 @@
               # constructing it from `cudaRustPlatform` before it exists
               # here would be a definition-order cycle.
               cudaPkgs.rustPlatform.bindgenHook
+              # makeWrapper: see postFixup below.
+              cudaPkgs.makeWrapper
             ];
             buildInputs = [
               cudaPkgs.alsa-lib
@@ -215,6 +243,23 @@
             # the swarm handoff notes for exactly what still needs a real
             # GPU to confirm.
             doCheck = false;
+
+            # Same Wayland delivery tools as the default package: this is a
+            # separate derivation, so it does NOT inherit that postFixup and
+            # would otherwise ship a CUDA binary that transcribes perfectly
+            # and then cannot type the result anywhere.
+            postFixup = ''
+              for _bin in $out/bin/*; do
+                wrapProgram "$_bin" \\
+                  --prefix PATH : ${
+                    cudaPkgs.lib.makeBinPath [
+                      cudaPkgs.wtype
+                      cudaPkgs.wl-clipboard
+                    ]
+                  }
+              done
+            '';
+
             meta = {
               description = "outloud with whisper.cpp CUDA acceleration (NVIDIA, x86_64-linux)";
               license = pkgs.lib.licenses.mit;
