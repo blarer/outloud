@@ -302,6 +302,11 @@ jobs:
           shared-key: headless
       - name: Install musl tools
         run: sudo apt-get update && sudo apt-get install -y musl-tools
+      # The static musl daemon needs no ALSA headers, but the trigger-IPC
+      # step below builds the ordinary glibc binary, which does (alsa-sys
+      # runs pkg-config for `alsa`).
+      - name: Install Linux system dependencies
+        run: scripts/ci-install-linux-deps.sh
       - name: Build static headless daemon
         run: |
           rustup target add x86_64-unknown-linux-musl
