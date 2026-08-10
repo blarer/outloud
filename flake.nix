@@ -15,7 +15,13 @@
   description = "outloud-spike: local edit-by-voice M0 spike";
 
   inputs = {
-    nixpkgs.url = "github:NixOS/nixpkgs/nixos-25.05";
+    # nixos-unstable, not a stable release: the ALSA client library must be
+    # new enough for the PipeWire ALSA plugin on the host. Pinned to 25.05,
+    # microphone capture failed on current NixOS with
+    # "snd_pcm_open failed ... No such device or address" because
+    # libasound_module_pcm_pipewire.so refused to load into the older
+    # libasound.
+    nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
     rust-overlay = {
       url = "github:oxalica/rust-overlay";
       inputs.nixpkgs.follows = "nixpkgs";
