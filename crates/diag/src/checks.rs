@@ -1335,7 +1335,12 @@ pub fn judge_pgrep_output(text: &str) -> CheckOutcome {
             // machine with one plainly running, the exact failure the
             // comment below already describes for macOS's bare pids.
             let is_bundle = path.contains("OutLoud.app/Contents/MacOS/");
-            let is_unix_daemon = path.ends_with("/outloud") || path.ends_with("/outloud-spiked");
+            let is_unix_daemon = path.ends_with("/outloud")
+                || path.ends_with("/outloud-spiked")
+                // Nix's wrapProgram renames the real binary; if a caller
+                // ever feeds us COMM names rather than paths, count it
+                // rather than silently reporting an empty machine.
+                || path.contains("outloud-wrappe");
             (is_bundle || is_unix_daemon).then(|| path.to_string())
         })
         .collect();
@@ -1376,9 +1381,27 @@ impl Check for RunningInstances {
         //
         // Absent or failing pgrep is not a diagnosis, so it degrades to a
         // pass rather than inventing a fault the user cannot act on.
-        // Case-insensitive: the macOS bundle is "OutLoud", the Unix binary
-        // is "outloud". A case-sensitive pattern found neither on Linux.
-        let out = match Command::new("pgrep").args(["-lfi", "outloud"]).output() {
+        // The flag differs per platform, and each one is wrong on the other.
+        //
+        // macOS: `-lf`, because -a there is not "full command line" and
+        // returns bare pids (see the regression this comment used to
+        // describe on its own).
+        //
+        // Linux: `-af`. `-l` on Linux prints the COMM name, which the
+        // kernel truncates to 15 characters -- for a Nix-wrapped binary
+        // that is the literal string ".outloud-wrappe", with no path in it
+        // at all, so no amount of path matching can classify it. Observed
+        // on NixOS: `pgrep -lf` -> ".outloud-wrappe", `pgrep -af` ->
+        // "/nix/store/...-outloud-cuda-0.1.0/bin/outloud --asr whisper".
+        //
+        // Case-insensitive either way: the macOS bundle is "OutLoud", the
+        // Unix binary is "outloud".
+        let list_flag = if cfg!(target_os = "macos") {
+            "-lfi"
+        } else {
+            "-afi"
+        };
+        let out = match Command::new("pgrep").args([list_flag, "outloud"]).output() {
             Ok(o) => o,
             Err(_) => return CheckOutcome::pass("pgrep unavailable; cannot count daemons"),
         };
@@ -1862,6 +1885,18 @@ mod tests {
             "{}",
             outcome.detail
         );
+    }
+
+    /// A COMM name is not a path, and must not read as an empty machine.
+    ///
+    /// `pgrep -l` on Linux prints the kernel's 15-character COMM name; for
+    /// the Nix-wrapped daemon that is ".outloud-wrappe", with no path at
+    /// all. The check now asks for `-af` on Linux so this should not
+    /// arrive, but if it ever does, counting it beats reporting nothing.
+    #[test]
+    fn a_truncated_nix_wrapper_comm_still_counts() {
+        let outcome = judge_pgrep_output("45771 .outloud-wrappe\n");
+        assert_eq!(outcome.status, Status::Pass, "{}", outcome.detail);
     }
 
     /// Two daemons on Linux must fail exactly as two bundles do on macOS.
