@@ -1327,8 +1327,16 @@ pub fn judge_pgrep_output(text: &str) -> CheckOutcome {
             let path = rest.split_whitespace().next()?;
             // Only real executables: this must not count the osascript
             // helper that reads the bundle's icon, or the doctor itself.
-            path.contains("OutLoud.app/Contents/MacOS/")
-                .then(|| path.to_string())
+            //
+            // Two shapes, because the daemon does not live in a bundle off
+            // macOS. On Linux it is an ordinary binary -- under NixOS,
+            // /nix/store/<hash>-outloud-*/bin/outloud -- so matching only
+            // the bundle path reported "no OutLoud daemon is running" on a
+            // machine with one plainly running, the exact failure the
+            // comment below already describes for macOS's bare pids.
+            let is_bundle = path.contains("OutLoud.app/Contents/MacOS/");
+            let is_unix_daemon = path.ends_with("/outloud") || path.ends_with("/outloud-spiked");
+            (is_bundle || is_unix_daemon).then(|| path.to_string())
         })
         .collect();
 
@@ -1368,7 +1376,9 @@ impl Check for RunningInstances {
         //
         // Absent or failing pgrep is not a diagnosis, so it degrades to a
         // pass rather than inventing a fault the user cannot act on.
-        let out = match Command::new("pgrep").args(["-lf", "OutLoud"]).output() {
+        // Case-insensitive: the macOS bundle is "OutLoud", the Unix binary
+        // is "outloud". A case-sensitive pattern found neither on Linux.
+        let out = match Command::new("pgrep").args(["-lfi", "outloud"]).output() {
             Ok(o) => o,
             Err(_) => return CheckOutcome::pass("pgrep unavailable; cannot count daemons"),
         };
@@ -1831,6 +1841,37 @@ mod tests {
             "{}",
             outcome.detail
         );
+    }
+
+    /// A running daemon on Linux is a plain binary, not a bundle.
+    ///
+    /// Regression: the parser matched only "OutLoud.app/Contents/MacOS/",
+    /// so on NixOS -- where the daemon runs from
+    /// /nix/store/<hash>-outloud-cuda-0.1.0/bin/outloud -- `doctor`
+    /// reported "no OutLoud daemon is running" while it was plainly
+    /// running, and that check is the one that exists to catch TWO copies
+    /// fighting over the microphone.
+    #[test]
+    fn a_nix_store_daemon_counts_as_running() {
+        let outcome = judge_pgrep_output(
+            "33306 /nix/store/j8j9dwdsq5n83xzdvmj5v6xls6rrp187-outloud-cuda-0.1.0/bin/outloud --asr whisper --no-overlay\n",
+        );
+        assert_eq!(outcome.status, Status::Pass, "{}", outcome.detail);
+        assert!(
+            outcome.detail.contains("one OutLoud daemon"),
+            "{}",
+            outcome.detail
+        );
+    }
+
+    /// Two daemons on Linux must fail exactly as two bundles do on macOS.
+    #[test]
+    fn two_unix_daemons_fail() {
+        let outcome = judge_pgrep_output(
+            "1 /nix/store/aaa-outloud-cuda-0.1.0/bin/outloud\n\
+             2 /home/b/.cargo/bin/outloud\n",
+        );
+        assert_eq!(outcome.status, Status::Fail, "{}", outcome.detail);
     }
 
     /// Two bundles is the reported failure.
