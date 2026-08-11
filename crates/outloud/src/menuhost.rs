@@ -314,6 +314,11 @@ impl MenuHost {
         // key-down. It only LOOKED restart-only because the pipeline read it
         // from a Config copied at startup, so the reload had nowhere to land.
         self.runtime.set_sensitivity(self.settings.sensitivity);
+        // The hot-mic safety net, for the same reason: the pipeline used to
+        // read it from the startup Config copy, so shortening the timeout
+        // after noticing a latched microphone did nothing until restart.
+        self.runtime
+            .set_hot_mic_timeout_ms(self.settings.silence_timeout_ms.max(1_000) as u64);
         // Force a rebuild on the next publish.
         self.model = None;
     }

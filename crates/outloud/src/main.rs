@@ -915,6 +915,15 @@ fn main() -> anyhow::Result<()> {
             .as_ref()
             .map(|h| h.silence_timeout_ms())
             .unwrap_or_else(outloud::menuhost::MenuHost::silence_timeout_from_config),
+        // A live view of the same setting, for the same reason as
+        // sensitivity above and with more at stake: this is the net that
+        // force-closes a latched microphone, and until it was published
+        // here, shortening it after noticing a hot mic did nothing until
+        // restart. `--once` has no menu host and keeps the startup value.
+        live_hot_mic_timeout_ms: menu_host.as_ref().map(|_| {
+            let runtime = runtime.clone();
+            std::sync::Arc::new(move || runtime.hot_mic_timeout_ms()) as _
+        }),
         warm_hold_ms: menu_host.as_ref().map_or(0, |h| h.warm_hold_ms()),
         // Per-app profiles need a live config; `--once` has no menu host
         // and therefore no profiles, which keeps its numbers comparable

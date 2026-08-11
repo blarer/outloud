@@ -13,7 +13,7 @@
 //! [`crate::state::StatusShared`] already works: locks held for nanoseconds,
 //! and the reader never blocks the pipeline.
 
-use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicU8, Ordering};
 use std::sync::{Arc, Mutex};
 
 /// What the daemon actually bound and opened.
@@ -72,6 +72,18 @@ pub struct RuntimeShared {
     /// same "settings the process can adopt without a restart" channel the
     /// Pause switch uses.
     sensitivity: Arc<AtomicU8>,
+    /// `silence-timeout-ms`, as an atomic for exactly the same reason as
+    /// `sensitivity` above: the pipeline gets `Config` by value at startup,
+    /// so a value read from that copy is frozen for the life of the process.
+    ///
+    /// This one is worth more than convenience. It is the safety net that
+    /// force-closes the microphone when a tap-to-latch capture is never
+    /// ended, and the generated config header promises edits apply live;
+    /// verified on hardware that they did not, so shortening the timeout
+    /// after noticing a hot microphone did nothing until a restart. The
+    /// setting that limits how long we can be listening is the last one that
+    /// should require restarting the thing that is listening.
+    hot_mic_timeout_ms: Arc<AtomicU64>,
 }
 
 impl Default for RuntimeShared {
@@ -92,6 +104,9 @@ impl RuntimeShared {
             // Matches `Config::default().sensitivity`. Overridden at load,
             // and again on every reload.
             sensitivity: Arc::new(AtomicU8::new(50)),
+            // Matches the schema default for `silence-timeout-ms`.
+            // Overridden at load, and again on every reload.
+            hot_mic_timeout_ms: Arc::new(AtomicU64::new(60_000)),
         }
     }
 
@@ -138,6 +153,22 @@ impl RuntimeShared {
     /// The sensitivity the segmenter should be built with right now.
     pub fn sensitivity(&self) -> u8 {
         self.sensitivity.load(Ordering::Relaxed)
+    }
+
+    /// Publish `silence-timeout-ms` so a reload reaches the running
+    /// pipeline. Clamped to the schema's documented range: a zero would
+    /// mean "close the microphone immediately", i.e. dictation that can
+    /// never record anything, and an unbounded value would defeat the
+    /// safety net entirely.
+    pub fn set_hot_mic_timeout_ms(&self, ms: u64) {
+        self.hot_mic_timeout_ms
+            .store(ms.clamp(1_000, 600_000), Ordering::Relaxed);
+    }
+
+    /// How long capture may run before the pipeline force-commits and
+    /// closes the microphone, as of right now.
+    pub fn hot_mic_timeout_ms(&self) -> u64 {
+        self.hot_mic_timeout_ms.load(Ordering::Relaxed)
     }
 
     /// Record a working capture device. Also clears the blocked flag: a

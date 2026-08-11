@@ -289,9 +289,8 @@ const PREAMBLE: &str = concat!(
     "# OutLoud configuration. Every setting below is shown at its built-in\n",
     "# default and commented out; uncomment a line to change it.\n",
     "#\n",
-    "# Most edits apply live (no restart). Two do not: the hotkey, which\n",
-    "# binds at launch, and silence-timeout-ms, which the pipeline reads\n",
-    "# once when capture starts. Full reference: docs/configuration.md\n\n",
+    "# Edits apply live (no restart) except the hotkey, which binds at\n",
+    "# launch. Full reference: docs/configuration.md\n\n",
 );
 
 /// Every key and its current default, commented out.

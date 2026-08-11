@@ -103,6 +103,17 @@ pub struct Config {
     /// `None` for hosts with no live config (the `--once` measurement path),
     /// which then use the flat `sensitivity` field unchanged.
     pub live_sensitivity: Option<std::sync::Arc<dyn Fn() -> u8 + Send + Sync>>,
+    /// Live `silence-timeout-ms`, when the host has one to offer.
+    ///
+    /// Same freeze as `live_sensitivity`, and a worse consequence:
+    /// `hot_mic_timeout_ms` below is a snapshot, so shortening the safety
+    /// net after noticing a latched microphone did nothing until restart --
+    /// verified on hardware. The setting that bounds how long we may listen
+    /// must not require restarting the listener.
+    ///
+    /// `None` for hosts with no live config (the `--once` measurement path),
+    /// which then use the flat `hot_mic_timeout_ms` field unchanged.
+    pub live_hot_mic_timeout_ms: Option<std::sync::Arc<dyn Fn() -> u64 + Send + Sync>>,
     /// The merged vocabulary for `vocabulary.sets`, when any are active.
     ///
     /// `None` skips the correction pass entirely, which is the common path:
@@ -144,6 +155,7 @@ impl Default for Config {
             // The schema default, kept in one place.
             sensitivity: 50,
             hot_mic_timeout_ms: 60_000,
+            live_hot_mic_timeout_ms: None,
             // Off unless the user asks: the default must be the honest
             // indicator, not the faster one.
             warm_hold_ms: 0,
@@ -295,12 +307,12 @@ pub async fn run(
             // here regardless of how capture was started.
             _ = tokio::time::sleep_until(tokio::time::Instant::from_std(
                 capture_opened_at
-                    .map(|t| t + std::time::Duration::from_millis(cfg.hot_mic_timeout_ms))
+                    .map(|t| t + std::time::Duration::from_millis(current_hot_mic_timeout_ms(&cfg)))
                     .unwrap_or_else(Instant::now),
             )), if capture_opened_at.is_some() => {
                 eprintln!(
                     "outloud: capture ran for {}s without ending; closing the microphone",
-                    cfg.hot_mic_timeout_ms / 1000
+                    current_hot_mic_timeout_ms(&cfg) / 1000
                 );
                 // Commit rather than discard: the user spoke, and throwing
                 // their words away to fix a stuck mic trades one silent
@@ -1209,6 +1221,15 @@ type Segmenter = audio::segment::SpeechSegmenter<audio::vad::EnergyVad>;
 /// Prefers the host's live value so a config reload takes effect at the next
 /// key-down rather than the next launch, and falls back to the startup
 /// snapshot for hosts that have no live config.
+/// The hot-mic timeout in force right now: the live view when the host has
+/// one, else the value copied at startup.
+fn current_hot_mic_timeout_ms(cfg: &Config) -> u64 {
+    cfg.live_hot_mic_timeout_ms
+        .as_ref()
+        .map(|f| f())
+        .unwrap_or(cfg.hot_mic_timeout_ms)
+}
+
 fn current_sensitivity(cfg: &Config) -> u8 {
     let v = cfg
         .live_sensitivity
@@ -1591,6 +1612,39 @@ mod tests {
         assert_eq!(
             current_sensitivity(&live),
             80,
+            "a reload must beat the value copied at startup"
+        );
+    }
+
+    /// The pipeline must read the hot-mic timeout through the live view.
+    ///
+    /// Same shape as the sensitivity test above, and the same bug: the
+    /// value was published to a runtime the pipeline never consulted, so
+    /// the generated config's promise that edits apply live was false for
+    /// the one setting that bounds how long the microphone may stay open.
+    /// Verified on hardware before the fix: editing silence-timeout-ms and
+    /// latching capture left the old timeout in force until restart.
+    #[test]
+    fn live_hot_mic_timeout_overrides_the_startup_snapshot() {
+        let snapshot_only = Config {
+            hot_mic_timeout_ms: 60_000,
+            live_hot_mic_timeout_ms: None,
+            ..Default::default()
+        };
+        assert_eq!(
+            current_hot_mic_timeout_ms(&snapshot_only),
+            60_000,
+            "with no live view, the startup value stands"
+        );
+
+        let live = Config {
+            hot_mic_timeout_ms: 60_000,
+            live_hot_mic_timeout_ms: Some(std::sync::Arc::new(|| 5_000)),
+            ..Default::default()
+        };
+        assert_eq!(
+            current_hot_mic_timeout_ms(&live),
+            5_000,
             "a reload must beat the value copied at startup"
         );
     }

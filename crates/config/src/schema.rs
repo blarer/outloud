@@ -284,8 +284,7 @@ pub fn schema() -> &'static [KeySpec] {
                 doc: "Safety net: force-commit and close the microphone after \
                       capture has run this long. Push-to-talk ends on key \
                       release; tap-to-latch waits for a second tap that may \
-                      never come. Read once at launch: unlike most settings, \
-                      an edit here needs a restart to take effect.",
+                      never come.",
                 wired: true,
             },
             KeySpec {
