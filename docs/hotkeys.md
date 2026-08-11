@@ -288,6 +288,33 @@ bindsym --release F13 exec outloud trigger release
 
 Reload the compositor (`hyprctl reload`, or restart sway) after editing.
 
+#### Picking a key that can actually fire
+
+Two traps, both of which look like the software is broken. Verified on real
+hardware (Hyprland 0.56, NixOS, a Wooting 80HE):
+
+- **Do not bind a bare modifier.** `bind = , Alt_R, ...` registers happily
+  and never fires. `hyprctl binds` lists it twice, press and release, and
+  the physical key does nothing, while `outloud trigger press` by hand
+  drives the daemon to `state listening`. A modifier press is not a keybind
+  event: the compositor is deciding whether it begins a chord. Same applies
+  to Super, Ctrl, Shift and to `caps:super` / `caps:hyper`, which keep Caps
+  Lock a modifier.
+
+- **Check that an XKB option exists before trusting it.** `caps:f13` looks
+  obvious and is not real. xkbcommon and Hyprland both accept an unknown
+  option silently -- `hyprctl getoption input:kb_options` will even read it
+  back to you as if set -- and simply do nothing, so Caps Lock stays Caps
+  Lock and the bind can never fire. The real list:
+
+  ```
+  grep 'caps:' "$(nix eval --raw nixpkgs#xkeyboard_config)"/share/X11/xkb/rules/base.lst
+  ```
+
+  On this machine the working choice was `caps:menu`: Menu is an ordinary
+  non-modifier key that essentially nothing else binds, and Caps Lock is
+  under the left pinky.
+
 ### 3. What to check with your own eyes
 
 CI and this development machine can compile and cross-link this backend but
