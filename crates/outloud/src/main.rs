@@ -1371,11 +1371,53 @@ fn overlay_main(
 )))]
 fn overlay_main(
     _shared: outloud::state::StatusShared,
-    _menu_host: Option<outloud::menuhost::MenuHost>,
+    menu_host: Option<outloud::menuhost::MenuHost>,
     _runtime: outloud::runtime::RuntimeShared,
     run_pipeline: impl FnOnce() -> anyhow::Result<()> + Send + 'static,
 ) -> anyhow::Result<()> {
-    // Unreachable in practice (main() branches on the same cfg), kept so the
-    // symbol exists on every build target.
-    run_pipeline()
+    // Linux and every other display-less build land here, and this is the
+    // ONLY place config reload can be driven on them.
+    //
+    // The macOS and Windows paths call `poll_file_changes` from their render
+    // loop every frame. This build has no render loop, and the parameter was
+    // `_menu_host`: the host was constructed, its watcher thread started,
+    // and then nothing ever drained it, so NO setting applied live on Linux
+    // -- not sensitivity, not enabled/paused, not the hot-mic safety net --
+    // while the generated config header promised they all did. Found by
+    // editing silence-timeout-ms on a running daemon and watching the old
+    // value stay in force.
+    //
+    // So: run the pipeline on a thread and poll the watcher here. A second
+    // of latency is imperceptible for a config edit and costs a wakeup a
+    // second, versus the frame-rate polling a GUI does anyway.
+    let Some(mut host) = menu_host else {
+        // `--once` has no host and exits after one utterance; nothing to
+        // reload into.
+        return run_pipeline();
+    };
+
+    let (tx, rx) = std::sync::mpsc::channel();
+    let pipeline = std::thread::Builder::new()
+        .name("outloud-pipeline".into())
+        .spawn(move || {
+            let result = run_pipeline();
+            // Send failure is fine: it means the poller already gave up.
+            let _ = tx.send(result);
+        })?;
+
+    loop {
+        match rx.recv_timeout(std::time::Duration::from_secs(1)) {
+            Ok(result) => {
+                // Join so a panicking pipeline surfaces as a panic rather
+                // than a silently detached thread.
+                let _ = pipeline.join();
+                return result;
+            }
+            Err(std::sync::mpsc::RecvTimeoutError::Timeout) => host.poll_file_changes(),
+            Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
+                let _ = pipeline.join();
+                anyhow::bail!("pipeline thread died without reporting")
+            }
+        }
+    }
 }
