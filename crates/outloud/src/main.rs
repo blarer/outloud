@@ -991,7 +991,27 @@ fn main() -> anyhow::Result<()> {
                                 // the app looked dead or, worse, looked like
                                 // the target app was broken.
                                 if hotkey::has_input_monitoring() {
-                                    eprintln!("outloud: hold {display} to dictate");
+                                    // On the compositor-exec backend the
+                                    // chord is not the key: the compositor
+                                    // owns the binding and this process only
+                                    // receives PRESS/RELEASE over a socket
+                                    // (see crates/hotkey/src/backend/linux.rs).
+                                    // Naming `display` here told a Linux user
+                                    // to hold right-option -- a key that does
+                                    // nothing on their machine -- while the
+                                    // key that works was whatever their
+                                    // hyprland.conf execs. Cost real
+                                    // confusion: the daemon looked broken, or
+                                    // the user went hunting for extra keys.
+                                    if cfg!(all(unix, not(target_os = "macos"))) {
+                                        eprintln!(
+                                            "outloud: ready; hold whichever key your compositor \
+                                             binds to `outloud trigger press` (see \
+                                             docs/hotkeys.md)"
+                                        );
+                                    } else {
+                                        eprintln!("outloud: hold {display} to dictate");
+                                    }
                                 } else {
                                     eprintln!(
                                         "outloud: WARNING: no Input Monitoring access, so \
