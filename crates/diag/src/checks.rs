@@ -838,12 +838,16 @@ impl Check for AudioInput {
     }
 
     fn run(&self, _env: &Env) -> CheckOutcome {
+        #[cfg(all(unix, not(target_os = "macos")))]
+        {
+            return probe_alsa_inputs();
+        }
+        #[cfg(not(all(unix, not(target_os = "macos"))))]
         if !cfg!(target_os = "macos") {
             return CheckOutcome::warn(
-                "audio device probe unimplemented off macOS",
+                "audio device probe unimplemented on this platform",
                 ErrorClass::Environment,
-                "verify an input device exists with your platform's audio tool (e.g. \
-                 `arecord -l`)",
+                "verify an input device exists with your platform's audio tool",
             );
         }
         // system_profiler is slow (~1s) but dependency-free and honest.
@@ -873,6 +877,60 @@ impl Check for AudioInput {
             ),
         }
     }
+}
+
+/// Enumerate capture devices from /proc/asound, no external tools needed.
+///
+/// This existed as a shrug ("probe unimplemented off macOS") and the cost was
+/// real: a headset that was present, unmuted and at full volume recorded pure
+/// silence, and because nothing checked, the search started at the software
+/// and worked backwards for an hour. `doctor` naming the devices it can see is
+/// what turns "dictation is broken" into "that device is not capturing".
+///
+/// /proc rather than shelling out to `arecord`: alsa-utils is not installed
+/// everywhere (it is absent on the NixOS box this was written for), and a
+/// check that reports "unknown" because a tool is missing is the same shrug
+/// in a different costume.
+#[cfg(all(unix, not(target_os = "macos")))]
+fn probe_alsa_inputs() -> CheckOutcome {
+    // Each capture device appears as a "cardN" line in this file. Absent
+    // entirely means no ALSA at all, which is its own answer.
+    let Ok(pcm) = std::fs::read_to_string("/proc/asound/pcm") else {
+        return CheckOutcome::warn(
+            "no /proc/asound/pcm: cannot enumerate audio devices",
+            ErrorClass::Environment,
+            "is this a container without /proc/asound bind-mounted? check with `arecord -l`",
+        );
+    };
+
+    let count = count_capture_devices(&pcm);
+
+    if count == 0 {
+        return CheckOutcome::fail(
+            "no audio capture device found",
+            ErrorClass::Environment,
+            "connect a microphone; dictation has nothing to capture without one. \
+             If one is plugged in, check it is enumerated: `arecord -l`, or \
+             `wpctl status` under PipeWire.",
+        );
+    }
+
+    CheckOutcome::pass(format!(
+        "{count} capture device(s) present. NOTE: presence is not capture -- a muted \
+         boom arm or a headset paired to a phone enumerates normally and records \
+         silence. Verify with: arecord -d 2 -f S16_LE -r 16000 -c 1 /tmp/t.wav && \
+         sox /tmp/t.wav -n stat"
+    ))
+}
+
+/// Count capture devices in /proc/asound/pcm content.
+///
+/// "00-00: ... : ... : playback 1 : capture 1" -- only the capture side
+/// matters, and a machine with speakers but no microphone is exactly the case
+/// this exists to name. Split out from the probe so it can be tested without
+/// a /proc to read.
+pub fn count_capture_devices(pcm: &str) -> usize {
+    pcm.lines().filter(|l| l.contains("capture")).count()
 }
 
 // ---------------------------------------------------------------------------
@@ -1885,6 +1943,29 @@ mod tests {
             "{}",
             outcome.detail
         );
+    }
+
+    /// Playback-only hardware must not read as "you have a microphone".
+    ///
+    /// The Linux audio-input check used to be a shrug ("probe unimplemented
+    /// off macOS"), which cost an hour of searching software for what was a
+    /// dead microphone.
+    #[test]
+    fn capture_devices_are_counted_separately_from_playback() {
+        // Real /proc/asound/pcm shape.
+        let both = "00-00: ALC1220 Analog : ALC1220 Analog : playback 1 : capture 1\n\
+                    01-00: HDMI 0 : HDMI 0 : playback 1\n";
+        assert_eq!(count_capture_devices(both), 1);
+
+        let playback_only = "01-00: HDMI 0 : HDMI 0 : playback 1\n\
+                             02-00: HDMI 1 : HDMI 1 : playback 1\n";
+        assert_eq!(
+            count_capture_devices(playback_only),
+            0,
+            "speakers are not a microphone"
+        );
+
+        assert_eq!(count_capture_devices(""), 0);
     }
 
     /// A COMM name is not a path, and must not read as an empty machine.
