@@ -84,6 +84,12 @@ pub struct RuntimeShared {
     /// setting that limits how long we can be listening is the last one that
     /// should require restarting the thing that is listening.
     hot_mic_timeout_ms: Arc<AtomicU64>,
+    /// `microphone`: the user's preferred input device name, or None for
+    /// "auto" (follow the system default). In the live-reload channel
+    /// rather than the startup Config copy because the microphone is
+    /// opened per utterance: reading this at each open is what makes an
+    /// edit apply on the NEXT utterance instead of the next restart.
+    preferred_microphone: Arc<Mutex<Option<String>>>,
 }
 
 impl Default for RuntimeShared {
@@ -107,6 +113,8 @@ impl RuntimeShared {
             // Matches the schema default for `silence-timeout-ms`.
             // Overridden at load, and again on every reload.
             hot_mic_timeout_ms: Arc::new(AtomicU64::new(60_000)),
+            // Matches the schema default `microphone = "auto"`.
+            preferred_microphone: Arc::new(Mutex::new(None)),
         }
     }
 
@@ -169,6 +177,29 @@ impl RuntimeShared {
     /// closes the microphone, as of right now.
     pub fn hot_mic_timeout_ms(&self) -> u64 {
         self.hot_mic_timeout_ms.load(Ordering::Relaxed)
+    }
+
+    /// Publish the configured device preference (`microphone` key).
+    /// `"auto"`, the schema default, means no preference. Compared
+    /// case-insensitively downstream, so stored as given.
+    pub fn set_preferred_microphone(&self, value: &str) {
+        let normalized = match value.trim() {
+            "" | "auto" => None,
+            name => Some(name.to_string()),
+        };
+        *self
+            .preferred_microphone
+            .lock()
+            .expect("runtime lock poisoned") = normalized;
+    }
+
+    /// The device name capture should prefer, or None to follow the
+    /// system default. Read at every per-utterance stream open.
+    pub fn preferred_microphone(&self) -> Option<String> {
+        self.preferred_microphone
+            .lock()
+            .expect("runtime lock poisoned")
+            .clone()
     }
 
     /// Record a working capture device. Also clears the blocked flag: a

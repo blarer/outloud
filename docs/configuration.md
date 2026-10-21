@@ -93,7 +93,7 @@ Both spellings work: dotted keys (`insertion.mode = "stream"`) or tables
 | Key | Default | Effect |
 |---|---|---|
 | `hotkey` | `"right-option"` | Push-to-talk key. Hold to dictate, tap to latch. |
-| `microphone` | `"auto"` | Input device name, or `"auto"` to follow the system default. |
+| `microphone` | `"auto"` | Input device name, or `"auto"` to follow the system default. Matched case-insensitively, exact or substring (`"blackshark"` finds "Headset Microphone (Razer BlackShark V2 Pro)"). A named device that is missing falls back to the default and says so in the tray. Applies on the next utterance. |
 | `language` | `"auto"` | Recognition language code (e.g. `"en"`), or `"auto"` to detect. |
 | `model` | `"balanced"` | Recognizer trade-off: `fast`, `balanced`, or `accurate`. |
 | `enabled` | `true` | Master switch. Profiles set this `false` to mute the tool in an app. |

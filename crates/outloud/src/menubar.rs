@@ -97,6 +97,8 @@ pub struct Status {
 #[derive(Debug, Clone, PartialEq)]
 pub struct Settings {
     pub hotkey: String,
+    /// `microphone`: preferred input device name, or "auto".
+    pub microphone: String,
     pub model: String,
     pub insertion_mode: String,
     pub casing: String,
@@ -151,6 +153,7 @@ impl Default for Settings {
         };
         Settings {
             hotkey: s("hotkey"),
+            microphone: s("microphone"),
             model: s("model"),
             insertion_mode: s("insertion.mode"),
             casing: s("formatting.casing"),
@@ -206,6 +209,7 @@ impl Settings {
         };
         Settings {
             hotkey: s("hotkey", "right-option"),
+            microphone: s("microphone", "auto"),
             model: s("model", "balanced"),
             insertion_mode: s("insertion.mode", "on-release"),
             casing: s("formatting.casing", "standard"),

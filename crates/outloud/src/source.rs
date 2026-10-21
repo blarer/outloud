@@ -122,7 +122,11 @@ pub fn spawn_mic(
     let (producer, consumer) = audio::ring::ring(audio::SAMPLE_RATE as usize * 10);
 
     let tx_events = tx.clone();
-    let handle = audio::capture::start_capture(producer, move |ev| {
+    // The `microphone` config key, read at THIS open (the mic is opened
+    // per utterance) so an edit applies on the next key-down, not the
+    // next restart. None = "auto": follow the system default.
+    let preferred = runtime.preferred_microphone();
+    let handle = audio::capture::start_capture_preferring(producer, preferred, move |ev| {
         use audio::capture::CaptureEvent::*;
         let mapped = match ev {
             Started { device } => {

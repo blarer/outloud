@@ -191,7 +191,10 @@ pub fn schema() -> &'static [KeySpec] {
                 default: s("auto"),
                 constraint: None,
                 doc: "Input device name, or \"auto\" to follow the system default.",
-                wired: false,
+                // Read at every per-utterance stream open (runtime channel
+                // pushed by MenuHost::reload), matched exact-or-substring,
+                // case-insensitive, by audio::capture::matches_preference.
+                wired: true,
             },
             KeySpec {
                 key: "language",
@@ -444,6 +447,9 @@ mod tests {
             wired,
             vec![
                 "hotkey",
+                // Device preference: read at every per-utterance stream
+                // open via the runtime live channel (source::spawn_mic).
+                "microphone",
                 "enabled",
                 "insertion.mode",
                 "microphone.sensitivity",

@@ -380,6 +380,12 @@ impl MenuHost {
         // after noticing a latched microphone did nothing until restart.
         self.runtime
             .set_hot_mic_timeout_ms(self.settings.silence_timeout_ms.max(1_000) as u64);
+        // The device preference, for the same reason: the microphone is
+        // opened per utterance from the runtime's live channel, so pushing
+        // it here makes a config edit pick the new device on the very next
+        // key-down.
+        self.runtime
+            .set_preferred_microphone(&self.settings.microphone);
         // Force a rebuild on the next publish.
         self.model = None;
     }
