@@ -93,4 +93,10 @@ windows = { version = "0.62", features = [
     # RegCreateKeyExW/RegSetValueExW/RegDeleteValueW on HKCU\...\Run: the
     # launch-at-login login item (outloud::autostart).
     "Win32_System_Registry",
+    # AttachConsole/SetStdHandle: the GUI-subsystem build's stdio rescue
+    # (outloud::winlog). Without it every println after windows_subsystem
+    # is silently discarded.
+    "Win32_System_Console",
+    # CreateFileW for CONOUT$ and the append-mode outloud.log.
+    "Win32_Storage_FileSystem",
 ] }

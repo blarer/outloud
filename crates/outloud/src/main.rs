@@ -1,3 +1,12 @@
+// GUI subsystem on Windows release builds: no console window flashes up on
+// a double-click or a login-item start. Debug builds keep the console so
+// `cargo run` during development still shows output without ceremony.
+// Safe only because winlog::init() (called first thing in main) reroutes
+// stdout/stderr: with no console, GetStdHandle is NULL and Rust silently
+// DISCARDS every println -- so without the reroute this attribute would
+// turn every error message into nothing. See crates/outloud/src/winlog.rs.
+#![cfg_attr(all(windows, not(debug_assertions)), windows_subsystem = "windows")]
+
 //! `outloud` binary: argument parsing, frontend selection, thread layout.
 //!
 //! Thread layout on macOS with a display: the MAIN thread runs the AppKit
@@ -827,6 +836,12 @@ fn run_trigger_subcommand(args: Vec<String>) -> anyhow::Result<()> {
 }
 
 fn main() -> anyhow::Result<()> {
+    // FIRST, before anything can print: point stdout/stderr somewhere real.
+    // In the GUI-subsystem release build there is no console, and without
+    // this every println/eprintln in the entire process is silently
+    // discarded (parent shell if launched from one, outloud.log otherwise).
+    outloud::winlog::init();
+
     // Runs on EVERY exit path, including the `?` early returns below.
     //
     // A clipboard paste hands the pasteboard back ~300ms later on a
