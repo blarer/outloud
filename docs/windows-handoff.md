@@ -89,6 +89,7 @@ The workspace now passes on Windows: 0 failures, `clippy -D warnings` clean.
 
 ```powershell
 powershell -File scripts\verify-doubleclick-windows.ps1   # launches like Explorer does
+powershell -File scripts\verify-first-run-windows.ps1    # ...with no model installed either
 powershell -File scripts\verify-undo-windows.ps1 -DryRun  # routing only, writes nothing
 powershell -File scripts\verify-undo-windows.ps1          # real writes into Notepad
 scripts\verify-undo-unattended.bat                        # same, no confirmation prompt

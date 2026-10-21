@@ -34,17 +34,19 @@ That is a real limitation and it is stated here rather than in a footnote:
   nothing. `doctor` says so on those versions rather than reporting a clean
   bill of health.
 - **whisper.cpp is implemented** and is the open-weights path. Parakeet TDT is
-  still a stub. Windows and Linux have no working recognizer yet.
+  still a stub. On Windows and Linux whisper.cpp is the default and fetches its
+  model on first use; Linux has no working *injection* backend yet.
 
 If a fully open stack is what you need today, this is not yet that. It is the
 rest of the machine built around one, and the recognizer is a seam designed to
 be swapped ([`crates/asr`](crates/asr)).
 
 **Status: working prototype.** Dictation, edit-by-voice, and shell command-line
-editing are verified end to end on macOS. Windows backends (UI Automation,
-keyboard hook, layered overlay) are implemented and compile in CI on real
-Windows runners, but have not been exercised on Windows hardware. Linux is
-still designed and stubbed. See [what works](#what-works-today).
+editing are verified end to end on macOS. On Windows, dictation, undo, the
+keyboard hook and the per-app transport rules have been exercised on real
+hardware; what nobody has confirmed there is how the overlay *looks*. Linux is
+still designed and stubbed. See [what works](#what-works-today) and the
+[Windows status table](#windows-status-precisely).
 
 ## How it works
 
@@ -137,9 +139,14 @@ row claims below is what was actually observed, not what compiles:
 | Terminal | ConPTY bracketed paste (owned pseudoconsole) | implemented; foreign console needs a helper process |
 | Shell integration | unix-socket bridge | **not ported** (needs named pipe + PSReadLine module) |
 
-Windows needs a whisper model: put a `ggml-*.bin` beside the executable, or
-point `OUTLOUD_WHISPER_MODEL` at one. Apple's recognizer is macOS-only, so
-`--asr whisper` is the default everywhere else.
+Windows needs a whisper model, and fetches one itself on first use
+(`whisper-base.en`, 148MB, SHA256-pinned, into `~/.outloud/models`). To use a
+model you already have, put a `ggml-*.bin` beside the executable or point
+`OUTLOUD_WHISPER_MODEL` at it; either beats the download. To refuse the fetch
+entirely, set `recognizer.auto-download = false` or `OUTLOUD_NO_DOWNLOAD=1`,
+and the daemon will name the model it wanted instead of reaching the network.
+Apple's recognizer is macOS-only, so `--asr whisper` is the default everywhere
+else.
 
 `docs/windows-handoff.md` has the traps worth knowing before changing any of
 this, and the scripts that verify each row.
@@ -420,7 +427,7 @@ evidence in [`docs/beta-readiness.md`](docs/beta-readiness.md).
 | Bluetooth clips the first word | The headset needs ~200ms to start capturing; the daemon warns you once per device | Set `microphone.warm-hold-ms = 2000`, or hold the key a beat before speaking |
 | Freeform edits are not wired up | "tighten this up" reports that it needs the language model | Use the literal commands listed above |
 | Linux cannot type at all | `outloud` compiles for Linux, but every text delivery tier refuses: there is no X11/Wayland key synthesis. It declines without touching your clipboard | macOS only for now |
-| Windows is unexercised | Built and lint-checked for Windows every commit, but not run there recently | Treat Windows as unverified |
+| The Windows overlay is unverified visually | Dictation, undo and the hotkey are exercised on real hardware, but nobody has confirmed the Direct2D overlay draws the *right* pixels; no CI job can see them | Report what you see; the rest of the Windows path works |
 
 ### Dictating during a call
 
