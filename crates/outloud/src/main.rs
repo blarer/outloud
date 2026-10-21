@@ -290,6 +290,55 @@ fn discover_whisper_model() -> Option<String> {
     None
 }
 
+/// The registry id of the model `--asr whisper` fetches when it has none.
+///
+/// base.en: 148MB and ~10% WER, against 1.6GB for large-v3-turbo. The small
+/// model is the right default for a push-to-talk tool where the whole budget
+/// is 500ms, and it is the one entry in the registry with a verified pin.
+const WHISPER_MODEL_ID: &str = "whisper-base.en";
+
+/// Download the pinned whisper model into the cache, reporting progress.
+///
+/// Separate from the recognizer construction so the "no model" path reads as
+/// one decision: look, then fetch, then fail with something actionable.
+fn fetch_whisper_model() -> anyhow::Result<String> {
+    let spec = asr::models::registry()
+        .into_iter()
+        .find(|s| s.id == WHISPER_MODEL_ID)
+        .ok_or_else(|| anyhow::anyhow!("no registry entry for {WHISPER_MODEL_ID}"))?;
+    let dir = asr::models::default_cache_dir();
+
+    // Say what is about to happen BEFORE the first byte. A silent 148MB
+    // stall is indistinguishable from a hang, and this project has been
+    // bitten by exactly that shape of silence more than once.
+    eprintln!(
+        "outloud: no recognizer model yet; downloading {} ({} MB, once) to {}",
+        spec.id,
+        spec.approx_bytes / 1_000_000,
+        dir.display()
+    );
+    eprintln!(
+        "outloud: licence {} -- set recognizer.auto-download = false to skip this",
+        spec.license
+    );
+
+    // Throttled to whole percents: `fetch` reports after every 64KB chunk,
+    // which would be ~2300 lines for this file.
+    let mut last_pct = u64::MAX;
+    let path = asr::models::fetch(&spec, &dir, |p| {
+        let Some(total) = p.bytes_total.filter(|t| *t > 0) else {
+            return;
+        };
+        let pct = p.bytes_done * 100 / total;
+        if pct != last_pct {
+            last_pct = pct;
+            eprintln!("outloud: downloading model {pct}%");
+        }
+    })?;
+    eprintln!("outloud: model ready at {}", path.display());
+    Ok(path.to_string_lossy().into_owned())
+}
+
 fn parse_args() -> anyhow::Result<Args> {
     let mut args = Args {
         once: false,
@@ -463,22 +512,49 @@ fn make_recognizer_factory(kind: &str, sensitivity: u8) -> anyhow::Result<Recogn
         // rather than a URL to go figure out yourself: on Linux especially,
         // there is no default recognizer at all without this, so a vague
         // error here means the product looks broken rather than unconfigured.
+        //
+        // And when none of those find anything, FETCH it rather than
+        // only printing that curl command. asr::models::fetch has had
+        // resume, SHA256 verification and a pinned registry entry for
+        // months with no caller but examples and tests, so a fresh
+        // machine could not dictate at all: on Windows, where whisper is
+        // the default, that meant the app did not work. Refusable via
+        // recognizer.auto-download / OUTLOUD_NO_DOWNLOAD.
         "whisper" => {
             let path = std::env::var("OUTLOUD_WHISPER_MODEL")
                 .ok()
-                .or_else(discover_whisper_model)
-                .ok_or_else(|| {
-                    anyhow::anyhow!(
-                        "--asr whisper needs a model. Fetch one:\n  \
-                         mkdir -p {}\n  \
-                         curl -L -o {}/whisper-base.en \\\n    \
-                         https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-base.en.bin\n\
-                         (142MiB, MIT-licensed weights) then rerun, or put a ggml .bin \
-                         next to outloud, or set OUTLOUD_WHISPER_MODEL to one.",
-                        config::model_dir().display(),
-                        config::model_dir().display(),
-                    )
-                })?;
+                .or_else(discover_whisper_model);
+            let path = match path {
+                Some(p) => p,
+                None if outloud::menuhost::MenuHost::auto_download_from_config() => {
+                    // A failed fetch must still explain the manual route:
+                    // an offline or air-gapped machine cannot be left with
+                    // only a transport error.
+                    fetch_whisper_model().map_err(|e| {
+                        anyhow::anyhow!(
+                            "could not download the recognizer model ({e}).\n  \
+                             Fetch it by hand:\n  \
+                             mkdir -p {}\n  \
+                             curl -L -o {}/whisper-base.en \\\n    \
+                             https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-base.en.bin\n\
+                             then rerun, or set OUTLOUD_WHISPER_MODEL to a ggml .bin.",
+                            config::model_dir().display(),
+                            config::model_dir().display(),
+                        )
+                    })?
+                }
+                None => anyhow::bail!(
+                    "--asr whisper needs a model and automatic download is off \
+                     (recognizer.auto-download / OUTLOUD_NO_DOWNLOAD). Fetch one:\n  \
+                     mkdir -p {}\n  \
+                     curl -L -o {}/whisper-base.en \\\n    \
+                     https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-base.en.bin\n\
+                     (142MiB, MIT-licensed weights) then rerun, or put a ggml .bin \
+                     next to outloud, or set OUTLOUD_WHISPER_MODEL to one.",
+                    config::model_dir().display(),
+                    config::model_dir().display(),
+                ),
+            };
             Ok(Box::new(move || {
                 let r = asr::backends::whisper_cpp::WhisperCppRecognizer::new(
                     std::path::Path::new(&path),

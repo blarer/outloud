@@ -278,6 +278,17 @@ pub fn schema() -> &'static [KeySpec] {
                 wired: true,
             },
             KeySpec {
+                key: "recognizer.auto-download",
+                default: Value::Bool(true),
+                constraint: None,
+                doc: "Fetch the recognizer model on first use when it is not \
+                      already on disk. Off means the daemon refuses to start \
+                      instead, naming the model it wanted; set it false on a \
+                      metered connection or an air-gapped machine. Only the \
+                      whisper backend needs a download at all.",
+                wired: true,
+            },
+            KeySpec {
                 key: "silence-timeout-ms",
                 default: Value::Int(60_000),
                 constraint: IntRange(1_000, 600_000),
@@ -429,6 +440,10 @@ mod tests {
                 "insertion.mode",
                 "microphone.sensitivity",
                 "microphone.warm-hold-ms",
+                // Read by make_recognizer_factory before the pipeline (and so
+                // before any menu host) exists, because it gates whether a
+                // missing model may be downloaded.
+                "recognizer.auto-download",
                 "silence-timeout-ms",
                 "overlay.position"
             ]
@@ -441,7 +456,17 @@ mod tests {
         // Not asserted as a fixed list on purpose: this number should only
         // ever go DOWN, and pinning it exactly would make wiring a setting
         // fail an unrelated-looking test. What must hold is the invariant.
-        assert_eq!(inert.len(), schema().len() - 7);
+        //
+        // Derived from the wired count rather than written as a literal: the
+        // literal was `- 7`, so adding ANY key failed here with an arithmetic
+        // mismatch that said nothing about what was wrong. The invariant is
+        // that the two sets partition the schema.
+        let wired = schema().iter().filter(|s| s.wired).count();
+        assert_eq!(
+            inert.len(),
+            schema().len() - wired,
+            "every key is either wired or inert, with no third state"
+        );
         assert!(
             !inert.contains(&"silence-timeout-ms"),
             "silence-timeout-ms is wired: the pipeline force-closes a hot mic on it"

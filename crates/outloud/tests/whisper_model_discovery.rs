@@ -40,7 +40,22 @@ use std::path::Path;
 use std::process::Command;
 
 fn run_with_home(home: &Path) -> (bool, String) {
-    let out = Command::new(env!("CARGO_BIN_EXE_outloud"))
+    // Run a COPY of the binary from inside the temp HOME.
+    //
+    // `discover_whisper_model` searches the executable's ancestor directories
+    // (so a release archive's adjacent model is found), and the test binary
+    // lives at `target/debug/`, three levels under the checkout. A developer
+    // who keeps a `ggml-*.bin` in their checkout -- exactly what the README
+    // tells them to do -- therefore had it discovered before HOME was ever
+    // consulted, and all three of these tests failed for a reason that had
+    // nothing to do with what they assert.
+    //
+    // Verified against upstream code with no changes of mine involved: these
+    // pass on a clean worktree and fail the moment a model is placed in it.
+    let exe = home.join("outloud-under-test.exe");
+    std::fs::copy(env!("CARGO_BIN_EXE_outloud"), &exe).expect("copy the binary under test");
+
+    let out = Command::new(&exe)
         .args([
             "--once",
             "--asr",
@@ -52,11 +67,27 @@ fn run_with_home(home: &Path) -> (bool, String) {
             ),
             "--no-overlay",
         ])
+        // Run from the temp HOME itself, not the test runner's cwd.
+        //
+        // discover_whisper_model searches the exe's ancestors and the
+        // current directory, so a developer who keeps a ggml-*.bin in their
+        // checkout (the documented place to put one) had it found before
+        // HOME was ever consulted, and all three of these tests failed for
+        // a reason that had nothing to do with discovery. Verified: they
+        // pass on a clean worktree and fail on one with a model present,
+        // on upstream code, with no changes of mine involved.
+        .current_dir(home)
         .env("HOME", home)
         // Isolates this run from whatever real model the developer running
         // the suite happens to have set for their own shell; the whole point
         // is to prove discovery works from HOME alone.
         .env_remove("OUTLOUD_WHISPER_MODEL")
+        // Refuse the first-run download. These tests are about DISCOVERY, and
+        // the daemon now fetches a missing model rather than only naming the
+        // curl command: without this the two 'no model' cases would pull
+        // 148MB from Hugging Face on every `cargo test`, and the one that
+        // asserts on the fetch instructions would never see them.
+        .env("OUTLOUD_NO_DOWNLOAD", "1")
         .output()
         .expect("the daemon binary should be runnable");
     (

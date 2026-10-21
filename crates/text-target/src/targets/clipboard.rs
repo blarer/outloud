@@ -445,8 +445,16 @@ mod tests {
     /// `has_command` is unused by `platform_can_paste_with_env` and returns
     /// an inert default; a real `Env` implementer would need more, but this
     /// test asserts exactly one function's exactly one input.
+    /// Gated to the platforms that actually construct it. Both users below
+    /// are `#[cfg]`-ed to linux and macos, so on Windows this was dead code
+    /// and `clippy -D warnings` failed the whole crate's test build. Same
+    /// shape as the problem `scripts/ci-check-gated-only-callers.py` exists
+    /// to catch, which cannot see this one because the callers are `#[test]`
+    /// functions rather than ordinary code.
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
     struct FakeEnvHasWtype(bool);
 
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
     impl crate::detect::Env for FakeEnvHasWtype {
         fn var(&self, _name: &str) -> Option<String> {
             None

@@ -165,6 +165,51 @@ impl MenuHost {
         .map(|(cfg, _)| crate::menubar::Settings::from_config(&cfg, None))
     }
 
+    /// `recognizer.auto-download`: may the daemon fetch a missing model?
+    ///
+    /// Read here rather than from `Settings` because the decision is needed
+    /// before the pipeline (and therefore any menu host) exists: it gates
+    /// construction of the recognizer itself.
+    ///
+    /// Defaults to true when config cannot be read at all, matching the
+    /// schema. A machine whose config is unreadable is not thereby asking to
+    /// be offline, and the alternative is a daemon that refuses to start for
+    /// a reason the user never chose.
+    pub fn auto_download_from_config() -> bool {
+        // The env override exists for a one-off ("not on this connection")
+        // without editing a file, and because a GUI launch has no shell to
+        // pass a flag from. Checked first so it beats config, same as every
+        // other OUTLOUD_* knob.
+        if let Some(v) = std::env::var_os("OUTLOUD_NO_DOWNLOAD") {
+            let v = v.to_string_lossy().trim().to_ascii_lowercase();
+            if !matches!(v.as_str(), "" | "0" | "false" | "no" | "off") {
+                return false;
+            }
+        }
+        let user = config::ensure_user_config().ok();
+        let system = std::fs::read_to_string(config::system_config_path())
+            .ok()
+            .map(|t| (config::system_config_path(), t));
+        let env: std::collections::BTreeMap<String, String> = std::env::vars()
+            .filter(|(k, _)| {
+                k.starts_with(config::ENV_PREFIX) || k.starts_with(config::LEGACY_ENV_PREFIX)
+            })
+            .collect();
+        config::Config::build(
+            system.as_ref().map(|(p, t)| (p, t.as_str())),
+            user.as_ref().map(|(p, t)| (p, t.as_str())),
+            &env,
+        )
+        .ok()
+        .and_then(
+            |(cfg, _)| match cfg.get("recognizer.auto-download")?.value {
+                config::Value::Bool(b) => Some(b),
+                _ => None,
+            },
+        )
+        .unwrap_or(true)
+    }
+
     pub fn silence_timeout_from_config() -> u64 {
         let user = config::ensure_user_config().ok();
         let system = std::fs::read_to_string(config::system_config_path())
@@ -504,6 +549,45 @@ pub fn config_path_for_display() -> Option<PathBuf> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// `OUTLOUD_NO_DOWNLOAD` must refuse the fetch for any set value.
+    ///
+    /// Deliberately forgiving in the direction that does LESS: a stray or
+    /// shell-mangled value should stop a 148MB download rather than start
+    /// one. This is the same trap `OUTLOUD_NO_INJECT` fell into, where an
+    /// exact `== "1"` test missed the trailing space cmd.exe adds in
+    /// `set VAR=1 && prog` and the guard silently did nothing.
+    ///
+    /// Serialised through a mutex because these are process-wide env vars and
+    /// cargo runs tests in threads.
+    #[test]
+    fn the_download_optout_tolerates_shell_mangled_values() {
+        static LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+        let _guard = LOCK.lock().unwrap_or_else(|p| p.into_inner());
+
+        for set in ["1", "1 ", " 1", "true", "yes", "on"] {
+            // SAFETY: the lock makes this the only thread touching the
+            // environment, and the variable is removed before returning.
+            unsafe { std::env::set_var("OUTLOUD_NO_DOWNLOAD", set) };
+            assert!(
+                !MenuHost::auto_download_from_config(),
+                "{set:?} must refuse the download: guessing wrong starts a 148MB \
+                 fetch the user asked not to have"
+            );
+        }
+        for off in ["0", "false", "no", "off", ""] {
+            unsafe { std::env::set_var("OUTLOUD_NO_DOWNLOAD", off) };
+            assert!(
+                MenuHost::auto_download_from_config(),
+                "{off:?} explicitly permits the download, so it must not block it"
+            );
+        }
+        unsafe { std::env::remove_var("OUTLOUD_NO_DOWNLOAD") };
+        assert!(
+            MenuHost::auto_download_from_config(),
+            "unset must permit the download, or a fresh machine cannot dictate"
+        );
+    }
 
     /// A stale click (menu built, config reloaded, table shrank) must be
     /// inert rather than firing whatever now sits at that index.
