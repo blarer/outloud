@@ -472,10 +472,10 @@ fn settings_menu(actions: &mut Vec<Action>, s: &Settings) -> Vec<MenuItem> {
     }
     items.push(MenuItem::Separator);
 
-    // Overlay: a switch, not the five-way position picker the schema
-    // allows, because "hidden" is the only position value the renderer can
-    // honor today. Offering the other four would be four rows that write a
-    // key and change nothing.
+    // Overlay: two switches, not the full position picker the schema
+    // allows, because "hidden" and "near-mouse" are the position values the
+    // renderer can honor today. Offering the fixed positions would be rows
+    // that write a key and change nothing.
     let hidden = s.overlay_position == "hidden";
     actions.push(Action::Set {
         key: "overlay.position".into(),
@@ -486,6 +486,29 @@ fn settings_menu(actions: &mut Vec<Action>, s: &Settings) -> Vec<MenuItem> {
         MenuId(actions.len() as u64 - 1),
         !hidden,
     ));
+    // Follow the pointer. Windows only for now: that render loop is the one
+    // that swaps the frame's anchor for the live cursor each tick. Toggling
+    // off returns to the default fixed position rather than to whatever was
+    // set before, same one-key-one-row simplicity as the switch above.
+    if cfg!(windows) {
+        let follows = s.overlay_position == "near-mouse";
+        actions.push(Action::Set {
+            key: "overlay.position".into(),
+            value: Value::Str(
+                if follows {
+                    "bottom-center"
+                } else {
+                    "near-mouse"
+                }
+                .into(),
+            ),
+        });
+        items.push(MenuItem::choice(
+            "Overlay Follows Mouse",
+            MenuId(actions.len() as u64 - 1),
+            follows,
+        ));
+    }
     items.push(MenuItem::Separator);
 
     // Launch at login, Windows only: the one platform where setting the key

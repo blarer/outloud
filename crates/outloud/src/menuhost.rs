@@ -78,6 +78,13 @@ impl MenuHost {
         self.settings.overlay_position != "hidden"
     }
 
+    /// `overlay.position = "near-mouse"`: the overlay should follow the
+    /// pointer instead of sitting at a fixed anchor. Read every frame by
+    /// the render loop, so a settings change applies live.
+    pub fn overlay_follows_mouse(&self) -> bool {
+        self.settings.overlay_position == "near-mouse"
+    }
+
     /// `insertion.mode = "stream"`: stream stable words into the field as
     /// they prove out. Read once at pipeline start; capable fields stream,
     /// everything else silently keeps commit-on-release.

@@ -671,6 +671,13 @@ impl WinOverlay {
 }
 
 impl Overlay for WinOverlay {
+    // The trait-level accessor, so the host's render loop can ask through
+    // `Box<dyn Overlay>` without knowing the backend. Delegates to the
+    // inherent method above.
+    fn mouse_anchor(&self) -> Anchor {
+        WinOverlay::mouse_anchor(self)
+    }
+
     fn render(&mut self, frame: &OverlayFrame) -> anyhow::Result<()> {
         if !frame.state.overlay_visible() {
             self.last_state = frame.state;

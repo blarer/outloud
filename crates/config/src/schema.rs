@@ -306,9 +306,13 @@ pub fn schema() -> &'static [KeySpec] {
                     "bottom-left",
                     "bottom-right",
                     "top-center",
+                    // Follow the pointer: the overlay appears beside the
+                    // mouse and tracks it while visible, so the feedback is
+                    // wherever the user is already looking.
+                    "near-mouse",
                     "hidden",
                 ]),
-                doc: "Where the listening overlay appears, or hidden.",
+                doc: "Where the listening overlay appears (or follows: near-mouse), or hidden.",
                 wired: true,
             },
             KeySpec {

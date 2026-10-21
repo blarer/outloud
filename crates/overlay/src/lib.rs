@@ -130,6 +130,15 @@ pub trait Overlay {
     /// Whether the surface is currently on screen.
     fn is_visible(&self) -> bool;
 
+    /// Where the mouse pointer is right now, as a placement anchor, for
+    /// hosts honouring `overlay.position = "near-mouse"`. The default is
+    /// the corner fallback so backends without a cheap cursor query (and
+    /// test doubles) need no changes; a backend that can ask the windowing
+    /// system overrides this (Windows: `GetCursorPos`).
+    fn mouse_anchor(&self) -> Anchor {
+        Anchor::Corner
+    }
+
     /// Optional richer audio signal for backends that animate with it:
     /// four linear `0.0..=1.0` bands, low to high (~0–300Hz, 300–1k,
     /// 1k–3k, 3k–8k), updated per audio chunk. A default no-op so hosts

@@ -1446,10 +1446,34 @@ fn overlay_main(
         })?;
 
     loop {
-        let frame = shared.snapshot();
+        let mut frame = shared.snapshot();
+        // `overlay.position = "near-mouse"`: replace the engine's anchor
+        // with the live pointer position each tick, so the card follows
+        // the mouse while visible. Asked per frame (30Hz) rather than
+        // cached because following is the whole point; the layout's
+        // `place()` still applies its own offset and screen clamping, so
+        // the card sits beside the pointer, never under it, and never
+        // walks off the screen edge.
+        let follow_mouse = menu_host
+            .as_ref()
+            .is_some_and(|h| h.overlay_follows_mouse());
+        if follow_mouse {
+            frame.anchor = ov.mouse_anchor();
+        }
+        // `overlay.position = "hidden"`: the user asked not to see the
+        // floating indicator. The tray still reports every state, so
+        // hiding the overlay costs visibility of nothing. Same rule as the
+        // macOS loop; its absence here was an oversight this change keeps
+        // from spreading.
+        let show_overlay = menu_host.as_ref().is_none_or(|h| h.overlay_visible());
+        let render = if show_overlay {
+            ov.render(&frame)
+        } else {
+            ov.hide()
+        };
         // Render errors are logged, never fatal: the overlay is an
         // indicator, and dictation must outlive its cosmetic failures.
-        if let Err(e) = ov.render(&frame) {
+        if let Err(e) = render {
             eprintln!("outloud: overlay render failed: {e}");
         }
 

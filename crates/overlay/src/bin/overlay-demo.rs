@@ -160,7 +160,7 @@ mod demo {
 mod windemo {
     use std::time::Instant;
 
-    use overlay::{Anchor, OverlayFrame, OverlayState, Point};
+    use overlay::{OverlayFrame, OverlayState};
 
     const PARTIAL: &str =
         "change the deploy target from staging to production and rerun the smoke tests";
@@ -231,7 +231,11 @@ mod windemo {
                     .take((PARTIAL.chars().count() as f64 * within) as usize)
                     .collect(),
                 detail: detail.map(str::to_string),
-                anchor: Anchor::Cursor(Point { x: 600.0, y: 400.0 }),
+                // The LIVE pointer, not a fixed point: this is also the
+                // visual check for `overlay.position = "near-mouse"` --
+                // move the mouse and the card must follow, offset so the
+                // pointer never sits on top of it.
+                anchor: ov.mouse_anchor(),
             };
             ov.render(&frame)?;
             std::thread::sleep(std::time::Duration::from_millis(33));
