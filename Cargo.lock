@@ -488,6 +488,7 @@ name = "diag"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "audio",
  "ax-edit",
  "config",
  "hotkey",

@@ -1,4 +1,4 @@
-//! The concrete checks. Each one exists because a real, hours-costing
+﻿//! The concrete checks. Each one exists because a real, hours-costing
 //! environmental failure was hit during M0 (see docs/M0-results.md and
 //! docs/macos-permissions.md). The remedy strings are the product: they must
 //! name the exact next action, because "permission denied" was precisely the
@@ -838,44 +838,7 @@ impl Check for AudioInput {
     }
 
     fn run(&self, _env: &Env) -> CheckOutcome {
-        #[cfg(all(unix, not(target_os = "macos")))]
-        {
-            return probe_alsa_inputs();
-        }
-        #[cfg(not(all(unix, not(target_os = "macos"))))]
-        if !cfg!(target_os = "macos") {
-            return CheckOutcome::warn(
-                "audio device probe unimplemented on this platform",
-                ErrorClass::Environment,
-                "verify an input device exists with your platform's audio tool",
-            );
-        }
-        // system_profiler is slow (~1s) but dependency-free and honest.
-        let out = Command::new("system_profiler")
-            .arg("SPAudioDataType")
-            .arg("-detailLevel")
-            .arg("mini")
-            .output();
-        match out {
-            Ok(o) if o.status.success() => {
-                let text = String::from_utf8_lossy(&o.stdout);
-                if text.contains("Input Channels") {
-                    CheckOutcome::pass("at least one audio input device present")
-                } else {
-                    CheckOutcome::fail(
-                        "no audio input device found",
-                        ErrorClass::Environment,
-                        "connect a microphone (or check System Settings > Sound > Input); \
-                         dictation has nothing to capture without one",
-                    )
-                }
-            }
-            _ => CheckOutcome::warn(
-                "could not enumerate audio devices",
-                ErrorClass::Environment,
-                "check System Settings > Sound > Input manually",
-            ),
-        }
+        probe_audio_input()
     }
 }
 
@@ -933,13 +896,117 @@ pub fn count_capture_devices(pcm: &str) -> usize {
     pcm.lines().filter(|l| l.contains("capture")).count()
 }
 
+/// macOS: ask `system_profiler`. Slow (~1s) but dependency-free and honest.
+#[cfg(target_os = "macos")]
+fn probe_audio_input() -> CheckOutcome {
+    let out = Command::new("system_profiler")
+        .arg("SPAudioDataType")
+        .arg("-detailLevel")
+        .arg("mini")
+        .output();
+    match out {
+        Ok(o) if o.status.success() => {
+            let text = String::from_utf8_lossy(&o.stdout);
+            if text.contains("Input Channels") {
+                CheckOutcome::pass("at least one audio input device present")
+            } else {
+                CheckOutcome::fail(
+                    "no audio input device found",
+                    ErrorClass::Environment,
+                    "connect a microphone (or check System Settings > Sound > Input); \
+                     dictation has nothing to capture without one",
+                )
+            }
+        }
+        _ => CheckOutcome::warn(
+            "could not enumerate audio devices",
+            ErrorClass::Environment,
+            "check System Settings > Sound > Input manually",
+        ),
+    }
+}
+
+/// Linux and the other unixes: read `/proc/asound/pcm`.
+#[cfg(all(unix, not(target_os = "macos")))]
+fn probe_audio_input() -> CheckOutcome {
+    probe_alsa_inputs()
+}
+
+/// Windows: ask the same library the daemon captures with.
+///
+/// This used to warn "audio device probe unimplemented off macOS" and suggest
+/// `arecord -l`, so on Windows the advice named a tool that does not exist
+/// there and the check answered nothing. Meanwhile
+/// `audio::capture::input_devices` already enumerated devices through cpal,
+/// and the daemon had been using it to name the microphone in its own logs
+/// the whole time: another complete-but-unreachable value.
+///
+/// cpal rather than the `/proc/asound/pcm` read the unix path uses, because
+/// Windows has no such file; and cpal rather than a raw WASAPI enumeration
+/// because asking the daemon's own library is the only way to be sure the
+/// answer matches what capture will actually find.
+///
+/// Enumeration only. The doctor must never OPEN a stream: that would take the
+/// device from a running daemon and light the system recording indicator for
+/// a question that does not need any audio.
+#[cfg(all(windows, feature = "audio-probe"))]
+fn probe_audio_input() -> CheckOutcome {
+    match audio::capture::input_devices() {
+        Ok(devices) if devices.is_empty() => CheckOutcome::fail(
+            "no audio input device found",
+            ErrorClass::Environment,
+            "connect a microphone (Settings > System > Sound > Input); dictation has \
+             nothing to capture without one",
+        ),
+        // Name the DEFAULT device, because "working, but recording from the
+        // wrong input" presents identically to a broken microphone, and the
+        // daemon captures from whichever one the host calls default.
+        //
+        // Presence is not capture, the same caveat the unix path spells out: a
+        // muted boom arm enumerates normally and records silence.
+        Ok(devices) => match devices.iter().find(|d| d.is_default) {
+            Some(d) => CheckOutcome::pass(format!(
+                "{} input device(s); default is {}. NOTE: presence is not capture -- a \
+                 muted or disabled device enumerates normally and records silence.",
+                devices.len(),
+                d.name
+            )),
+            // Devices exist but the host names no default: capture fails at
+            // open time with a far less obvious message, so say it here.
+            None => CheckOutcome::warn(
+                format!("{} input device(s) but no default", devices.len()),
+                ErrorClass::Configuration,
+                "pick a default input device (Settings > System > Sound > Input)",
+            ),
+        },
+        Err(e) => CheckOutcome::warn(
+            format!("could not enumerate audio devices: {e}"),
+            ErrorClass::Environment,
+            "check Settings > System > Sound > Input for a working microphone",
+        ),
+    }
+}
+
+/// Windows without the probe feature: cpal is not linked, nothing to ask.
+#[cfg(all(windows, not(feature = "audio-probe")))]
+fn probe_audio_input() -> CheckOutcome {
+    CheckOutcome::warn(
+        "built without the audio probe",
+        ErrorClass::Environment,
+        "rebuild with `--features audio-probe` to check for an input device",
+    )
+}
+
 // ---------------------------------------------------------------------------
 // Model files
 // ---------------------------------------------------------------------------
 
-/// Recognizer model files present on disk. The recognizer is not wired up in
-/// M0, so absence is Warn, not Fail; the check exists now so onboarding can
-/// name the download command instead of crashing at first dictation.
+/// Recognizer model files present on disk.
+///
+/// Absence is Warn rather than Fail because it is not always a problem: macOS
+/// defaults to Apple's recognizer, which needs no model at all. Off macOS the
+/// default is whisper.cpp, which does, so the remedy has to name a model the
+/// user can actually get.
 pub struct ModelFiles;
 
 /// Where models will live. Kept as a function so tests and future config can
@@ -969,11 +1036,23 @@ impl Check for ModelFiles {
         if has_model {
             CheckOutcome::pass(format!("model file(s) present in {}", dir.display()))
         } else {
+            // The remedy used to read "expected once a recognizer is wired up
+            // (M1); then: download Parakeet TDT ONNX into that directory".
+            // Every clause of that was wrong by the time anyone read it on
+            // Windows: M1 shipped, Parakeet is still a stub, and the
+            // recognizer that actually runs there is whisper.cpp. A user
+            // following it would have fetched 652MB of the wrong model.
             CheckOutcome::warn(
                 format!("no recognizer model in {}", dir.display()),
                 ErrorClass::Configuration,
-                "expected once a recognizer is wired up (M1); then: download Parakeet TDT \
-                 ONNX into that directory (see README)",
+                if cfg!(target_os = "macos") {
+                    "harmless if you use the default Apple recognizer; needed only for \
+                     `--asr whisper`, which takes a ggml .bin (see README)"
+                } else {
+                    "whisper is the default here and needs a model: put a ggml .bin in \
+                     that directory or beside the executable, or set \
+                     OUTLOUD_WHISPER_MODEL to one (see README)"
+                },
             )
         }
     }
@@ -1472,6 +1551,68 @@ impl Check for RunningInstances {
 mod tests {
     use super::*;
     use crate::Status;
+
+    // -- audio input and model remedies --------------------------------------
+
+    /// Both of these checks answered with advice the reader could not act on.
+    ///
+    /// `audio-input` warned "audio device probe unimplemented off macOS" and
+    /// suggested `arecord -l`, a Linux command, on Windows. `model-files`
+    /// pointed at Parakeet TDT, a stub, when the recognizer that runs off
+    /// macOS is whisper.cpp. Neither was detectable by a test that only
+    /// asserted on Status, because both were "successfully" returning a
+    /// verdict; what was wrong was the text a human then had to follow.
+    ///
+    /// So assert on the remedy itself, and pin the platform-specific words.
+    #[test]
+    fn the_audio_check_gives_advice_for_this_platform() {
+        let outcome = AudioInput.run(&Env::from_pairs(&[]));
+        let remedy = outcome.remedy.unwrap_or_default();
+        if cfg!(target_os = "macos") {
+            return; // system_profiler path, asserted by its own behaviour
+        }
+        assert!(
+            !remedy.contains("arecord"),
+            "off-macOS remedy must not name a Linux-only tool: {remedy}"
+        );
+        assert!(
+            !outcome.detail.contains("unimplemented"),
+            "the probe is implemented now: {}",
+            outcome.detail
+        );
+        // Whatever the machine's state, the check must have REACHED a real
+        // answer rather than declining to look.
+        assert!(
+            matches!(outcome.status, Status::Pass | Status::Fail | Status::Warn),
+            "expected a verdict"
+        );
+    }
+
+    #[test]
+    fn the_model_remedy_names_the_recognizer_this_platform_uses() {
+        let outcome = ModelFiles.run(&Env::from_pairs(&[]));
+        // A machine WITH a model passes and carries no remedy; only the
+        // warning path has advice to check.
+        if outcome.status == Status::Pass {
+            return;
+        }
+        let remedy = outcome.remedy.unwrap_or_default();
+        assert!(
+            !remedy.contains("Parakeet"),
+            "Parakeet is a stub; the remedy must not send users to fetch 652MB of it: {remedy}"
+        );
+        assert!(
+            !remedy.contains("(M1)"),
+            "milestone jargon is not an action a user can take: {remedy}"
+        );
+        if !cfg!(target_os = "macos") {
+            assert!(
+                remedy.contains("OUTLOUD_WHISPER_MODEL") || remedy.contains("ggml"),
+                "off macOS the default recognizer is whisper, so the remedy must name \
+                 something that gets a whisper model: {remedy}"
+            );
+        }
+    }
 
     // -- terminal detection --------------------------------------------------
 

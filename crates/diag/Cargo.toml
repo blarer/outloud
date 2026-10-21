@@ -10,6 +10,16 @@ rust-version.workspace = true
 publish = false
 description = "Environmental diagnostics: turn confusing failures into named next actions"
 
+[features]
+# On by default so `doctor` can actually answer "is there a microphone".
+#
+# Optional at all because cpal is the one dependency here that needs a system
+# audio stack (ALSA headers via pkg-config on Linux), and a headless build
+# must be able to typecheck diagnostics without one. Same gate, same reason,
+# as `audio/capture` itself.
+default = ["audio-probe"]
+audio-probe = ["dep:audio"]
+
 [dependencies]
 # Path policy only: the doctor must probe the same model directory the
 # daemon actually reads, which is what a hand-copied path got wrong before.
@@ -19,6 +29,10 @@ anyhow.workspace = true
 ax-edit = { path = "../ax-edit" }
 # Only for the Input Monitoring probe; diag never binds a hotkey itself.
 hotkey = { path = "../hotkey" }
+# Only to ENUMERATE input devices for the audio-input check. The doctor never
+# opens a stream: asking "does a device exist" must not take the microphone
+# from the daemon, and must not light the recording indicator.
+audio = { path = "../audio", optional = true }
 
 [[bin]]
 name = "doctor"
