@@ -32,6 +32,7 @@ hotkey = { path = "../hotkey" }
 # Only to ENUMERATE input devices for the audio-input check. The doctor never
 # opens a stream: asking "does a device exist" must not take the microphone
 # from the daemon, and must not light the recording indicator.
+[target.'cfg(windows)'.dependencies]
 audio = { path = "../audio", optional = true }
 
 [[bin]]
