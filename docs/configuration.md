@@ -109,7 +109,7 @@ Both spellings work: dotted keys (`insertion.mode = "stream"`) or tables
 | `overlay.position` | `"bottom-center"` | `bottom-center`, `bottom-left`, `bottom-right`, `top-center`, or `hidden`. |
 | `vocabulary.sets` | `[]` | Named vocabulary sets active by default; profiles override per app. |
 | `telemetry.enabled` | `false` | Anonymous usage reporting. Off by default, forever. Nothing to disable: the binary links no networking framework, so no telemetry exists to send. |
-| `launch-at-login` | `false` | Start the daemon when you log in. **Not implemented yet:** parsed and shown, but no login item is installed. |
+| `launch-at-login` | `false` | Start the daemon when you log in. **Windows:** writes the per-user Run registry key (visible in Task Manager's Startup tab); the menu's "Start at Login" toggle sets this. **macOS/Linux: Not implemented yet:** parsed and shown, but no login item is installed. |
 | `schema-version` | `1` | Written by the daemon; used for automatic migration. |
 
 ### Bluetooth headsets and the first word

@@ -90,4 +90,7 @@ windows = { version = "0.62", features = [
     # window's queue is the daemon's own render-loop responsibility, same
     # as the AppKit event pump on the macOS side.
     "Win32_UI_WindowsAndMessaging",
+    # RegCreateKeyExW/RegSetValueExW/RegDeleteValueW on HKCU\...\Run: the
+    # launch-at-login login item (outloud::autostart).
+    "Win32_System_Registry",
 ] }

@@ -33,6 +33,7 @@
 //! there is no display (or `--no-overlay`), the pipeline gets the main
 //! thread and state transitions are logged instead of drawn.
 
+pub mod autostart;
 pub mod ax_stream;
 pub mod devlatency;
 pub mod freeform;

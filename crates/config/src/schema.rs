@@ -330,7 +330,11 @@ pub fn schema() -> &'static [KeySpec] {
                 default: Value::Bool(false),
                 constraint: None,
                 doc: "Start the daemon when the user logs in.",
-                wired: false,
+                // Wired on Windows only (HKCU Run key, outloud::autostart).
+                // cfg! rather than true: a macOS or Linux user who sets this
+                // must still get the "nothing reads it" warning, because for
+                // them nothing does.
+                wired: cfg!(windows),
             },
         ]
     });
@@ -445,7 +449,11 @@ mod tests {
                 // missing model may be downloaded.
                 "recognizer.auto-download",
                 "silence-timeout-ms",
-                "overlay.position"
+                "overlay.position",
+                // Windows only: outloud::autostart syncs the HKCU Run key
+                // from this on every config load. Still inert elsewhere.
+                #[cfg(windows)]
+                "launch-at-login"
             ]
         );
     }

@@ -488,9 +488,27 @@ fn settings_menu(actions: &mut Vec<Action>, s: &Settings) -> Vec<MenuItem> {
     ));
     items.push(MenuItem::Separator);
 
+    // Launch at login, Windows only: the one platform where setting the key
+    // actually installs something (HKCU Run key, outloud::autostart). On
+    // macOS and Linux the key is still schema-valid but unwired, and an
+    // unwired settings row is the lie this menu refuses to tell (see below).
+    if cfg!(windows) {
+        actions.push(Action::Set {
+            key: "launch-at-login".into(),
+            value: Value::Bool(!s.launch_at_login),
+        });
+        items.push(MenuItem::choice(
+            "Start at Login",
+            MenuId(actions.len() as u64 - 1),
+            s.launch_at_login,
+        ));
+        items.push(MenuItem::Separator);
+    }
+
     // Deliberately absent: Model, Language, Insertion mode, Casing, Smart
-    // Quotes, Trailing Punctuation, History, Vocabulary Sets, and Launch at
-    // Login. Every one of those keys exists in the schema and NOTHING in the
+    // Quotes, Trailing Punctuation, History, and Vocabulary Sets (plus
+    // Launch at Login off Windows). Every one of those keys exists in the
+    // schema and NOTHING in the
     // pipeline reads it yet. A settings row that writes a key no code
     // consumes is a lie told by the UI, and it is a worse lie than an absent
     // row because the user believes they changed something. Each comes back

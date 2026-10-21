@@ -344,6 +344,15 @@ impl MenuHost {
                 self.settings.config_path = user.map(|(p, _)| p);
             }
         }
+        // Launch-at-login follows the config file on every load, so the menu
+        // toggle, a hand edit, and an env override all take the same path.
+        // Gated out of test builds: a unit test constructing a MenuHost must
+        // never register ITS OWN test binary as the user's login item.
+        #[cfg(not(test))]
+        if let Some(problem) = crate::autostart::sync(self.settings.launch_at_login) {
+            eprintln!("outloud: {problem}");
+            self.problems.push(problem);
+        }
         // Re-arm the watcher on the path actually read. Rebuilt rather than
         // reused because the path can change (HOME/XDG moved, or the file
         // was created by this very load).
@@ -738,6 +747,10 @@ mod tests {
             "formatting.smart-quotes",
             "formatting.trailing-punctuation",
             "history.enabled",
+            // launch-at-login graduated on Windows (outloud::autostart writes
+            // the HKCU Run key); it remains unimplemented on macOS and Linux,
+            // and the doc row says exactly that, split by platform.
+            #[cfg(not(windows))]
             "launch-at-login",
         ];
 
