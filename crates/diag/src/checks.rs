@@ -1598,10 +1598,18 @@ mod tests {
         if cfg!(target_os = "macos") {
             return; // system_profiler path, asserted by its own behaviour
         }
-        assert!(
-            !remedy.contains("arecord"),
-            "off-macOS remedy must not name a Linux-only tool: {remedy}"
-        );
+        // `arecord` is banned from the WINDOWS remedy only. On Linux it is
+        // exactly the right advice, and the CI runner (headless, no capture
+        // device) takes the fail path whose remedy names it -- which is how
+        // the original form of this assertion ("no arecord anywhere off
+        // macOS") failed on ubuntu while passing on the Windows box it was
+        // written on.
+        if cfg!(windows) {
+            assert!(
+                !remedy.contains("arecord"),
+                "the Windows remedy must not name a Linux-only tool: {remedy}"
+            );
+        }
         assert!(
             !outcome.detail.contains("unimplemented"),
             "the probe is implemented now: {}",
