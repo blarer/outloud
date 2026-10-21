@@ -344,7 +344,14 @@ jobs:
         # decides whether dictation works there at all, and nothing asked
         # it. It runs on CPU here, which is slower but is the same code the
         # CUDA build runs.
-        os: [macos-15, ubuntu-24.04]
+        # Windows was added when the release script was found shipping an
+        # outloud.exe built WITHOUT the whisper feature: it started, drew
+        # its tray icon, downloaded a model, and then failed every
+        # utterance with "this build has no whisper backend". Nothing in
+        # CI compiled whisper on Windows, so nothing could have caught it.
+        # The windows-2025 runner has cmake and MSVC; ci-whisper.sh runs
+        # under Git Bash unchanged.
+        os: [macos-15, ubuntu-24.04, windows-2025]
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4

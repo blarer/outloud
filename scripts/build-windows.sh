@@ -52,7 +52,17 @@ DAEMON="target/$TARGET/release/outloud.exe"
 
 echo "==> Building $TARGET"
 rustup target add "$TARGET"
-cargo build --release --locked --package spike-cli --package outloud --target "$TARGET"
+
+# --features outloud/whisper: the recognizer itself. Without it the daemon
+# BUILDS fine, STARTS fine, downloads a model on first run, and then errors
+# on every single utterance with "this build has no whisper backend" --
+# whisper.cpp is the only recognizer that exists off macOS, and the feature
+# is off by default so plain typechecks do not need cmake. A release
+# without it is a dictation app that cannot transcribe, which is exactly
+# what this script shipped until 2026-10-21. The windows-2025 runners have
+# cmake and MSVC, so the from-source whisper.cpp build just works.
+cargo build --release --locked --package spike-cli --package outloud \
+    --features outloud/whisper --target "$TARGET"
 
 mkdir -p "$OUT"
 cp "$BIN" "$OUT/outloud-spike.exe"
