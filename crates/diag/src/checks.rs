@@ -1,4 +1,4 @@
-﻿//! The concrete checks. Each one exists because a real, hours-costing
+//! The concrete checks. Each one exists because a real, hours-costing
 //! environmental failure was hit during M0 (see docs/M0-results.md and
 //! docs/macos-permissions.md). The remedy strings are the product: they must
 //! name the exact next action, because "permission denied" was precisely the
@@ -1009,6 +1009,16 @@ fn probe_audio_input() -> CheckOutcome {
 /// user can actually get.
 pub struct ModelFiles;
 
+/// Filenames `asr::models::fetch` writes, which carry no extension.
+///
+/// The fetcher names a cached file after `ModelSpec::id`, so a downloaded
+/// model is `whisper-base.en`, not `whisper-base.en.bin`. Listed here rather
+/// than read from `asr::models::registry()` because `diag` deliberately does
+/// not depend on `asr`: the doctor must be buildable without the recognizer
+/// stack. `the_managed_ids_match_the_fetchers_registry` in `crates/asr` keeps
+/// the two honest, which is cheaper than the dependency.
+const MANAGED_MODEL_IDS: &[&str] = &["whisper-base.en", "silero-vad", "parakeet-tdt-0.6b-v2-onnx"];
+
 /// Where models will live. Kept as a function so tests and future config can
 /// override the base directory.
 pub fn model_dir() -> std::path::PathBuf {
@@ -1029,7 +1039,24 @@ impl Check for ModelFiles {
             .map(|entries| {
                 entries.flatten().any(|e| {
                     let name = e.file_name().to_string_lossy().to_lowercase();
-                    name.ends_with(".onnx") || name.ends_with(".gguf") || name.ends_with(".bin")
+                    // Sidecars and in-progress downloads are not models:
+                    // `.partial` is a fetch that has not finished and
+                    // `.verified` is the checksum marker beside a real one.
+                    // Counting either would report a model before there is
+                    // one to use.
+                    if name.ends_with(".partial") || name.ends_with(".verified") {
+                        return false;
+                    }
+                    // Extensions cover a hand-placed download. The id check
+                    // covers `asr::models::fetch`, which names the cached file
+                    // after `ModelSpec::id` with NO extension: without it this
+                    // reported "no recognizer model" while sitting in the
+                    // directory holding the 141MB model the daemon had just
+                    // fetched itself, and then told the user to download one.
+                    name.ends_with(".onnx")
+                        || name.ends_with(".gguf")
+                        || name.ends_with(".bin")
+                        || MANAGED_MODEL_IDS.iter().any(|id| name == *id)
                 })
             })
             .unwrap_or(false);

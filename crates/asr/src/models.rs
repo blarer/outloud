@@ -366,6 +366,43 @@ mod tests {
         assert_eq!(fetch(&spec, &dir, |_| {}).unwrap(), path);
     }
 
+    /// `crates/diag` hardcodes these ids; they must not drift.
+    ///
+    /// The doctor's `model-files` check has to recognise a model this fetcher
+    /// downloaded, and a fetched file is named after `ModelSpec::id` with no
+    /// extension. `diag` cannot read this registry (it deliberately does not
+    /// depend on `asr`, so the doctor builds without the recognizer stack), so
+    /// it keeps its own copy of the list.
+    ///
+    /// That duplication is only safe with a test. The cost of it drifting is
+    /// concrete and was observed: before the id check existed, the doctor
+    /// reported "no recognizer model" while standing in the directory holding
+    /// the 141MB model the daemon had just downloaded, and told the user to go
+    /// download one.
+    #[test]
+    fn the_managed_ids_match_the_fetchers_registry() {
+        // Kept in sync by hand with MANAGED_MODEL_IDS in
+        // crates/diag/src/checks.rs. Lowercase because the doctor compares
+        // against a lowercased filename.
+        let diag_knows = ["whisper-base.en", "silero-vad", "parakeet-tdt-0.6b-v2-onnx"];
+        for spec in registry() {
+            assert!(
+                diag_knows.contains(&spec.id),
+                "registry has `{}` but MANAGED_MODEL_IDS in crates/diag/src/checks.rs \
+                 does not: the doctor will report a downloaded model as missing. Add it \
+                 there in this commit.",
+                spec.id
+            );
+        }
+        for id in diag_knows {
+            assert!(
+                registry().iter().any(|s| s.id == id),
+                "MANAGED_MODEL_IDS names `{id}`, which is no longer in the registry; \
+                 remove it from crates/diag/src/checks.rs"
+            );
+        }
+    }
+
     /// Every registry entry must be pinned. An unpinned model downloads
     /// behind a warning nobody reads, which is exactly how whisper-base.en,
     /// silero-vad and parakeet stayed unverified for months while the
