@@ -826,6 +826,16 @@ pub async fn run(
                                 }
                             }
                             Err(e) => {
+                                // Logged as well as shown. The overlay is
+                                // gone two seconds later; the log is what a
+                                // user (or a debugging session) reads after
+                                // "dictation isn't working". A daemon built
+                                // without the whisper feature failed EVERY
+                                // utterance here, and the log showed only
+                                // "capturing from ..." lines with no hint of
+                                // why nothing was typed: diagnosed by elimination
+                                // only after measuring the microphone.
+                                eprintln!("outloud: recognizer fault: {e}");
                                 engine.transition(
                                     OverlayState::Error,
                                     Some(format!("recognizer fault ({e}) -> try again; if it persists, rebuild the speech helper")),
