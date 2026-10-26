@@ -1,4 +1,4 @@
-﻿//! Capability probing: pick the best available transport for the current
+//! Capability probing: pick the best available transport for the current
 //! environment.
 //!
 //! The probe answers two questions in order. First, *where are we*: inside a
@@ -238,7 +238,8 @@ pub fn select(env: &dyn Env) -> Selection {
     if env.has_display() && env.has_portal_keyboard() {
         return Selection {
             name: "linux-portal",
-            reason: "RemoteDesktop portal: keysym injection on X11 and Wayland, no clipboard clobber",
+            reason:
+                "RemoteDesktop portal: keysym injection on X11 and Wayland, no clipboard clobber",
         };
     }
 

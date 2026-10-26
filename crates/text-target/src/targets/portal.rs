@@ -109,9 +109,8 @@ impl PortalTarget {
     /// portal does not implement `RemoteDesktop`, which is the honest answer
     /// for a headless box or a desktop without the portal backend.
     pub fn new() -> Result<Self, TargetError> {
-        let connection = Connection::session().map_err(|e| {
-            TargetError::Transport(format!("no D-Bus session bus: {e}"))
-        })?;
+        let connection = Connection::session()
+            .map_err(|e| TargetError::Transport(format!("no D-Bus session bus: {e}")))?;
 
         let proxy = Self::rd_proxy(connection)?;
         let devices: u32 = proxy.get_property("AvailableDeviceTypes").map_err(|e| {
@@ -160,9 +159,7 @@ impl PortalTarget {
             .and_then(|b| b.path(PORTAL_PATH))
             .and_then(|b| b.interface(RD_IFACE))
             .and_then(|b| b.build())
-            .map_err(|e| {
-                TargetError::Transport(format!("cannot reach the desktop portal: {e}"))
-            })
+            .map_err(|e| TargetError::Transport(format!("cannot reach the desktop portal: {e}")))
     }
 
     /// Block until the portal answers the request at `path`, returning its
@@ -229,8 +226,7 @@ impl PortalTarget {
             break match code {
                 0 => Ok(results),
                 1 => Err(TargetError::Transport(
-                    "the portal request was cancelled (consent dialog dismissed)"
-                        .to_string(),
+                    "the portal request was cancelled (consent dialog dismissed)".to_string(),
                 )),
                 other => Err(TargetError::Transport(format!(
                     "the portal ended the request, code {other}"
@@ -263,9 +259,7 @@ impl PortalTarget {
         let results = self.await_response(&request, PORTAL_TIMEOUT)?;
         let session: OwnedObjectPath = results
             .get("session_handle")
-            .ok_or_else(|| {
-                TargetError::Transport("portal returned no session_handle".to_string())
-            })
+            .ok_or_else(|| TargetError::Transport("portal returned no session_handle".to_string()))
             .and_then(|v| {
                 // GNOME returns this as a string, not an object path.
                 String::try_from(v.clone())
@@ -329,7 +323,12 @@ impl PortalTarget {
         }
     }
 
-    fn notify(&self, session: &OwnedObjectPath, keysym: i32, pressed: bool) -> Result<(), TargetError> {
+    fn notify(
+        &self,
+        session: &OwnedObjectPath,
+        keysym: i32,
+        pressed: bool,
+    ) -> Result<(), TargetError> {
         let options: HashMap<&str, Value> = HashMap::new();
         self.proxy
             .call::<_, _, ()>(

@@ -1042,13 +1042,13 @@ fn write_via_tiers(mode: &Mode, payload: String) -> Outcome {
                                 via: "linux-portal".into(),
                             }
                         }
-                        Err(e) => eprintln!(
-                            "outloud: portal refused ({e}); falling back to clipboard"
-                        ),
+                        Err(e) => {
+                            eprintln!("outloud: portal refused ({e}); falling back to clipboard")
+                        }
                     },
-                    Err(e) => eprintln!(
-                        "outloud: no desktop portal ({e}); falling back to clipboard"
-                    ),
+                    Err(e) => {
+                        eprintln!("outloud: no desktop portal ({e}); falling back to clipboard")
+                    }
                 }
             }
 

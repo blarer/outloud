@@ -116,8 +116,8 @@ impl NemoRecognizer {
     /// bytes and fully specified, and this is the only place in the crate
     /// that needs one.
     fn write_wav(path: &Path, samples: &[f32]) -> Result<()> {
-        let mut file = std::fs::File::create(path)
-            .with_context(|| format!("creating {}", path.display()))?;
+        let mut file =
+            std::fs::File::create(path).with_context(|| format!("creating {}", path.display()))?;
 
         let data_bytes = (samples.len() * 2) as u32;
         let header_tail = 36 + data_bytes;
@@ -372,8 +372,14 @@ The quick brown fox jumps over the lazy dog.
         let first = i16::from_le_bytes(bytes[44..46].try_into().unwrap());
         let second = i16::from_le_bytes(bytes[46..48].try_into().unwrap());
 
-        assert!(first > 32_000, "positive overflow must clamp high, got {first}");
-        assert!(second < -32_000, "negative overflow must clamp low, got {second}");
+        assert!(
+            first > 32_000,
+            "positive overflow must clamp high, got {first}"
+        );
+        assert!(
+            second < -32_000,
+            "negative overflow must clamp low, got {second}"
+        );
 
         let _ = std::fs::remove_dir_all(&dir);
     }

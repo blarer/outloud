@@ -586,9 +586,7 @@ fn make_recognizer_factory(kind: &str, sensitivity: u8) -> anyhow::Result<Recogn
             Ok(Box::new(r) as _)
         })),
         other => {
-            anyhow::bail!(
-                "unknown --asr backend {other} (want apple, whisper, nemo, or mock)"
-            )
+            anyhow::bail!("unknown --asr backend {other} (want apple, whisper, nemo, or mock)")
         }
     }
 }

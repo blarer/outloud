@@ -75,3 +75,7 @@ required-features = ["capture"]
 [[example]]
 name = "mic_level"
 required-features = ["capture"]
+
+[[example]]
+name = "pin_device"
+required-features = ["capture"]
