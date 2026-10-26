@@ -571,8 +571,24 @@ fn make_recognizer_factory(kind: &str, sensitivity: u8) -> anyhow::Result<Recogn
                 Ok(Box::new(r) as _)
             }))
         }
+        // NVIDIA Nemotron ASR via the nemo-speech CLI. The only backend
+        // here that uses a GPU: on a DGX Spark it decodes three seconds of
+        // speech in 15-20ms against whisper's seconds-long CPU pass, and it
+        // emits punctuation and capitalisation without a second model.
+        //
+        // Discovery lives in the backend rather than here, because unlike
+        // whisper there is no auto-download path to negotiate: the model is
+        // 742MB of NVIDIA-licensed weights fetched with the Hugging Face
+        // CLI, so the honest behaviour is a clear error naming the command
+        // rather than a silent background download.
+        "nemo" => Ok(Box::new(|| {
+            let r = asr::backends::nemo::NemoRecognizer::new()?;
+            Ok(Box::new(r) as _)
+        })),
         other => {
-            anyhow::bail!("unknown --asr backend {other} (want apple, whisper, or mock)")
+            anyhow::bail!(
+                "unknown --asr backend {other} (want apple, whisper, nemo, or mock)"
+            )
         }
     }
 }
