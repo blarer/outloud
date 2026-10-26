@@ -30,6 +30,19 @@ version = 2
 db-path = "$CARGO_HOME/advisory-dbs"
 db-urls = ["https://github.com/rustsec/advisory-db"]
 yanked = "deny"
+# Scope of the `unmaintained` check. cargo-deny 0.18 changed the default from
+# "workspace" to "all", which silently turned this gate from the policy stated
+# above into one that fails on any unmaintained crate anywhere in the tree,
+# including ones we neither chose nor can upgrade past. That broke the release
+# pipeline on 2026-10-26 over zbus's internal split: `zbus_names`, `zvariant`
+# and `zvariant_derive` were folded into `zbus` 6.0 and marked unmaintained as
+# standalone crates, while we depend on `zbus` 5 and cannot move to 6 without
+# an API migration.
+#
+# "workspace" restores the documented intent: an unmaintained crate WE chose
+# fails the build, because that is a decision we can act on. One three levels
+# down inside a dependency is a risk signal to track, not a release blocker.
+unmaintained = "workspace"
 # When a CVE has no fixed release yet, add a scoped ignore HERE with a comment
 # linking the tracking issue, never by loosening this policy.
 ignore = []
