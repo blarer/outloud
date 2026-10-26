@@ -16,3 +16,8 @@ pub mod clipboard;
 pub mod ime;
 #[cfg(feature = "display")]
 pub mod keys;
+// Linux only: the XDG RemoteDesktop portal. Target-gated rather than merely
+// display-gated because it pulls in a D-Bus client, which no other platform
+// has any use for.
+#[cfg(all(feature = "display", target_os = "linux"))]
+pub mod portal;

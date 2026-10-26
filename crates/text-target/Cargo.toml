@@ -23,13 +23,31 @@ default = ["display"]
 # a runtime crash on the machine least able to report it. Gating the tiers
 # here means `--no-default-features` fails loudly at compile time in CI
 # instead of silently at runtime over SSH.
-display = ["dep:ax-edit", "dep:windows"]
+display = ["dep:ax-edit", "dep:windows", "dep:zbus"]
 
 [dependencies]
 anyhow.workspace = true
 # Optional so a headless build links no accessibility framework at all.
 ax-edit = { path = "../ax-edit", optional = true }
 base64 = "0.22"
+
+[target.'cfg(target_os = "linux")'.dependencies]
+# D-Bus client for the XDG RemoteDesktop portal, which is the only usable
+# write tier on a GNOME session: wtype is Wayland-only and the clipboard
+# tier refuses without a paste keystroke. Linux-gated so no other platform
+# downloads a D-Bus stack, and optional for the same reason ax-edit is: a
+# headless build has no business talking to a desktop portal.
+#
+# zbus requires one of its async backends even when only the blocking API
+# is used: with default-features = false the build fails outright with
+# `Either "async-io" (default) or "tokio" must be enabled`, followed by
+# dozens of unresolved imports inside zbus itself. async-io is the lighter
+# of the two, since the alternative drags in a full tokio runtime for a
+# crate whose own trait is synchronous.
+zbus = { version = "5", optional = true, default-features = false, features = [
+    "async-io",
+    "blocking-api",
+] }
 
 # UI Automation, SendInput, and the COM plumbing they need. Target-gated so
 # no other platform ever downloads it, and display-gated for the same

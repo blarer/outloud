@@ -44,6 +44,21 @@ pub trait Env {
     fn has_display(&self) -> bool;
     /// Whether a clipboard tool is usable.
     fn has_clipboard(&self) -> bool;
+    /// Whether the XDG `RemoteDesktop` portal can inject keystrokes.
+    ///
+    /// Separate from [`Self::has_display`] because the two disagree exactly
+    /// where it matters: a GNOME X11 session has a display and a clipboard
+    /// but no usable write tier, since `wtype` is Wayland-only and the
+    /// clipboard tier refuses without a paste keystroke. The portal is the
+    /// only path that works there, so selection has to be able to ask about
+    /// it independently.
+    ///
+    /// Defaulted to `false` so existing `Env` implementations, including the
+    /// test fakes, keep compiling and keep their current behaviour. A fake
+    /// that wants the portal path opts in explicitly.
+    fn has_portal_keyboard(&self) -> bool {
+        false
+    }
 }
 
 /// The real environment.
@@ -68,6 +83,24 @@ impl Env for SystemEnv {
         // A headless build has no accessibility tier compiled in, so the
         // honest answer is no rather than a probe that cannot be acted on.
         #[cfg(not(feature = "display"))]
+        {
+            false
+        }
+    }
+
+    /// Whether the `RemoteDesktop` portal is present and offers a keyboard.
+    ///
+    /// Only a capability probe: it reads the portal's
+    /// `AvailableDeviceTypes` property and never calls `CreateSession`, so
+    /// asking this question cannot raise a consent dialog. That matters
+    /// because selection runs on every start, including when another tier
+    /// ends up winning.
+    fn has_portal_keyboard(&self) -> bool {
+        #[cfg(all(feature = "display", target_os = "linux"))]
+        {
+            crate::targets::portal::PortalTarget::keyboard_available()
+        }
+        #[cfg(not(all(feature = "display", target_os = "linux")))]
         {
             false
         }
@@ -196,6 +229,19 @@ pub fn select(env: &dyn Env) -> Selection {
         };
     }
 
+    // Linux: the portal outranks the clipboard tier because it does not
+    // clobber the clipboard and does not need a paste keystroke, which is
+    // exactly what the clipboard tier lacks on a GNOME X11 session. It is
+    // below macOS AX and Windows UIA because it cannot read or replace, only
+    // insert.
+    #[cfg(all(feature = "display", target_os = "linux"))]
+    if env.has_display() && env.has_portal_keyboard() {
+        return Selection {
+            name: "linux-portal",
+            reason: "RemoteDesktop portal: keysym injection on X11 and Wayland, no clipboard clobber",
+        };
+    }
+
     #[cfg(feature = "display")]
     if env.has_display() && env.has_clipboard() {
         return Selection {
@@ -231,6 +277,8 @@ pub fn detect_with_env(env: &dyn Env) -> Result<Box<dyn TextTarget>, TargetError
         "macos-ax" => Box::new(AxTarget),
         #[cfg(all(feature = "display", target_os = "windows"))]
         "windows-uia" => Box::new(crate::targets::ax::UiaTarget::new()?),
+        #[cfg(all(feature = "display", target_os = "linux"))]
+        "linux-portal" => Box::new(crate::targets::portal::PortalTarget::new()?),
         #[cfg(feature = "display")]
         "clipboard-paste" => Box::new(ClipboardTarget::new_with_env(env)?),
         "daemon-socket" => Box::new(crate::targets::headless::DaemonTarget::new(

@@ -996,6 +996,7 @@ fn write_via_tiers(mode: &Mode, payload: String) -> Outcome {
         {
             use text_target::targets::clipboard::ClipboardTarget;
             use text_target::targets::keys::WtypeTarget;
+            use text_target::targets::portal::PortalTarget;
             use text_target::TextTarget;
 
             // Insert-only: an edit reaching wtype would APPEND the rewrite
@@ -1013,8 +1014,41 @@ fn write_via_tiers(mode: &Mode, payload: String) -> Outcome {
                         }
                     }
                     Err(e) => {
-                        eprintln!("outloud: wtype refused ({e}); falling back to clipboard")
+                        eprintln!("outloud: wtype refused ({e}); trying the desktop portal")
                     }
+                }
+
+                // The RemoteDesktop portal, which is what works on GNOME
+                // where wtype cannot: GNOME implements no virtual-keyboard
+                // protocol, but it does implement this portal, on X11 as
+                // well as Wayland.
+                //
+                // Above the clipboard rather than below it because the
+                // clipboard tier has two costs this does not: it destroys
+                // whatever the user had copied, and it needs a paste
+                // keystroke it cannot synthesize here, which is why it ends
+                // up telling the user to press Ctrl+V themselves. Insert-only
+                // like wtype, so it sits inside the same guard.
+                //
+                // Costs one consent dialog per run, since the grant does not
+                // persist across sessions, and the dialog is why this is
+                // attempted only after wtype has actually refused rather
+                // than probed for up front.
+                match PortalTarget::new() {
+                    Ok(mut portal) => match portal.insert(&payload) {
+                        Ok(()) => {
+                            return Outcome::Wrote {
+                                text: payload,
+                                via: "linux-portal".into(),
+                            }
+                        }
+                        Err(e) => eprintln!(
+                            "outloud: portal refused ({e}); falling back to clipboard"
+                        ),
+                    },
+                    Err(e) => eprintln!(
+                        "outloud: no desktop portal ({e}); falling back to clipboard"
+                    ),
                 }
             }
 
