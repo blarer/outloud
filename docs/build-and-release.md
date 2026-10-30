@@ -100,11 +100,16 @@ CI bug because each occurrence wastes a full push-wait-read cycle.
 
 ## MSRV policy
 
-- **MSRV: Rust 1.85** (edition-2021 workspace; 1.85 also covers the
+- **MSRV: Rust 1.86** (edition-2021 workspace; 1.86 also covers the
   edition-2024 dependencies that are starting to appear on crates.io).
-- CI enforces it with a real build: `cargo +1.85.0 build --workspace
+- CI enforces it with a real build: `cargo +1.86.0 build --workspace
   --locked` in the `msrv` job. A claimed-but-untested MSRV is worse than
   none, because downstream packagers discover the lie instead of us.
+- This document said 1.85 until 2026-10-30 while `ci.yml` said 1.86, so for
+  some months the enforced MSRV and the promised one were different numbers.
+  The drift is the argument for reading the number out of one place; until
+  that is automated, changing one without the other is a documentation bug
+  with the same weight as a code bug.
 - The **development toolchain is pinned separately** in
   `rust-toolchain.toml` (currently 1.95.0) and is intentionally newer. The
   MSRV is a promise to downstream (Debian, Fedora, nixpkgs ship old
@@ -114,6 +119,59 @@ CI bug because each occurrence wastes a full push-wait-read cycle.
 - Raising the MSRV is allowed but is a minor-version event with a changelog
   entry, and never for convenience of a single dependency without checking
   what downstream ships.
+
+### Dependencies pinned below their latest release for MSRV
+
+Some crates raise their own `rust-version` in a patch release, which
+silently raises ours the next time anyone runs `cargo update`. The lockfile
+therefore pins these deliberately, and each one needs a reason to move:
+
+| Crate | Pinned | Latest wants | Why pinned |
+|---|---|---|---|
+| `zbus` | 5.5.0 | 5.19 wants 1.87 | the GNOME portal text target, the only thing here we call directly |
+| `zbus_names` | 4.2.0 | 4.3.5 wants 1.87 | transitive via `zbus` |
+| `zvariant`, `zvariant_derive` | 5.4.0 | 5.15 wants 1.87 | transitive via `zbus` |
+| `zvariant_utils` | 3.2.0 | 4.2 wants 1.87 | transitive via `zvariant` |
+
+Two crates left the dependency graph entirely as a result, rather than being
+pinned: `zcheapstr` (its own 1.87 requirement, reached only through
+`zvariant` 5.15) and `uuid` (1.29 wants 1.89, reached only through `zbus`
+5.19). Neither is named anywhere in this workspace. That is worth knowing
+before anyone goes looking for a `uuid` pin that does not exist.
+
+Everything in that table is Linux-only: `zbus` sits behind
+`[target.'cfg(target_os = "linux")'.dependencies]`, so the four Apple and
+Windows targets never see any of it.
+
+The alternative was raising the MSRV to 1.89 so a *transitive* dependency of
+an *optional* Linux feature could stay current. That is exactly the case the
+policy above says no to: an MSRV is a promise to downstream packagers, and
+breaking it for a crate we do not call is the tail wagging the dog.
+
+**If you need a newer `zbus`** (for instance to migrate to 6.x, which folded
+`zvariant` and `zbus_names` in and is the long-term direction), that is a
+deliberate MSRV bump with a CHANGELOG entry, not a `cargo update`.
+
+### Checking it without installing an MSRV toolchain
+
+```bash
+scripts/ci-check-msrv-graph.py
+```
+
+Reads the MSRV out of `ci.yml`, then walks each shipped target's
+default-feature dependency graph looking for a declared `rust-version` above
+it. About a second, no toolchain install, and it names the offending crates
+instead of failing inside a cold build.
+
+It exists because `cargo build` on a Mac never compiles the Linux-gated tree,
+so the entire `zbus` chain above is invisible locally: the normal sequence is
+`cargo update`, green local build, push, then a red `msrv` job twenty minutes
+later. The `msrv` job remains the authoritative check. This is the cheap one.
+
+Features: default only, matching the `msrv` job. `--all-features` adds
+`whisper-rs-sys`, which declares 1.88, and flagging that would report a
+failure no CI job actually enforces, since whisper.cpp needs cmake and a C++
+toolchain that no MSRV job installs.
 
 ## Licence and CVE compliance
 

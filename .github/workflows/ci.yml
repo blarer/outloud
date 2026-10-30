@@ -90,6 +90,15 @@ jobs:
       - uses: actions/checkout@v4
       - name: Install Linux system dependencies
         run: scripts/ci-install-linux-deps.sh
+      # Cheap check first: reads every shipped target's dependency graph from
+      # the lockfile and reports any crate declaring a rust-version above the
+      # MSRV. Runs in about a second and names the crate, where the build
+      # below takes a toolchain install plus a cold compile and reports the
+      # same thing as a wall of cargo output. It also covers the targets this
+      # job does not build: the zbus tree is Linux-gated, so a contributor's
+      # macOS build never sees it.
+      - name: Check the dependency graph against the MSRV
+        run: scripts/ci-check-msrv-graph.py "$MSRV"
       - name: Install MSRV toolchain
         run: rustup toolchain install "$MSRV" --profile minimal
       - uses: Swatinem/rust-cache@v2
