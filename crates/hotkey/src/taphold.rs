@@ -129,6 +129,61 @@ impl TapHold {
         !matches!(self.state, State::Idle)
     }
 
+    /// A single toggle edge, for a binding that has no release edge at all.
+    ///
+    /// ## Why this exists
+    ///
+    /// The Linux backend is driven by a compositor keybind that execs
+    /// `outloud trigger press` and `outloud trigger release`. That needs the
+    /// compositor to be able to bind BOTH edges, which Hyprland and the
+    /// wlroots family do (`bind` and `bindr`).
+    ///
+    /// GNOME cannot. Mutter's custom shortcuts fire on press only, there is
+    /// no release variant, and GNOME 46 does not implement the
+    /// `GlobalShortcuts` portal that would provide one (verified by
+    /// introspecting the session bus on a GNOME 46 host: zero matches for
+    /// the interface). So on the single most common Linux desktop, push-to-
+    /// talk cannot be expressed at all, and the hotkey, the product's only
+    /// entry point, does not work.
+    ///
+    /// Toggle is the honest fallback: one binding, press-only, where the
+    /// first invocation starts capture and the second commits it. It reuses
+    /// the `Latched` state the tap gesture already produces, so there is no
+    /// new concept in the state machine and no new state for the rest of
+    /// the product to understand. A user on GNOME gets latched capture; a
+    /// user on Hyprland still gets both gestures.
+    ///
+    /// It is NOT offered as a preference on platforms that can do better.
+    /// Push-to-talk is the designed interaction (`docs/ux/02-core-interaction.md`)
+    /// because holding a key is self-limiting: let go and the microphone
+    /// stops, including when you forget about it. A toggle can leave the
+    /// microphone live, which is why the capture layer's silence timeout is
+    /// load-bearing here rather than merely tidy.
+    pub fn on_toggle(&mut self, _now: Instant) -> Vec<HotkeyEvent> {
+        match self.state {
+            // Start capturing, already latched: there will never be a
+            // release edge to decide tap-vs-hold with, so the decision is
+            // made here instead of deferred.
+            State::Idle => {
+                self.state = State::Latched;
+                vec![HotkeyEvent::Pressed, HotkeyEvent::Latched]
+            }
+            // Second invocation: commit.
+            State::Latched => {
+                self.state = State::Idle;
+                vec![HotkeyEvent::Unlatched]
+            }
+            // A toggle arriving mid-gesture means a real key is physically
+            // held while something else sent a toggle. Ending capture is the
+            // safe reading: the alternative leaves a live microphone whose
+            // owner believes they turned it off.
+            State::Pressed { .. } | State::LatchedPressed => {
+                self.state = State::Idle;
+                vec![HotkeyEvent::Released]
+            }
+        }
+    }
+
     /// Force back to idle. Used when the event tap dies and is re-created:
     /// we may have missed the key-up, and a machine stuck in Pressed would
     /// keep the mic hot forever, the worst trust failure this product has.
@@ -245,5 +300,100 @@ mod tests {
         m.on_key_down(base);
         m.on_key_up(ms(base, 100));
         assert_eq!(m.reset(), vec![HotkeyEvent::Released]);
+    }
+
+    /// The gesture GNOME users get: press to start, press again to commit.
+    #[test]
+    fn toggle_starts_then_commits() {
+        let base = t0();
+        let mut m = TapHold::new(Timing::default());
+
+        // Pressed AND Latched together: with no release edge coming, there
+        // is nothing to defer the tap-vs-hold decision for. Pressed is what
+        // starts capture and lights the overlay; Latched is what tells the
+        // rest of the product capture stays live after the key is gone.
+        assert_eq!(
+            m.on_toggle(base),
+            vec![HotkeyEvent::Pressed, HotkeyEvent::Latched]
+        );
+        assert!(m.capturing());
+
+        assert_eq!(m.on_toggle(ms(base, 2000)), vec![HotkeyEvent::Unlatched]);
+        assert!(!m.capturing());
+    }
+
+    /// Toggle is timing-independent. The whole point is that no release edge
+    /// arrives, so there is no duration to measure and the tap threshold
+    /// must not enter into it.
+    #[test]
+    fn toggle_ignores_the_tap_threshold() {
+        let base = t0();
+        let mut m = TapHold::new(Timing::default());
+        m.on_toggle(base);
+        // Well past tap_threshold: a key-up here would have meant Released.
+        assert_eq!(m.on_toggle(ms(base, 5_000)), vec![HotkeyEvent::Unlatched]);
+        assert!(!m.capturing());
+
+        // And well under it: still a commit, not a new gesture.
+        m.on_toggle(ms(base, 6_000));
+        assert_eq!(m.on_toggle(ms(base, 6_001)), vec![HotkeyEvent::Unlatched]);
+        assert!(!m.capturing());
+    }
+
+    /// A toggle arriving while a real key is physically held must STOP
+    /// capture, never leave it running.
+    ///
+    /// This is the case that decides the variant's safety. A user holding
+    /// push-to-talk who also triggers a toggle has given two contradictory
+    /// instructions, and the only acceptable resolution is the one that
+    /// cannot leave a live microphone behind: whoever sent the toggle
+    /// believes they turned something off.
+    #[test]
+    fn toggle_mid_hold_stops_capture() {
+        let base = t0();
+        let mut m = TapHold::new(Timing::default());
+        m.on_key_down(base);
+        assert!(m.capturing());
+
+        assert_eq!(m.on_toggle(ms(base, 50)), vec![HotkeyEvent::Released]);
+        assert!(!m.capturing(), "a toggle must never leave the mic hot");
+    }
+
+    /// Same requirement from the other mixed state: latched, then the key is
+    /// pressed again, then a toggle arrives before its release.
+    #[test]
+    fn toggle_during_unlatching_tap_stops_capture() {
+        let base = t0();
+        let mut m = TapHold::new(Timing::default());
+        m.on_key_down(base);
+        m.on_key_up(ms(base, 100)); // -> Latched
+        m.on_key_down(ms(base, 200)); // -> LatchedPressed, Unlatched fired
+
+        assert_eq!(m.on_toggle(ms(base, 250)), vec![HotkeyEvent::Released]);
+        assert!(!m.capturing());
+    }
+
+    /// Toggle and the tap gesture share the `Latched` state, so they must
+    /// interoperate: a toggle can be ended by a physical tap and vice versa.
+    /// Verified because the two paths are reachable on the same machine (a
+    /// GNOME user who later binds both edges, or a config switch mid-session)
+    /// and a state the other path cannot exit would strand capture.
+    #[test]
+    fn toggle_and_tap_share_the_latched_state() {
+        let base = t0();
+        let mut m = TapHold::new(Timing::default());
+
+        // Started by toggle, ended by a physical tap.
+        m.on_toggle(base);
+        assert_eq!(m.on_key_down(ms(base, 500)), vec![HotkeyEvent::Unlatched]);
+        assert_eq!(m.on_key_up(ms(base, 550)), vec![]);
+        assert!(!m.capturing());
+
+        // Started by a physical tap, ended by toggle.
+        m.on_key_down(ms(base, 1_000));
+        m.on_key_up(ms(base, 1_050)); // under threshold -> Latched
+        assert!(m.capturing());
+        assert_eq!(m.on_toggle(ms(base, 1_200)), vec![HotkeyEvent::Unlatched]);
+        assert!(!m.capturing());
     }
 }

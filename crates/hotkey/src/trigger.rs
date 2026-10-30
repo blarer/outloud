@@ -40,6 +40,15 @@ pub enum TriggerVerb {
     Press,
     /// The bound key came up. Hyprland's `bindr` (release variant).
     Release,
+    /// One press of a binding that has no release edge, where the first
+    /// invocation starts capture and the second commits it.
+    ///
+    /// For GNOME, which cannot express push-to-talk at all: Mutter's custom
+    /// shortcuts fire on press only, and GNOME 46 does not implement the
+    /// `GlobalShortcuts` portal that would supply a release edge. Without
+    /// this verb the hotkey, which is the product's only entry point, does
+    /// not work on the most common Linux desktop. See `TapHold::on_toggle`.
+    Toggle,
     /// Not a key edge: "is a daemon listening at all", used by the doctor
     /// and by a human running the CLI by hand to sanity-check the socket
     /// without accidentally starting a capture. Must never touch the state
@@ -56,7 +65,7 @@ impl std::fmt::Display for BadVerb {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(
             f,
-            "unknown trigger verb '{}' (want PRESS, RELEASE, or PING)",
+            "unknown trigger verb '{}' (want PRESS, RELEASE, TOGGLE, or PING)",
             self.0
         )
     }
@@ -74,6 +83,7 @@ impl TriggerVerb {
         match line.trim() {
             "PRESS" => Ok(TriggerVerb::Press),
             "RELEASE" => Ok(TriggerVerb::Release),
+            "TOGGLE" => Ok(TriggerVerb::Toggle),
             "PING" => Ok(TriggerVerb::Ping),
             other => Err(BadVerb(other.to_string())),
         }
@@ -84,6 +94,7 @@ impl TriggerVerb {
         match self {
             TriggerVerb::Press => "PRESS",
             TriggerVerb::Release => "RELEASE",
+            TriggerVerb::Toggle => "TOGGLE",
             TriggerVerb::Ping => "PING",
         }
     }
@@ -102,6 +113,7 @@ pub fn apply(machine: &mut TapHold, verb: TriggerVerb, now: Instant) -> Vec<Hotk
     match verb {
         TriggerVerb::Press => machine.on_key_down(now),
         TriggerVerb::Release => machine.on_key_up(now),
+        TriggerVerb::Toggle => machine.on_toggle(now),
         TriggerVerb::Ping => vec![],
     }
 }

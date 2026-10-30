@@ -125,14 +125,56 @@ XGrabKey. The options all move the binding out of process:
 - **GlobalShortcuts XDG portal** (`org.freedesktop.portal.GlobalShortcuts`,
   detection-only stub in `backend/linux.rs`): the compositor owns the
   binding and delivers Activated/**Deactivated** signals over DBus, so
-  push-to-talk works. KDE and GNOME ≥ 45; not implemented by Hyprland or
-  most wlroots compositors as of this writing, so building the full
-  session/consent/signal-listening integration now would spend the budget
-  on a path this project's own target machine cannot exercise. Worth
-  finishing for a future KDE/GNOME contributor; not blocking the Hyprland
-  path per the task that added it.
+  push-to-talk works. Documented as "KDE and GNOME ≥ 45", and **that is too
+  optimistic**: checked on a GNOME 46 X11 session on 2026-10-25 by
+  introspecting the session bus rather than trusting the version number,
+
+  ```
+  busctl --user introspect org.freedesktop.portal.Desktop \
+    /org/freedesktop/portal/desktop | grep GlobalShortcuts
+  # 0 matches
+  ```
+
+  so this host advertises no such interface. Not implemented by Hyprland or
+  most wlroots compositors either. Worth finishing for a future KDE
+  contributor; it is not the answer for GNOME today.
 - **evdev read access** (`input` group): works everywhere, but is literally
   system-wide key visibility and must be an informed opt-in. Not attempted.
+
+#### GNOME cannot do push-to-talk at all, so it gets a toggle
+
+Mutter's custom shortcuts fire on **press only**. There is no release
+variant, and per the introspection above there is no GlobalShortcuts portal
+to supply one. Push-to-talk needs both edges, so on the most common Linux
+desktop the hotkey, which is the product's only entry point, cannot be
+expressed.
+
+The fallback is a third verb, `outloud trigger toggle`, bound to one
+press-only shortcut: the first press starts capture, the next commits the
+utterance.
+
+```
+# GNOME: Settings > Keyboard > Custom Shortcuts, one entry
+outloud trigger toggle
+```
+
+It is deliberately not a new state. Toggle reuses the `Latched` state that
+the existing tap gesture already produces, so nothing downstream of
+`TapHold` learns a new concept, and the two gestures interoperate: a
+toggle-started capture can be ended by a physical tap and vice versa, which
+is covered by a test because both are reachable on one machine.
+
+Two things worth knowing before preferring it anywhere it is not forced:
+
+- **Push-to-talk is self-limiting and a toggle is not.** Letting go of a key
+  stops the microphone, including when you forget you were holding it. A
+  toggle can leave capture live, so the pipeline's `hot_mic_timeout_ms` is
+  load-bearing here rather than merely tidy.
+- **A toggle arriving mid-hold stops capture rather than continuing it.**
+  Contradictory instructions resolve toward the quiet microphone, because
+  whoever sent the toggle believes they turned something off. Tested, and
+  the test was verified by sabotage: making that branch leave capture
+  running fails two assertions.
 
 See "Verifying on a real machine (Linux Wayland)" below for the exact
 compositor config snippet and what still needs a human on real hardware.
@@ -192,6 +234,7 @@ The hook's own traps:
 |---|---|---|---|---|
 | Status | **implemented** | **implemented** (compiled in CI; untested on real hardware) | stub | **implemented** (compile-checked and cross-linked for `x86_64-unknown-linux-gnu`; **not run on real Wayland/Hyprland hardware**, see below) |
 | Global key down + up | yes | yes (hook) | yes | yes (compositor's `bind`/`bindr` execs `outloud trigger press`/`release`) |
+| Push-to-talk on GNOME | n/a | n/a | n/a | **no, and not fixable**: Mutter binds press edges only and GNOME 46 has no GlobalShortcuts portal. One shortcut on `outloud trigger toggle` gives latched capture instead (press to start, press to commit) |
 | Bare modifier binding (right Option) | yes (flagsChanged + device bits) | yes (VK_RMENU etc.) | XI2 raw events, not XGrabKey | whatever the compositor can bind and `exec` on; no keycode/flags matching needed here since the compositor already decided |
 | Fn/Globe key | yes, with traps above | no standard Fn visibility (vendor drivers) | keyboard-dependent (XF86Fn rarely delivered) | whatever the compositor exposes as a bindable key |
 | Conflict detection | symbolichotkeys + static table; other apps invisible | RegisterHotKey fails on collision (reliable) | XGrabKey BadAccess on collision (reliable) | none from this crate: the compositor's own keybind table is the source of truth and already prevents two `bind`s on one key |

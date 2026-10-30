@@ -144,11 +144,16 @@ fn linux_hotkey_status_line() -> String {
             format!(
                 "NO trigger daemon reachable at {} -> Wayland has no global hotkey \
                  protocol (docs/hotkeys.md #7). Add to your compositor config \
-                 (Hyprland example):\n                    \
+                 (Hyprland/sway/river, which can bind both key edges):\n                    \
                  bind  = , F13, exec, outloud trigger press\n                    \
                  bindr = , F13, exec, outloud trigger release\n                  \
-                 then reload the compositor and restart outloud. Substitute your own \
-                 key for F13; PING this daemon any time with: \
+                 On GNOME there is no `bindr` equivalent: Mutter fires custom \
+                 shortcuts on press only and GNOME has no GlobalShortcuts portal, \
+                 so push-to-talk cannot be expressed. Bind ONE shortcut to:\n                    \
+                 outloud trigger toggle\n                  \
+                 which starts capture on the first press and commits on the next. \
+                 Either way, reload the compositor and restart outloud. Substitute \
+                 your own key for F13; PING this daemon any time with: \
                  outloud trigger ping",
                 socket.display()
             )
@@ -832,9 +837,10 @@ fn run_trigger_subcommand(args: Vec<String>) -> anyhow::Result<()> {
         let verb = match args.first().map(String::as_str) {
             Some("press") => hotkey::trigger::TriggerVerb::Press,
             Some("release") => hotkey::trigger::TriggerVerb::Release,
+            Some("toggle") => hotkey::trigger::TriggerVerb::Toggle,
             Some("ping") => hotkey::trigger::TriggerVerb::Ping,
             other => anyhow::bail!(
-                "usage: outloud trigger <press|release|ping> (got {:?})",
+                "usage: outloud trigger <press|release|toggle|ping> (got {:?})",
                 other.unwrap_or("<nothing>")
             ),
         };

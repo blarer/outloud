@@ -17,8 +17,11 @@
 //!   and works identically on every wlroots compositor that can `exec` a
 //!   program on a key edge (sway, Hyprland, river). It is available TODAY
 //!   with zero new system dependencies.
-//! - **GlobalShortcuts XDG portal**: the "proper" native path, but only on
-//!   KDE and GNOME >= 45; not implemented by Hyprland or most wlroots
+//! - **GlobalShortcuts XDG portal**: the "proper" native path, documented as
+//!   KDE and GNOME >= 45, but that version claim does not hold: a GNOME 46
+//!   host advertises no such interface on the session bus (checked by
+//!   `busctl --user introspect`, zero matches, 2026-10-25). Not implemented
+//!   by Hyprland or most wlroots
 //!   compositors as of this writing, so it would leave the actual target
 //!   platform stubbed while a technically-nicer path sits unused. Sketched
 //!   as a stub below rather than left undocumented, because a future KDE/
@@ -172,6 +175,15 @@ impl TriggerState {
         match verb {
             TriggerVerb::Press => self.press_outstanding_since = Some(now),
             TriggerVerb::Release => self.press_outstanding_since = None,
+            // A toggle is a complete gesture on its own: there is no second
+            // half to wait for, so it must clear the watchdog rather than
+            // arm it. Arming it would make the watchdog fire mid-dictation
+            // on GNOME, forcing the machine to idle while the user was
+            // still speaking, which is worse than the stuck press it exists
+            // to catch. A toggle that is never followed by a second toggle
+            // leaves capture latched on purpose, and that case belongs to
+            // the pipeline's hot_mic_timeout_ms, exactly as a tap-latch does.
+            TriggerVerb::Toggle => self.press_outstanding_since = None,
             TriggerVerb::Ping => {}
         }
         for ev in trigger::apply(&mut self.machine, verb, now) {
@@ -450,8 +462,11 @@ pub fn daemon_reachable(path: &Path) -> bool {
 // ---------------------------------------------------------------------------
 
 /// Whether a `org.freedesktop.portal.GlobalShortcuts` implementation looks
-/// reachable on this session, for a future native-binding path on KDE/
-/// GNOME >= 45.
+/// reachable on this session, for a future native-binding path on KDE.
+///
+/// Note this returns FALSE on GNOME 46, which the module doc above once
+/// assumed would qualify. GNOME's answer is `TriggerVerb::Toggle` instead,
+/// because Mutter binds press edges only.
 ///
 /// Deliberately NOT implemented beyond this detection stub: doing the
 /// portal properly needs a DBus session connection, a `CreateSession` +
