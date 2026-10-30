@@ -69,6 +69,17 @@ pub fn registry() -> Vec<ModelSpec> {
             id: "parakeet-tdt-0.6b-v2-onnx",
             // istupakov's ONNX export of nvidia/parakeet-tdt-0.6b-v2, the
             // artifact sherpa-onnx consumes.
+            //
+            // THE ENCODER IS NOT THE WHOLE MODEL. This entry was the only
+            // Parakeet entry in the registry until 2026-10-30, which would
+            // have fetched 652MB and still produced a backend that cannot
+            // transcribe: a TDT model is encoder + decoder/joint + a
+            // feature extractor + a vocabulary, and three of those four were
+            // absent. The gap was invisible because the backend is a stub
+            // that fails before it reads any file, so nothing ever asked for
+            // the rest. They are listed below so landing inference is a
+            // matter of writing the backend rather than first discovering
+            // what it needs to load.
             url: "https://huggingface.co/istupakov/parakeet-tdt-0.6b-v2-onnx/resolve/main/encoder-model.int8.onnx",
             // From Hugging Face's published hash for the file (the LFS
             // object id is the SHA256 of the content), which is why this
@@ -78,6 +89,45 @@ pub fn registry() -> Vec<ModelSpec> {
             // swapping the model under us. That is the intended behaviour.
             sha256: Some("3e0581fda6ab843888b51e56d7ee78b6d5bc3237ec113af1f732d1d5286aa155"),
             approx_bytes: 652_184_014,
+            license: "CC-BY-4.0",
+        },
+        // The decoder and joint network, in one file. Tiny next to the
+        // encoder, and the half that turns encoder output into tokens.
+        // Hash and size from the LFS object id, same method as the encoder.
+        ModelSpec {
+            id: "parakeet-tdt-0.6b-v2-decoder-joint",
+            url: "https://huggingface.co/istupakov/parakeet-tdt-0.6b-v2-onnx/resolve/main/decoder_joint-model.int8.onnx",
+            sha256: Some("a449f49acd68979d418651dd2dcb737cc0f1bf0225e009e29ee326354edbf7d3"),
+            approx_bytes: 8_998_286,
+            license: "CC-BY-4.0",
+        },
+        // NeMo's 128-bin log-mel feature extractor, as ONNX. Parakeet does
+        // not take raw audio: without this the encoder has nothing to
+        // consume, and reimplementing NeMo's exact mel parameters by hand is
+        // the kind of near-miss that produces quietly worse accuracy rather
+        // than an error.
+        ModelSpec {
+            id: "parakeet-tdt-0.6b-v2-features",
+            url: "https://huggingface.co/istupakov/parakeet-tdt-0.6b-v2-onnx/resolve/main/nemo128.onnx",
+            sha256: Some("a9fde1486ebfcc08f328d75ad4610c67835fea58c73ba57e3209a6f6cf019e9f"),
+            approx_bytes: 139_764,
+            license: "CC-BY-4.0",
+        },
+        // The 1025-entry SentencePiece vocabulary. Token ids are
+        // meaningless without it.
+        //
+        // This hash was COMPUTED from a downloaded copy, not read from the
+        // LFS object id: the file is small enough that Hugging Face stores it
+        // inline, so `x-linked-etag` returns a git SHA1
+        // (`f0742785f6073e80b911964c455b05f3609bf23b`, 40 hex chars) rather
+        // than a content SHA256. Pasting that would have produced a pin that
+        // fails on every fetch. Worth knowing before adding another small
+        // file this way.
+        ModelSpec {
+            id: "parakeet-tdt-0.6b-v2-vocab",
+            url: "https://huggingface.co/istupakov/parakeet-tdt-0.6b-v2-onnx/resolve/main/vocab.txt",
+            sha256: Some("ec182b70dd42113aff6c5372c75cac58c952443eb22322f57bbd7f53977d497d"),
+            approx_bytes: 9_384,
             license: "CC-BY-4.0",
         },
     ]
@@ -384,7 +434,14 @@ mod tests {
         // Kept in sync by hand with MANAGED_MODEL_IDS in
         // crates/diag/src/checks.rs. Lowercase because the doctor compares
         // against a lowercased filename.
-        let diag_knows = ["whisper-base.en", "silero-vad", "parakeet-tdt-0.6b-v2-onnx"];
+        let diag_knows = [
+            "whisper-base.en",
+            "silero-vad",
+            "parakeet-tdt-0.6b-v2-onnx",
+            "parakeet-tdt-0.6b-v2-decoder-joint",
+            "parakeet-tdt-0.6b-v2-features",
+            "parakeet-tdt-0.6b-v2-vocab",
+        ];
         for spec in registry() {
             assert!(
                 diag_knows.contains(&spec.id),

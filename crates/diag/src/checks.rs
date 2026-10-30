@@ -1017,7 +1017,21 @@ pub struct ModelFiles;
 /// not depend on `asr`: the doctor must be buildable without the recognizer
 /// stack. `the_managed_ids_match_the_fetchers_registry` in `crates/asr` keeps
 /// the two honest, which is cheaper than the dependency.
-const MANAGED_MODEL_IDS: &[&str] = &["whisper-base.en", "silero-vad", "parakeet-tdt-0.6b-v2-onnx"];
+///
+/// Parakeet is four entries, not one. A TDT model needs the encoder, the
+/// decoder/joint network, NeMo's feature extractor and the vocabulary; the
+/// registry carried only the encoder until 2026-10-30, and adding the other
+/// three is what made this list grow. The cross-crate test above failed the
+/// moment they were added, which is the mechanism working: this list and that
+/// registry cannot drift without someone being told.
+const MANAGED_MODEL_IDS: &[&str] = &[
+    "whisper-base.en",
+    "silero-vad",
+    "parakeet-tdt-0.6b-v2-onnx",
+    "parakeet-tdt-0.6b-v2-decoder-joint",
+    "parakeet-tdt-0.6b-v2-features",
+    "parakeet-tdt-0.6b-v2-vocab",
+];
 
 /// Where models will live. Kept as a function so tests and future config can
 /// override the base directory.
