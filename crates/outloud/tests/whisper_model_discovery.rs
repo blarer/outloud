@@ -53,9 +53,36 @@ fn run_with_home(home: &Path) -> (bool, String) {
     // Verified against upstream code with no changes of mine involved: these
     // pass on a clean worktree and fail the moment a model is placed in it.
     let exe = home.join("outloud-under-test.exe");
+    // Serialize copy-then-spawn across the three tests in this binary.
+    //
+    // Without this, Linux CI fails intermittently with `ETXTBSY` ("Text file
+    // busy"). Cargo runs these tests as threads of ONE process. Thread A
+    // opens its copy of the binary for writing; thread B calls `spawn`, and
+    // between `fork` and `exec` B's child holds a copy of every one of the
+    // parent's descriptors, including A's write handle. `O_CLOEXEC` does not
+    // help: it acts at `exec`, not at `fork`, so the handle is genuinely
+    // present in another process for that window. A's binary is therefore
+    // "open for writing by another process", and A's own `exec` is refused.
+    //
+    // Note what does NOT fix this, since both look plausible:
+    //   - Giving each test its own temp HOME. Already true; the descriptor is
+    //     inherited regardless of which file it points at.
+    //   - Copying to a scratch name and renaming into place. `rename` keeps
+    //     the inode, and the inherited descriptor refers to the inode, so the
+    //     exec still sees a writable handle to the file it is launching.
+    //
+    // The only thing that closes the window is ensuring no copy is in flight
+    // anywhere in this process while a `fork` happens. The lock is therefore
+    // held across the copy AND the spawn, then released: it is dropped before
+    // waiting on the child, so the three daemon runs still overlap and the
+    // suite does not serialize on a subprocess. Retrying on ETXTBSY was the
+    // alternative and is worse: it leaves a test that fails for reasons
+    // unrelated to model discovery, just less often.
+    static SPAWN_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    let guard = SPAWN_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     std::fs::copy(env!("CARGO_BIN_EXE_outloud"), &exe).expect("copy the binary under test");
 
-    let out = Command::new(&exe)
+    let child = Command::new(&exe)
         .args([
             "--once",
             "--asr",
@@ -88,8 +115,19 @@ fn run_with_home(home: &Path) -> (bool, String) {
         // 148MB from Hugging Face on every `cargo test`, and the one that
         // asserts on the fetch instructions would never see them.
         .env("OUTLOUD_NO_DOWNLOAD", "1")
-        .output()
+        // Capture rather than inherit, since we assert on stderr below.
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
         .expect("the daemon binary should be runnable");
+
+    // The fork is done, so no other thread's copy can be inherited by it now.
+    // Released before waiting so the three daemon runs still overlap.
+    drop(guard);
+
+    let out = child
+        .wait_with_output()
+        .expect("the daemon binary should run to completion");
     (
         out.status.success(),
         String::from_utf8_lossy(&out.stderr).into_owned(),
