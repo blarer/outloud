@@ -166,16 +166,30 @@ jobs:
           # it failed all three Linux jobs of the v0.1.0 release AFTER every
           # other platform had built successfully, with the only clue being
           # "desktop-file-validate command is missing" 200 lines into a log.
-          sudo apt-get install -y musl-tools rpm binutils desktop-file-utils
+          # cmake builds whisper.cpp from source, which the daemon needs on
+          # glibc targets. Added when build-linux.sh started shipping the
+          # daemon rather than only the harness: before that, nothing in the
+          # Linux release path compiled a recognizer.
+          sudo apt-get install -y musl-tools rpm binutils desktop-file-utils cmake
           # appimagetool: single static binary, pinned release.
           curl -fsSL -o /usr/local/bin/appimagetool \
             https://github.com/AppImage/appimagetool/releases/download/1.9.0/appimagetool-x86_64.AppImage
           sudo chmod +x /usr/local/bin/appimagetool
       - name: Build and package
         run: scripts/build-linux.sh ${{ matrix.target }}
+      # The guard reads the binary a USER runs. It checked only the harness
+      # until the daemon started shipping here, which left the artifact that
+      # actually links whisper.cpp unexamined for AVX2 in a static
+      # initializer: exactly the pre-Haswell crash class the script exists
+      # for, on the one binary most likely to carry it.
       - name: Verify x86-64 ISA baseline (pre-Haswell guard)
         if: startsWith(matrix.target, 'x86_64')
-        run: scripts/ci-verify-baseline.sh dist/linux/${{ matrix.target }}/outloud-spike
+        run: |
+          scripts/ci-verify-baseline.sh dist/linux/${{ matrix.target }}/outloud-spike
+          # musl ships no daemon (no ALSA for the target); see build-linux.sh.
+          if [ -f dist/linux/${{ matrix.target }}/outloud ]; then
+            scripts/ci-verify-baseline.sh dist/linux/${{ matrix.target }}/outloud
+          fi
       - uses: actions/upload-artifact@v4
         with:
           name: linux-${{ matrix.target }}
@@ -248,16 +262,24 @@ jobs:
           # branch, and nothing could notice: notes are not code, so no
           # check ever read them. Generating them from the workflow means
           # the install instructions are reviewed like everything else.
+          #
+          # These notes cover EVERY platform the matrix above uploads. They
+          # described only the macOS double-click installer until
+          # 2026-10-30, while the same release attached Windows zips, an
+          # NSIS installer, Linux packages and a static headless binary. A
+          # Windows user downloading `outloud-*-x86_64-pc-windows-msvc.zip`
+          # was told to double-click a `.command` file. If a job is added to
+          # or removed from the matrix, this body is part of the change.
           body: |
-            ### Install
+            ### macOS (Apple Silicon, macOS 26+)
 
             Download **Install-OutLoud.command** below, then double-click it.
 
             The first time, macOS may say it is from an unidentified
             developer. Right-click the file and choose **Open**, then
-            **Open** again.
-
-            Apple Silicon, macOS 26 or newer.
+            **Open** again. That prompt is expected: these builds are
+            **not notarized**, so Gatekeeper has nothing to check them
+            against.
 
             <details><summary>Terminal alternative</summary>
 
@@ -267,5 +289,52 @@ jobs:
 
             macOS 26 may block pasting this; the download above avoids that.
             </details>
+
+            ### Windows (x86_64 and ARM64)
+
+            Either the `-setup.exe` installer or the `.zip` if you would
+            rather not install anything. Both contain `outloud.exe`, the
+            daemon, and `outloud-spike.exe`, a diagnostic harness.
+
+            **These binaries are unsigned.** SmartScreen will warn, and
+            some antivirus software may quarantine them, because a tool
+            that synthesizes keyboard input looks exactly like something
+            that should be viewed with suspicion. Choose **More info** then
+            **Run anyway** if you trust this source. We would rather say so
+            than have you discover it.
+
+            A whisper model is fetched on first use (~148MB, SHA256-pinned).
+            Dictation, undo and the hotkey are verified on real hardware;
+            the on-screen overlay's appearance is not.
+
+            ### Linux (x86_64 and aarch64, glibc and musl)
+
+            `.deb`, `.rpm`, AppImage or the tarball. Each contains
+            `outloud`, the dictation daemon, and `outloud-spike`, a
+            diagnostic harness.
+
+            Until 2026-10-30 these packages shipped only the harness, so
+            installing one gave you no way to dictate: the same defect
+            `36bb9fe` fixed for Windows, in the one place it was not also
+            fixed. If you have an older package, that is why it did nothing.
+
+            Text delivery goes through the `RemoteDesktop` desktop portal,
+            so a session without that portal has no way to type, and
+            push-to-talk needs a compositor that can bind both key edges.
+            Hyprland, sway and river can; GNOME cannot, and there you bind
+            one shortcut to `outloud trigger toggle` instead. Nobody has yet
+            dictated end to end on Linux, so treat it as untested rather
+            than working.
+
+            ### Headless / SSH
+
+            `outloud-spiked-*` is a static musl build with no audio or
+            display dependencies. Note this one is still built from
+            `spike-cli`: it is the harness, for the daemon-over-socket path,
+            not the dictation daemon.
+
+            ---
+
+            `SHA256SUMS` below covers every file in this release.
           files: |
             artifacts/**/*

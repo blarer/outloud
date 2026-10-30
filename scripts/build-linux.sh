@@ -39,17 +39,66 @@ ARCH="${TARGET%%-*}"                       # x86_64 | aarch64
 DEB_ARCH="$([ "$ARCH" = x86_64 ] && echo amd64 || echo arm64)"
 OUT="dist/linux/$TARGET"
 BIN="target/$TARGET/release/spike-cli"
+# The dictation daemon: the thing a user actually runs.
+#
+# This script shipped ONLY `spike-cli` until 2026-10-30, so every `.deb`,
+# `.rpm` and tarball it produced contained a diagnostic harness and no way to
+# dictate. That is the same defect `36bb9fe` fixed for Windows nine days
+# earlier ("a dictation app that could not transcribe"), in the one place it
+# was not also fixed, and nothing caught it because no CI job installs a
+# Linux package and runs it.
+DAEMON="target/$TARGET/release/outloud"
+
+# GLIBC ONLY, and this is a constraint rather than a preference.
+#
+# The daemon's default features pull cpal, whose `alsa-sys` build script runs
+# `pkg-config --exists alsa`. On musl that cannot be satisfied: the ALSA dev
+# package on the runner is the HOST's, and a musl target needs its own, which
+# is exactly what `scripts/ci-install-linux-deps.sh` says it deliberately
+# does not provide. Those targets exist to produce a *static headless* binary
+# that has no business linking an audio stack it never calls.
+#
+# So musl keeps shipping the harness alone. A `--no-default-features` daemon
+# would build there and then refuse every utterance for lack of a microphone
+# backend, which is a worse artifact than an honestly absent one.
+case "$TARGET" in
+    *-musl) WANT_DAEMON=0 ;;
+    *)      WANT_DAEMON=1 ;;
+esac
 
 echo "==> Building $TARGET"
+# --features outloud/whisper, for the same reason as Windows: whisper.cpp is
+# the only recognizer that exists off macOS and the feature is off by default
+# (it compiles whisper.cpp from source and needs cmake). Without it the
+# daemon starts, fetches a 147MB model, and then fails every utterance with
+# "this build has no whisper backend".
+PACKAGES=(--package spike-cli)
+FEATURES=()
+if [ "$WANT_DAEMON" = 1 ]; then
+    PACKAGES+=(--package outloud)
+    FEATURES+=(--features outloud/whisper)
+    # alsa-sys needs libasound2-dev, cmake builds whisper.cpp. The deps
+    # script is a no-op when they are already present.
+    ./scripts/ci-install-linux-deps.sh || true
+    command -v cmake >/dev/null || {
+        echo "ERROR: cmake is required to build the whisper recognizer." >&2
+        echo "Install it (apt-get install -y cmake) or run with a musl target," >&2
+        echo "which ships the harness only." >&2
+        exit 1
+    }
+fi
+
 case "$TARGET" in
     aarch64-*)
         # aarch64 cross-builds go through cross (pinned images, Cross.toml).
         command -v cross >/dev/null || cargo install cross --locked
-        cross build --release --locked --package spike-cli --target "$TARGET"
+        cross build --release --locked "${PACKAGES[@]}" "${FEATURES[@]}" \
+            --target "$TARGET"
         ;;
     *)
         rustup target add "$TARGET"
-        cargo build --release --locked --package spike-cli --target "$TARGET"
+        cargo build --release --locked "${PACKAGES[@]}" "${FEATURES[@]}" \
+            --target "$TARGET"
         ;;
 esac
 
@@ -57,7 +106,13 @@ mkdir -p "$OUT"
 cp "$BIN" "$OUT/outloud-spike"
 
 echo "==> tarball"
-tar -C "$OUT" -czf "$OUT/outloud-spike-$VERSION-$TARGET.tar.gz" outloud-spike
+if [ "$WANT_DAEMON" = 1 ]; then
+    cp "$DAEMON" "$OUT/outloud"
+    tar -C "$OUT" -czf "$OUT/outloud-$VERSION-$TARGET.tar.gz" outloud outloud-spike
+else
+    echo "    (musl: harness only, see the WANT_DAEMON comment above)"
+    tar -C "$OUT" -czf "$OUT/outloud-spike-$VERSION-$TARGET.tar.gz" outloud-spike
+fi
 
 # ---------------------------------------------------------------- AppImage
 #
@@ -81,27 +136,40 @@ elif command -v appimagetool >/dev/null 2>&1; then
     APPDIR="$OUT/AppDir"
     rm -rf "$APPDIR"
     mkdir -p "$APPDIR/usr/bin"
+    # Both binaries when the daemon exists: it is what a user runs, the
+    # harness is what they run when it does not work. On musl only the
+    # harness was built, so AppRun falls back to it.
     cp "$OUT/outloud-spike" "$APPDIR/usr/bin/"
-    cat > "$APPDIR/outloud-spike.desktop" <<DESKTOP
+    if [ "$WANT_DAEMON" = 1 ]; then
+        cp "$OUT/outloud" "$APPDIR/usr/bin/"
+        APP_EXEC=outloud
+    else
+        APP_EXEC=outloud-spike
+    fi
+    cat > "$APPDIR/$APP_EXEC.desktop" <<DESKTOP
 [Desktop Entry]
-Name=OutLoud Spike
-Exec=outloud-spike
-Icon=outloud-spike
+Name=OutLoud
+Exec=$APP_EXEC
+Icon=$APP_EXEC
 Type=Application
 Categories=Utility;Accessibility;
 Terminal=true
 DESKTOP
     # 1x1 placeholder icon; appimagetool requires one to exist.
-    printf '\x89PNG\r\n\x1a\n' > "$APPDIR/outloud-spike.png" || true
-    cat > "$APPDIR/AppRun" <<'APPRUN'
+    printf '\x89PNG\r\n\x1a\n' > "$APPDIR/$APP_EXEC.png" || true
+    cat > "$APPDIR/AppRun" <<APPRUN
 #!/bin/sh
+# Launches the DAEMON where one was built, not the harness: this is the thing
+# a user double-clicks expecting to dictate. The harness stays in usr/bin for
+# diagnosis. musl builds have no daemon (no ALSA), so they launch the harness.
+#
 # AppRun decides nothing about Wayland/X11: the binary itself does runtime
 # detection (WAYLAND_DISPLAY, then DISPLAY) so one AppImage serves both.
-exec "$(dirname "$0")/usr/bin/outloud-spike" "$@"
+exec "\$(dirname "\$0")/usr/bin/$APP_EXEC" "\$@"
 APPRUN
     chmod +x "$APPDIR/AppRun"
     # ARCH is read by appimagetool for the AppImage metadata.
-    ARCH="$ARCH" appimagetool "$APPDIR" "$OUT/outloud-spike-$VERSION-$ARCH.AppImage"
+    ARCH="$ARCH" appimagetool "$APPDIR" "$OUT/$APP_EXEC-$VERSION-$ARCH.AppImage"
 else
     echo "==> appimagetool not found: skipping AppImage"
 fi
@@ -111,20 +179,26 @@ if command -v dpkg-deb >/dev/null 2>&1; then
     echo "==> .deb"
     DEB="$OUT/deb"
     rm -rf "$DEB"
-    mkdir -p "$DEB/usr/bin" "$DEB/DEBIAN" "$DEB/usr/share/doc/outloud-spike"
+    mkdir -p "$DEB/usr/bin" "$DEB/DEBIAN" "$DEB/usr/share/doc/outloud"
     cp "$OUT/outloud-spike" "$DEB/usr/bin/"
-    cp LICENSE* "$DEB/usr/share/doc/outloud-spike/" 2>/dev/null || true
+    if [ "$WANT_DAEMON" = 1 ]; then
+        cp "$OUT/outloud" "$DEB/usr/bin/"
+        DEB_DESC=" Dictate and edit text by voice, entirely on this machine. Ships the\n daemon (outloud) and a diagnostic harness (outloud-spike)."
+    else
+        DEB_DESC=" Diagnostic harness only: this musl build links no audio backend, so\n it cannot dictate. See the glibc package for the daemon."
+    fi
+    cp LICENSE* "$DEB/usr/share/doc/outloud/" 2>/dev/null || true
     cat > "$DEB/DEBIAN/control" <<CONTROL
-Package: outloud-spike
+Package: outloud
 Version: $VERSION
 Architecture: $DEB_ARCH
 Maintainer: OutLoud project
 Section: utils
 Priority: optional
-Description: Local edit-by-voice spike harness
- Milestone-zero harness for reading and rewriting focused text fields.
+Description: Local voice dictation and edit-by-voice
+$(printf '%b' "$DEB_DESC")
 CONTROL
-    dpkg-deb --build --root-owner-group "$DEB" "$OUT/outloud-spike_${VERSION}_${DEB_ARCH}.deb"
+    dpkg-deb --build --root-owner-group "$DEB" "$OUT/outloud_${VERSION}_${DEB_ARCH}.deb"
 else
     echo "==> dpkg-deb not found: skipping .deb"
 fi
@@ -154,26 +228,35 @@ if command -v rpmbuild >/dev/null 2>&1; then
     RPMTOP="$OUT/rpmbuild"
     rm -rf "$RPMTOP"
     mkdir -p "$RPMTOP"/{SPECS,BUILD,RPMS,SOURCES}
-    cat > "$RPMTOP/SPECS/outloud-spike.spec" <<SPEC
-Name: outloud-spike
+    if [ "$WANT_DAEMON" = 1 ]; then
+        RPM_INSTALL="install -m 0755 $ROOT/$OUT/outloud %{buildroot}/usr/bin/outloud"
+        RPM_FILES="/usr/bin/outloud"
+    else
+        RPM_INSTALL=""
+        RPM_FILES=""
+    fi
+    cat > "$RPMTOP/SPECS/outloud.spec" <<SPEC
+Name: outloud
 Version: $VERSION
 Release: 1
-Summary: Local edit-by-voice spike harness
+Summary: Local voice dictation and edit-by-voice
 License: MIT
 %global __os_install_post %{nil}
 %global debug_package %{nil}
 
 %description
-Milestone-zero harness for reading and rewriting focused text fields.
+Dictate and edit text by voice, entirely on this machine.
 %install
 mkdir -p %{buildroot}/usr/bin
+$RPM_INSTALL
 install -m 0755 $ROOT/$OUT/outloud-spike %{buildroot}/usr/bin/outloud-spike
 %files
+$RPM_FILES
 /usr/bin/outloud-spike
 SPEC
     rpmbuild --define "_topdir $ROOT/$RPMTOP" \
              --define "_rpmdir $ROOT/$OUT" \
-             --target "$ARCH" -bb "$RPMTOP/SPECS/outloud-spike.spec"
+             --target "$ARCH" -bb "$RPMTOP/SPECS/outloud.spec"
 else
     echo "==> rpmbuild not found: skipping .rpm"
 fi
