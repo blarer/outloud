@@ -44,7 +44,16 @@ jobs:
 
   macos:
     needs: compliance
-    runs-on: macos-15
+    # macos-26, NOT macos-15. The Swift speech helper uses SpeechAnalyzer
+    # (`SpeechTranscriber`, `AssetInventory`, `AnalyzerInput`), which exists
+    # only in the macOS 26 SDK. On macos-15 it does not fail with a
+    # deployment-target error, it fails with "cannot find 'SpeechTranscriber'
+    # in scope", because the SDK has no such symbol to find.
+    #
+    # This is a release-only requirement. ci.yml stays on macos-15: it builds
+    # the workspace, and the helper is a separate swiftc invocation that only
+    # the release path performs.
+    runs-on: macos-26
     env:
       # Evaluated here because `secrets` is unavailable in step-level `if:`.
       HAVE_MACOS_CERT: ${{ secrets.MACOS_CERT_P12 != '' }}
