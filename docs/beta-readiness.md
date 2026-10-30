@@ -1,5 +1,22 @@
 # Beta readiness: GO / NO-GO for a public beta
 
+> **Dated assessment, written 2026-08. Two platform claims below are no longer
+> true, and are left in place because this is a record of a decision rather
+> than a live status page:**
+>
+> - *"Linux does not work"* (sections at the top and item 10 near the end).
+>   Linux gained a `RemoteDesktop` portal text target in `0422bdd` and a GPU
+>   recognizer in `245408d`. Nothing has been run end to end there and
+>   push-to-talk still has no path on GNOME, so the *conclusion* holds; the
+>   stated reason does not.
+> - *"Windows compiles but has never been run."* It has. Dictation, undo, the
+>   keyboard hook and the per-app transport rules were exercised on real
+>   hardware on 2026-08-04; see `docs/windows-handoff.md`.
+>
+> For current platform state read the README's status paragraph and its
+> Windows status table. The blocker that still stands is B2, signing and
+> notarization, which is unchanged.
+
 Assessment for handing this to roughly 50 strangers. Written by the beta
 readiness agent, in coordination with the release QA agent, whose findings live
 in [`release-readiness.md`](release-readiness.md) and are not duplicated here.

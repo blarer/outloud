@@ -35,7 +35,9 @@ That is a real limitation and it is stated here rather than in a footnote:
   bill of health.
 - **whisper.cpp is implemented** and is the open-weights path. Parakeet TDT is
   still a stub. On Windows and Linux whisper.cpp is the default and fetches its
-  model on first use; Linux has no working *injection* backend yet.
+  model on first use. Linux gained an injection backend in `0422bdd` (the
+  `RemoteDesktop` portal, X11 and Wayland both), but nobody has dictated
+  through it on hardware, and push-to-talk still does not work on GNOME.
 
 If a fully open stack is what you need today, this is not yet that. It is the
 rest of the machine built around one, and the recognizer is a seam designed to
@@ -44,8 +46,10 @@ be swapped ([`crates/asr`](crates/asr)).
 **Status: working prototype.** Dictation, edit-by-voice, and shell command-line
 editing are verified end to end on macOS. On Windows, dictation, undo, the
 keyboard hook and the per-app transport rules have been exercised on real
-hardware; what nobody has confirmed there is how the overlay *looks*. Linux is
-still designed and stubbed. See [what works](#what-works-today) and the
+hardware; what nobody has confirmed there is how the overlay *looks*. On Linux
+text delivery is implemented through the `RemoteDesktop` portal and a GPU
+recognizer landed, but nothing has been run end to end and push-to-talk has no
+working path on GNOME. See [what works](#what-works-today) and the
 [Windows status table](#windows-status-precisely).
 
 ## How it works
@@ -177,7 +181,10 @@ Requires macOS 13 or newer. On 26+ the recognizer is built in and needs no
 download; on 13-25 it needs a whisper model (see above). Also needs a Rust
 toolchain, and Xcode Command Line Tools for `swiftc`. Windows builds and
 installs (`scripts/build-windows.sh` ships `outloud.exe` and `outloud-spike.exe`)
-but is untested on hardware; Linux does not work yet.
+and has been exercised on real hardware, with the overlay's appearance the one
+unconfirmed part; see the [Windows status table](#windows-status-precisely).
+Linux builds and can now deliver text through the `RemoteDesktop` portal, but
+no one has dictated on it end to end and push-to-talk does not work on GNOME.
 
 ```bash
 git clone https://github.com/blarer/outloud
@@ -426,7 +433,9 @@ evidence in [`docs/beta-readiness.md`](docs/beta-readiness.md).
 | Quiet or distant speech is dropped | Words go missing unless you lean in and enunciate | Raise **Microphone Sensitivity** in the menu bar (or `microphone.sensitivity` in config) |
 | Bluetooth clips the first word | The headset needs ~200ms to start capturing; the daemon warns you once per device | Set `microphone.warm-hold-ms = 2000`, or hold the key a beat before speaking |
 | Freeform edits are not wired up | "tighten this up" reports that it needs the language model | Use the literal commands listed above |
-| Linux cannot type at all | `outloud` compiles for Linux, but every text delivery tier refuses: there is no X11/Wayland key synthesis. It declines without touching your clipboard | macOS only for now |
+| The one-line installer gives you a build from August | `install.sh` asks GitHub for the *latest release*, and that is `v2026.08.06-1649`. `main` is over 100 commits ahead of it, including the Windows recognizer, the Linux portal target, the microphone device setting, and the first-run model fetch | Build from source until a newer release is tagged, or read the install section's source path |
+| Linux can type only through the desktop portal | The `RemoteDesktop` portal tier works on X11 and Wayland and is preferred over the clipboard. Without it (`wtype` absent, no portal), every delivery tier still refuses rather than clobbering your clipboard. `UinputTarget` is a stub | Run a desktop with `org.freedesktop.portal.RemoteDesktop`; expect one consent dialog per session |
+| Linux push-to-talk does not work on GNOME | The hotkey backend wants a compositor keybind with press *and* release edges (Hyprland/wlroots `bind`/`bindr`). Mutter has no release edge, and GNOME 46 does not implement the `GlobalShortcuts` portal (checked with `busctl introspect`: no match) | Hyprland or another wlroots compositor for now |
 | The Windows overlay is unverified visually | Dictation, undo and the hotkey are exercised on real hardware, but nobody has confirmed the Direct2D overlay draws the *right* pixels; no CI job can see them | Report what you see; the rest of the Windows path works |
 
 ### Dictating during a call
