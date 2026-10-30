@@ -297,6 +297,29 @@ jobs:
             echo "::error title=installer pinned to a branch::Install-OutLoud.command fetches install.sh from a branch ref. Use /main/, or the installer breaks when that branch is deleted."
             exit 1
           fi
+      - name: Refuse to publish colliding artifact names
+        # The release attaches artifacts/**/* by BASENAME, flattening the
+        # per-job directories. Two jobs producing the same filename means
+        # one silently replaces the other and which one survives depends on
+        # matrix timing.
+        #
+        # This is not hypothetical: glibc and musl x86_64 both produced
+        # `outloud_0.1.0_amd64.deb` and `outloud-0.1.0-1.x86_64.rpm`. The
+        # musl package contains no daemon, so the coin-flip outcome was a
+        # user downloading "outloud for amd64" and getting something that
+        # cannot dictate. Fixed in build-linux.sh; this makes the next
+        # instance a failed release instead of a quietly wrong one.
+        run: |
+          cd artifacts
+          dupes="$(find . -type f -exec basename {} \; | sort | uniq -d)"
+          if [ -n "$dupes" ]; then
+            echo "::error title=colliding artifact basenames::These filenames appear in more than one build artifact. The release flattens them, so one would overwrite the other:"
+            echo "$dupes"
+            echo "--- full paths ---"
+            for d in $dupes; do find . -type f -name "$d"; done
+            exit 1
+          fi
+          echo "No basename collisions across $(find . -type f | wc -l) files."
       - name: Generate checksums
         run: |
           cd artifacts
@@ -358,14 +381,27 @@ jobs:
 
             ### Linux (x86_64 and aarch64, glibc and musl)
 
-            `.deb`, `.rpm`, AppImage or the tarball. Each contains
-            `outloud`, the dictation daemon, and `outloud-spike`, a
-            diagnostic harness.
+            `.deb`, `.rpm`, AppImage or the tarball.
+
+            Take the **glibc** build unless you know you want otherwise: it
+            contains `outloud`, the dictation daemon, and `outloud-spike`, a
+            diagnostic harness. It needs **glibc 2.39 or newer** (Ubuntu
+            24.04, Debian 13), which the `.deb` now declares, so apt will
+            refuse it rather than install a package that cannot start.
+
+            The **musl** files (`-musl.deb`, `1.musl` rpm, and the
+            `outloud-spike-` tarball and AppImage) are fully static and
+            contain **the harness only, no daemon**. They exist for machines
+            below the glibc floor and for headless use; they cannot dictate,
+            because a static build cannot link the system's audio stack.
 
             Until 2026-10-30 these packages shipped only the harness, so
             installing one gave you no way to dictate: the same defect
             `36bb9fe` fixed for Windows, in the one place it was not also
             fixed. If you have an older package, that is why it did nothing.
+            RPMs were missing entirely before that date too, for an
+            unrelated reason: they were built into a subdirectory the
+            release never looked in.
 
             Text delivery goes through the `RemoteDesktop` desktop portal,
             so a session without that portal has no way to type, and

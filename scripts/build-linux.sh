@@ -325,7 +325,21 @@ CONTROL
     # the end of the control stanza and then rejects the file for having no
     # Description. Harmless to run unconditionally.
     sed -i.bak '/^$/d' "$DEB/DEBIAN/control" && rm -f "$DEB/DEBIAN/control.bak"
-    dpkg-deb --build --root-owner-group "$DEB" "$OUT/outloud_${VERSION}_${DEB_ARCH}.deb"
+    # The filename carries the libc, because the release flattens every
+    # artifact into one directory and attaches them by basename. glibc and
+    # musl x86_64 both produced `outloud_0.1.0_amd64.deb`, so whichever job
+    # uploaded second would silently replace the other on the release page,
+    # and the survivor is decided by matrix timing. A musl package winning
+    # is the bad case: it contains no daemon, so a user would download
+    # "outloud for amd64" and get a package that cannot dictate.
+    #
+    # Only the dynamically linked build is plain `_amd64.deb`, since that is
+    # the one a normal user wants.
+    case "$TARGET" in
+        *-musl) DEB_NAME="outloud_${VERSION}_${DEB_ARCH}-musl.deb" ;;
+        *)      DEB_NAME="outloud_${VERSION}_${DEB_ARCH}.deb" ;;
+    esac
+    dpkg-deb --build --root-owner-group "$DEB" "$OUT/$DEB_NAME"
 else
     echo "==> dpkg-deb not found: skipping .deb"
 fi
@@ -355,6 +369,15 @@ if command -v rpmbuild >/dev/null 2>&1; then
     RPMTOP="$OUT/rpmbuild"
     rm -rf "$RPMTOP"
     mkdir -p "$RPMTOP"/{SPECS,BUILD,RPMS,SOURCES}
+    # Same basename-collision problem as the .deb above: glibc and musl
+    # x86_64 both produced `outloud-0.1.0-1.x86_64.rpm`. Encoded in the
+    # Release field rather than by renaming the file afterwards, so the
+    # package's own metadata distinguishes the two and `rpm -q` tells the
+    # truth, rather than only the filename doing so.
+    case "$TARGET" in
+        *-musl) RPM_RELEASE="1.musl" ;;
+        *)      RPM_RELEASE="1" ;;
+    esac
     if [ "$WANT_DAEMON" = 1 ]; then
         RPM_INSTALL="install -m 0755 $ROOT/$OUT/outloud %{buildroot}/usr/bin/outloud"
         RPM_FILES="/usr/bin/outloud"
@@ -370,7 +393,7 @@ if command -v rpmbuild >/dev/null 2>&1; then
     cat > "$RPMTOP/SPECS/outloud.spec" <<SPEC
 Name: outloud
 Version: $VERSION
-Release: 1
+Release: $RPM_RELEASE
 Summary: Local voice dictation and edit-by-voice
 License: MIT
 $RPM_REQUIRES
@@ -418,6 +441,17 @@ else
 fi
 
 # ---------------------------------------------------------------- Flatpak
+#
+# Emitted for ONE target only, because the manifest below is a quoted
+# heredoc with nothing target-specific in it: all four Linux jobs produced
+# byte-identical copies under the same name, which collided when the release
+# flattened them. Harmless in content, but it made the duplicate-name guard
+# in the publish job unable to distinguish "four copies of the same file"
+# from "two different packages, one about to be lost".
+#
+# flatpak-builder resolves its own architecture, so one manifest is correct
+# for every arch anyway.
+if [ "$TARGET" = "x86_64-unknown-linux-gnu" ]; then
 echo "==> Flatpak manifest"
 cat > "$OUT/dev.hexavoice.spike.yml" <<'FLATPAK'
 # Flatpak manifest for the spike harness.
@@ -470,5 +504,8 @@ modules:
       - type: dir
         path: ../../..
 FLATPAK
+else
+    echo "==> Flatpak manifest: emitted by the x86_64 glibc job only (arch-independent)"
+fi
 
 ls -l "$OUT"
