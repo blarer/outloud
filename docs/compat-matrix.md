@@ -173,7 +173,7 @@ one-time rc snippet speaking the daemon protocol in `targets/headless.rs`.
 | SSH + tmux on remote | Term | yes | line only | Full tmux row, unchanged by the network hop; this is the recommended remote setup |
 | CI / no tty | HL | yes | yes | Stdio filter mode: buffer in, rewrite out. How this crate tests itself |
 | Editor plugin (any) | HL | yes | yes | Daemon socket protocol: HELLO/BUFFER/READ/REPLACE, ~10 lines per client |
-| Linux console (no X/Wayland) | Keys (uinput) | no | no | uinput types into the console; nothing reads it back short of `/dev/vcs` |
+| Linux console (no X/Wayland) | HL | yes | yes | **Not** `Keys`: this row claimed uinput typed into the console until 2026-10-30, and that was never reachable. `UinputTarget` existed as a stub nothing constructed, and `detect.rs` has never named `linux-uinput` in its tier selection. Removed rather than left implying a feature. A console user wants the headless daemon tier, which works |
 
 ## Editors (native, non-terminal)
 

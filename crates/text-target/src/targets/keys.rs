@@ -817,46 +817,36 @@ impl TextTarget for WtypeTarget {
     }
 }
 
-/// Linux uinput virtual keyboard (what `ydotool` wraps). Stub.
-///
-/// Needs: write access to `/dev/uinput` (root or a udev rule), and a
-/// layout-matching keymap because uinput emits scancodes, not characters,
-/// the exact problem `wtype` solves on Wayland by going through the
-/// virtual-keyboard protocol with a custom keymap per unusual character.
-/// Works on X11, Wayland, and even the raw console, which no other
-/// graphical tier does.
-pub struct UinputTarget;
-
-impl TextTarget for UinputTarget {
-    fn name(&self) -> &'static str {
-        "linux-uinput"
-    }
-
-    fn tier(&self) -> Tier {
-        Tier::SyntheticKeys
-    }
-
-    fn capabilities(&self) -> Capabilities {
-        // Console works without a display server, hence headless-capable.
-        Capabilities::insert_only(true)
-    }
-
-    fn read(&mut self) -> Result<Snapshot, TargetError> {
-        Err(TargetError::NotReadable("keystroke synthesis cannot read"))
-    }
-
-    fn insert(&mut self, _text: &str) -> Result<(), TargetError> {
-        Err(TargetError::Unsupported(
-            "uinput keystroke synthesis not yet implemented",
-        ))
-    }
-
-    fn replace(&mut self, _text: &str) -> Result<(), TargetError> {
-        Err(TargetError::Unsupported(
-            "keystroke synthesis cannot address existing text",
-        ))
-    }
-}
+// Linux uinput virtual keyboard: deliberately NOT implemented, and no longer
+// a stub.
+//
+// A `UinputTarget` lived here implementing `TextTarget`, with every method
+// returning `Unsupported`. It was removed on 2026-10-30 because nothing
+// constructed it: `detect.rs` never names `linux-uinput` in its tier
+// selection, so the type was unreachable from any code path a user can take.
+// Worse, it was load-bearing in the documentation. `docs/compat-matrix.md`
+// listed a "Linux console (no X/Wayland)" row claiming `Keys (uinput)` typed
+// into the console, which was never true: the only way to reach that type was
+// to write Rust against this crate and call it yourself, and then it refused.
+//
+// Why uinput is not the path forward, now that the portal exists:
+//
+// - It needs write access to `/dev/uinput`, which means root or a udev rule,
+//   so it cannot be a default anywhere.
+// - It emits SCANCODES, not characters, so correct text requires a keymap
+//   matching the user's active layout. A `KEY_A` event produces whatever that
+//   layout maps, which is the exact problem documented at the top of this
+//   file and the reason `wtype` uploads its own keymap.
+// - The `RemoteDesktop` portal (`targets/portal.rs`) covers X11 and Wayland
+//   with keysyms rather than scancodes, needs no privileges and no udev rule,
+//   and is already implemented and ranked above the clipboard tier.
+//
+// The one thing uinput would still buy is the raw console, with no display
+// server at all. Nobody has asked for dictation there, and a headless console
+// user is better served by the `HL` daemon tier, which already works. If that
+// changes, implement it deliberately behind its own opt-in feature, with the
+// keymap problem solved rather than deferred, and update the capability
+// matrix in the same commit.
 
 #[cfg(test)]
 mod strategy_tests {

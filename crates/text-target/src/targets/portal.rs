@@ -5,8 +5,9 @@
 //! On a GNOME desktop neither of the other Linux write paths is available:
 //!
 //! - [`super::keys`]' `wtype` path is Wayland-only, so it is absent on an
-//!   X11 session, and `UinputTarget` is a stub that would additionally
-//!   need write access to `/dev/uinput`.
+//!   X11 session. There is no uinput path either: a `UinputTarget` stub
+//!   existed but was unreachable and was removed on 2026-10-30, with the
+//!   reasoning kept in `super::keys`.
 //! - [`super::clipboard`] deliberately refuses when it cannot synthesize a
 //!   paste keystroke, rather than clobber the clipboard and strand the
 //!   text. On GNOME X11 that refusal is correct and leaves nothing.
