@@ -133,7 +133,16 @@ jobs:
         if: matrix.target == 'x86_64-pc-windows-msvc'
         shell: bash
         # objdump ships with the Git-for-Windows/MSYS toolchain on runners.
-        run: scripts/ci-verify-baseline.sh dist/windows/${{ matrix.target }}/outloud-spike.exe
+        #
+        # Both binaries. This checked only the harness until 2026-10-30, so
+        # the daemon, which is the one that links whisper.cpp and therefore
+        # the one that can inherit ggml's AVX2 tuning, shipped unexamined
+        # from the day the recognizer was added to this script. The Linux
+        # equivalent of this gap, found the same day, reported 4870
+        # post-baseline instructions in the daemon.
+        run: |
+          scripts/ci-verify-baseline.sh dist/windows/${{ matrix.target }}/outloud-spike.exe
+          scripts/ci-verify-baseline.sh dist/windows/${{ matrix.target }}/outloud.exe
       - uses: actions/upload-artifact@v4
         with:
           name: windows-${{ matrix.target }}
