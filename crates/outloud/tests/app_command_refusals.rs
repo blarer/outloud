@@ -124,10 +124,26 @@ fn an_application_that_is_not_installed_is_refused() {
     // that depends on what the test runner happens to have installed.
     let (code, stdout) = command("open Zzyzx Quuxinator 9000");
     assert_eq!(code, Some(1));
+    // Two acceptable refusals, and which one depends on the environment:
+    //
+    //   "could not find"   a registry exists and this is not in it
+    //   "no list of"       the registry is EMPTY, so nothing could match
+    //
+    // The second is the case in the Nix build sandbox, which has no
+    // /Applications and no /usr/share/applications, and it is why this test
+    // failed CI while passing on both a Mac and a Linux box with a desktop.
+    // Pinning the message to "could not find" was asserting that the test
+    // machine has applications installed, which is not a property of the
+    // code under test.
+    //
+    // What matters is that it refused and launched nothing. Both messages
+    // are accurate about their own situation, which is the point of having
+    // NoRegistry as a distinct variant.
     assert!(
-        stdout.contains("could not find"),
+        stdout.contains("could not find") || stdout.contains("no list of"),
         "unexpected refusal: {stdout:?}"
     );
+    assert!(!stdout.contains("opening "), "DANGEROUS: reported a launch");
 }
 
 #[test]
