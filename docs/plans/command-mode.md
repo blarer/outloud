@@ -1,10 +1,27 @@
 # Proposal: command mode (app and system actions by voice)
 
-**Status: proposed, not scheduled. Nothing here is implemented.**
+**Status: the launch-and-switch slice is BUILT (`crates/app-command`). Everything
+else here remains proposed and unscheduled.**
 
-Written 2026-10-30 to capture the idea while the reasoning is fresh. This is
-a design note arguing for a particular *shape*, not a commitment to build it.
-If it is built, it is after 1.0.
+Written 2026-10-30 to capture the idea while the reasoning is fresh. The
+"smaller version worth considering first" at the bottom was then built the
+same day; see that section for what shipped. The rest of this document is a
+design note arguing for a particular *shape*, not a commitment to build it.
+
+What exists today:
+
+- `outloud --command "open Firefox"` resolves and launches, or refuses out
+  loud. `outloud --list-apps` prints the registry. `--command-dry-run`
+  resolves without launching.
+- Points 1 (explicit mode), 2 (closed grammar with a refusal path) and 3
+  (declared registry) are implemented for this verb. Points 4 (model selects
+  from the registry), 5 (confirmation for irreversible actions) and 6
+  (refused surfaces) are **not needed yet and not built**: launching is
+  reversible, so none of them has a job to do. They become mandatory the
+  moment a second verb appears.
+- Not wired to the dictation pipeline. The flag is the mode, which is the
+  most explicit form of point 1 available and is bindable as a system
+  shortcut exactly like `outloud trigger toggle`.
 
 ## The idea
 
@@ -218,6 +235,58 @@ all. It would answer the "does anyone want this" question with real usage
 rather than speculation, and if the answer is no, almost nothing was spent.
 
 That is the version I would build first.
+
+### Built, 2026-10-30 (`crates/app-command`)
+
+The above is what shipped. Two findings changed the design as written:
+
+**Launch and switch are the same operation.** The plan assumed they were two
+things and that switching would need the accessibility layer. They are one
+call, because the application's own single-instance logic raises its window:
+`open -a` on a running Messages raised it with the same PID and no
+Accessibility grant. That removed the entire per-platform window-raising
+problem, which is just as well, because raising is *not* portable. Windows
+refuses `SetForegroundWindow` from a process that does not own the foreground
+and Wayland exposes no equivalent to third parties, so an explicit-raise
+implementation would have worked on one platform and a half.
+
+**The grammar must be anchored, not just closed.** A closed verb set is not
+enough on its own: "the shop will open at nine" contains a command verb next
+to a plausible noun. The verb is matched only at the start of the utterance
+and must be a whole word. This is the same trap that made
+`docs/competitive-analysis.md` item 14 decline the general case, and it has
+tests at both the grammar and the shipped-binary level.
+
+Two bugs worth remembering, both found by tests rather than review:
+
+- `"open code"` resolved to **Xcode**: the word-anchored pass rejected it and
+  the phonetic pass then resurrected it at 0.92 similarity. A fuzzy score
+  must not overturn the anchored pass's decision, so candidates that merely
+  contain the spoken text are excluded from it.
+- The first version of the "every listed app can be opened" test used the
+  real flag and opened Chess. Hence `--command-dry-run`.
+
+### What is still unanswered
+
+The four questions under "what I would want to know before building it" are
+*not* resolved by this, with one exception:
+
+1. **Does anyone want it?** Still unknown, and now answerable with real
+   usage rather than speculation, which was the point of building the small
+   version.
+2. **ASR error rate on a command vocabulary?** Still unmeasured. The
+   phonetic pass is a mitigation, not an answer, and the eval harness could
+   measure this now.
+3. **How many apps does "move to inbox" work in?** Untouched: no per-app
+   verbs were built, deliberately.
+4. **Is this better than the keyboard?** Partly answered in the negative for
+   *this* slice, honestly: a user who can type has Spotlight, and it is
+   better than this. The case that stands up is the mouse-free,
+   keyboard-limited user in `docs/ux/06-accessibility.md`.
+
+Windows is built and type-checked but **never run**: the fleet's Windows
+machine is powered off. The Start Menu `.lnk` discovery is the least
+confident part of the implementation.
 
 ## See also
 

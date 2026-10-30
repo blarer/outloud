@@ -1778,6 +1778,7 @@ version = "0.1.0"
 dependencies = [
  "accessibility-sys",
  "anyhow",
+ "app-command",
  "asr",
  "audio",
  "ax-edit",

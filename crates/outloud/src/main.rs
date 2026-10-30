@@ -398,6 +398,77 @@ fn parse_args() -> anyhow::Result<Args> {
             }
             "--no-overlay" => args.no_overlay = true,
             "--realtime" => args.realtime = true,
+            // `--list-apps`: print the command-mode registry and exit.
+            //
+            // The registry is the fail-closed boundary for app commands, so
+            // being able to SEE it matters: "open Photoshop" refusing is
+            // correct when Photoshop is not installed and a bug when it is,
+            // and those two look identical from the outside.
+            "--list-apps" => {
+                let reg = app_command::discover();
+                if reg.is_empty() {
+                    eprintln!(
+                        "outloud: no applications found, so voice commands cannot open anything.\n\
+                         \x20       Expected on a headless machine; on a desktop this is a bug."
+                    );
+                    std::process::exit(1);
+                }
+                println!("{} applications:", reg.apps().len());
+                for app in reg.apps() {
+                    println!("  {}", app.name);
+                }
+                std::process::exit(0);
+            }
+            // `--command PHRASE`: run one app command and exit.
+            //
+            // This is the whole of command mode's user surface today, and
+            // deliberately so. The feature is EXPLICIT by design
+            // (docs/plans/command-mode.md point 1): commands are never
+            // recognized ambiently, because a sentence dictated into a
+            // document must not be able to act on the machine. A separate
+            // flag is the most explicit mode there is, it needs no new
+            // hotkey, and it is the shape a GNOME-style shortcut can bind
+            // directly, exactly as `outloud trigger toggle` already does.
+            //
+            // Takes TEXT rather than listening, so this composes with
+            // whatever already produces a transcript and is testable without
+            // a microphone. Wiring it to a held modifier in the dictation
+            // pipeline is a separate change with its own risks.
+            //
+            // `--dry-run` resolves and prints without launching. Added
+            // because the obvious integration test ("every app in
+            // --list-apps can be opened") otherwise opens dozens of
+            // applications on the machine running the tests, which I
+            // confirmed by writing it that way first: it launched Chess.
+            // A test that does visible damage is a test people disable.
+            "--command" | "--command-dry-run" => {
+                let dry = a == "--command-dry-run";
+                let phrase = val(a.as_str())?;
+                let reg = app_command::discover();
+                match app_command::parse(&phrase, &reg) {
+                    Ok(app_command::AppCommand::Launch(app)) => {
+                        // Printed BEFORE acting, so a mis-resolution is
+                        // visible even when the launch itself succeeds. The
+                        // dangerous failure here is opening the wrong thing
+                        // quietly, not failing to open the right thing.
+                        println!("opening {}", app.name);
+                        if !dry {
+                            if let Err(e) = app_command::launch(&app) {
+                                eprintln!("outloud: {e}");
+                                std::process::exit(1);
+                            }
+                        }
+                        std::process::exit(0);
+                    }
+                    Err(refusal) => {
+                        // Refusals go to stdout and exit 1: the text is
+                        // meant to be spoken or shown to the user, and the
+                        // exit code is for whatever bound the shortcut.
+                        println!("{}", refusal.say());
+                        std::process::exit(1);
+                    }
+                }
+            }
             // `--permissions`: report THIS bundle's grants and exit.
             //
             // The doctor runs as a separate bundle (OutLoudDoctor.app) and
@@ -481,6 +552,8 @@ fn parse_args() -> anyhow::Result<Args> {
                      --realtime       pace file audio like live speech\n\
                      --sensitivity N  override microphone.sensitivity (1-100)\n\
                      --permissions    report this build's grants and exit\n\
+                     --command TEXT   run one app command (\"open Firefox\") and exit\n\
+                     --list-apps      list the applications --command can open\n\
                      --route [APP|N]  which transport APP would get, or whatever\n\
                                       you focus within N seconds (Windows)\n\
                      --version        print the version and exit\n\

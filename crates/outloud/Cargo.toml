@@ -33,6 +33,9 @@ display = ["overlay/display", "text-target/display", "audio/capture", "ax-edit/b
 
 [dependencies]
 anyhow.workspace = true
+# Voice-driven application launch (`--command`, `--list-apps`). Pure plus a
+# process spawn, so it adds no runtime dependency on any platform.
+app-command = { path = "../app-command" }
 asr = { path = "../asr" }
 # default-features = false, so `--no-default-features` genuinely reaches the
 # audio crate. Without this the dependency edge re-enables `capture` no
