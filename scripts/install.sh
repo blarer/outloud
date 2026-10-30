@@ -28,7 +28,18 @@
 set -euo pipefail
 
 REPO="blarer/outloud"
-ASSET="OutLoud-macos-arm64.tar.gz"
+# Matched as a PATTERN, not an exact name.
+#
+# This was the exact string "OutLoud-macos-arm64.tar.gz" until 2026-10-30,
+# while the release workflow produced no tarball at all: the one on the
+# August release had been uploaded by hand. The release now builds a
+# universal (arm64 + x86_64) bundle, so the asset is
+# `OutLoud-macos-universal.tar.gz`, and a hardcoded name here would have
+# turned one broken install path into a different broken install path.
+#
+# The pattern accepts either, so this script works against both the older
+# hand-uploaded asset and the generated one.
+ASSET_PATTERN="OutLoud-macos-[a-z0-9]*\.tar\.gz"
 APP="OutLoud.app"
 DEST="${OUTLOUD_INSTALL_DIR:-/Applications}"
 
@@ -58,11 +69,15 @@ API="https://api.github.com/repos/$REPO/releases/latest"
 # Parsed with grep/sed rather than jq: jq is not installed by default on
 # macOS, and requiring it would trade one broken install path for another.
 URL="$(curl -fsSL "$API" \
-    | grep -o "\"browser_download_url\": *\"[^\"]*${ASSET}\"" \
+    | grep -o "\"browser_download_url\": *\"[^\"]*${ASSET_PATTERN}\"" \
     | head -1 \
     | sed 's/.*"browser_download_url": *"//; s/"$//')"
 
-[ -n "$URL" ] || die "no $ASSET in the latest release. See https://github.com/$REPO/releases"
+[ -n "$URL" ] || die "no macOS tarball in the latest release. See https://github.com/$REPO/releases"
+
+# The real filename, taken from the URL rather than assumed, so the
+# download and the "no such asset" message both name the actual file.
+ASSET="$(printf '%s\n' "$URL" | sed 's|.*/||')"
 
 TAG="$(printf '%s\n' "$URL" | sed 's|.*/download/||; s|/.*||')"
 say "    found $TAG"

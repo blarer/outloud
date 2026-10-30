@@ -95,7 +95,16 @@ jobs:
       - uses: actions/upload-artifact@v4
         with:
           name: macos-universal
-          path: dist/*.dmg
+          # The tarball matters as much as the DMG: scripts/install.sh, which
+          # the release notes recommend first, downloads
+          # `OutLoud-macos-*.tar.gz`. Only `*.dmg` was uploaded here, so that
+          # asset existed on exactly one release because someone uploaded it
+          # by hand, and the next tag would have broken the documented
+          # install path.
+          path: |
+            dist/*.dmg
+            dist/OutLoud-macos-universal.tar.gz
+            dist/OutLoud-macos-universal.zip
 
   windows:
     needs: compliance
@@ -160,9 +169,19 @@ jobs:
       - uses: actions/upload-artifact@v4
         with:
           name: windows-${{ matrix.target }}
+          # Deliberately NOT `*.exe`: that glob also matched the bare
+          # `outloud.exe` and `outloud-spike.exe`, whose names carry no
+          # target. Both Windows jobs produced them, and the release
+          # flattens artifacts by basename, so the x86_64 and arm64 copies
+          # collided and one silently replaced the other. A user on ARM
+          # could have downloaded an x86_64 binary named `outloud.exe`.
+          #
+          # The loose binaries are redundant anyway: both are inside the
+          # portable zip, whose name does carry the target. What users need
+          # is the installer, which is `*-setup.exe`.
           path: |
             dist/windows/${{ matrix.target }}/*.zip
-            dist/windows/${{ matrix.target }}/*.exe
+            dist/windows/${{ matrix.target }}/*-setup.exe
             dist/windows/${{ matrix.target }}/*.msi
 
   linux:
@@ -343,9 +362,20 @@ jobs:
           # was told to double-click a `.command` file. If a job is added to
           # or removed from the matrix, this body is part of the change.
           body: |
-            ### macOS (Apple Silicon, macOS 26+)
+            ### macOS (Apple Silicon and Intel, macOS 13+)
 
             Download **Install-OutLoud.command** below, then double-click it.
+
+            Or open **OutLoud-{version}-universal.dmg** and drag the app to
+            Applications. Both contain the same universal build, which runs
+            natively on Apple Silicon and Intel.
+
+            Before 2026-10-30 the DMG contained `OutLoudSpike.app`, the
+            accessibility development harness, rather than the dictation
+            app. If you installed one, it could not dictate and that is why.
+
+            The on-device Apple recognizer needs **macOS 26**. On 13 through
+            15 the app runs and uses whisper instead.
 
             The first time, macOS may say it is from an unidentified
             developer. Right-click the file and choose **Open**, then
