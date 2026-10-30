@@ -45,11 +45,26 @@ Cross-compilation strategy, per target:
   architectures with only a `rustup target add`, so no container or extra
   linker is involved.
 - **Windows aarch64** cross-compiles on the x86_64 `windows-2025` runner.
-  MSVC ships the arm64 cross-linker in every Visual Studio install, so again
-  only `rustup target add` is needed. There are no arm64 Windows GitHub
-  runners to test on, which means arm64 Windows is *built* in CI but only
-  *executed* by users. That gap is acceptable for a spike and is written down
-  here so nobody mistakes a green build for a tested build.
+  MSVC ships the arm64 cross-linker in every Visual Studio install, so Rust
+  itself needs only a `rustup target add`. **The recognizer does not.** ggml's
+  `ggml-cpu/CMakeLists.txt` aborts with `MSVC is not supported for ARM, use
+  clang` unless the C compiler is Clang, so `scripts/build-windows.sh` sets
+  `CC_aarch64_pc_windows_msvc` and `CXX_aarch64_pc_windows_msvc` to
+  `clang-cl` for this target. clang-cl keeps MSVC's ABI and command-line
+  interface, so nothing else in the build changes.
+
+  That refusal broke every aarch64 release job from 2026-10-21, when the
+  whisper feature was added to the release build, until it was found on
+  2026-10-30. Nothing in CI could see it: `build-matrix` compiles this triple
+  with *default* features and whisper is off by default, while the `whisper`
+  job only builds for the host and there are no arm64 Windows runners. The
+  one combination that fails was the one combination no job built. The
+  `whisper-aarch64-windows` job exists now to close exactly that gap.
+
+  There are still no arm64 Windows GitHub runners, which means arm64 Windows
+  is *built* in CI but only *executed* by users. That gap is acceptable for a
+  spike and is written down here so nobody mistakes a green build for a
+  tested build.
 - **Linux x86_64 (glibc and musl)** builds natively on `ubuntu-24.04`, with
   `musl-tools` supplying the musl C toolchain.
 - **Linux aarch64 (both libcs)** goes through

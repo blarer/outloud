@@ -53,6 +53,41 @@ DAEMON="target/$TARGET/release/outloud.exe"
 echo "==> Building $TARGET"
 rustup target add "$TARGET"
 
+# ARM64 needs clang, not MSVC, and this is not our preference: ggml refuses
+# outright. `ggml/src/ggml-cpu/CMakeLists.txt:109` is
+#
+#     if (MSVC AND NOT CMAKE_C_COMPILER_ID STREQUAL "Clang")
+#         message(FATAL_ERROR "MSVC is not supported for ARM, use clang")
+#
+# so an aarch64 build with `--features outloud/whisper` cannot configure at
+# all under cl.exe. That is what broke every aarch64 release job since the
+# recognizer was added to this script on 2026-10-21: the x86_64 row kept
+# succeeding, so the release failed with one green Windows artifact and one
+# red, and `publish` never ran.
+#
+# Why CI did not catch it: `ci.yml`'s build-matrix compiles aarch64 Windows
+# with DEFAULT features, and whisper is off by default (it needs cmake and a
+# C++ toolchain, which no plain typecheck job should require). The feature
+# that fails is therefore absent from the only job that builds this triple.
+# A green CI row and a red release row were both correct.
+#
+# cmake-rs reads `CC_<target>` / `CXX_<target>`, so pointing those at
+# clang-cl is enough to satisfy ggml's check; clang-cl keeps MSVC's calling
+# convention and command-line interface, so the Rust side still links
+# against the MSVC ABI and nothing else in the build has to change.
+if [ "$TARGET" = "aarch64-pc-windows-msvc" ]; then
+    echo "==> aarch64: using clang-cl (ggml refuses to build for ARM under MSVC)"
+    if ! command -v clang-cl >/dev/null 2>&1; then
+        echo "ERROR: clang-cl not on PATH." >&2
+        echo "The windows-2025 runner ships LLVM; locally, install it with" >&2
+        echo "  choco install llvm" >&2
+        echo "Without it this target cannot build the whisper feature at all." >&2
+        exit 1
+    fi
+    export CC_aarch64_pc_windows_msvc=clang-cl
+    export CXX_aarch64_pc_windows_msvc=clang-cl
+fi
+
 # --features outloud/whisper: the recognizer itself. Without it the daemon
 # BUILDS fine, STARTS fine, downloads a model on first run, and then errors
 # on every single utterance with "this build has no whisper backend" --

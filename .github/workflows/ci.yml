@@ -384,6 +384,53 @@ jobs:
         run: >-
           echo "::error title=whisper backend::scripts/ci-whisper.sh failed. Either the backend broke, or the pinned model hash no longer matches what the upstream URL serves (which is the check working, not a flake)."
 
+  # Does the whisper feature COMPILE for aarch64 Windows? Separate from the
+  # job above because that one runs the recognizer, which needs a host of
+  # the same architecture, and there are no arm64 Windows runners.
+  #
+  # This exists because of a real gap, not for completeness. The release
+  # job's aarch64 row failed on every run from 2026-10-21 (when the
+  # recognizer was added to build-windows.sh) and nothing in CI could see
+  # it: build-matrix compiles aarch64 Windows with DEFAULT features, whisper
+  # is off by default, and the whisper job only builds for the host. So the
+  # one combination that fails, aarch64 + whisper, was the one combination
+  # no job built. Both were green and the release was broken.
+  #
+  # The failure is a hard upstream refusal rather than a warning: ggml's
+  # ggml-cpu/CMakeLists.txt aborts with "MSVC is not supported for ARM, use
+  # clang" unless the C compiler is Clang. build-windows.sh now sets
+  # CC/CXX to clang-cl for that target; this job proves it keeps working.
+  #
+  # `cargo build` rather than `check`: the thing that breaks is a cmake
+  # configure step inside a build script, and `check` still runs build
+  # scripts, but building the staticlib is what proves clang-cl can
+  # actually compile ggml's ARM intrinsics rather than merely configure.
+  whisper-aarch64-windows:
+    runs-on: windows-2025
+    steps:
+      - uses: actions/checkout@v4
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: whisper-aarch64-windows
+      - name: Add target
+        run: rustup target add aarch64-pc-windows-msvc
+      - name: Build the whisper feature for aarch64
+        shell: bash
+        # Same CC/CXX override as scripts/build-windows.sh, deliberately
+        # repeated rather than sourced: this job must fail if the script's
+        # mechanism stops being sufficient, which it cannot do if it reuses
+        # the script's own logic.
+        run: |
+          command -v clang-cl >/dev/null || { echo "::error::clang-cl missing from the runner image"; exit 1; }
+          export CC_aarch64_pc_windows_msvc=clang-cl
+          export CXX_aarch64_pc_windows_msvc=clang-cl
+          cargo build --release --locked --package outloud \
+            --features outloud/whisper --target aarch64-pc-windows-msvc
+      - name: Attribute failure
+        if: failure()
+        run: >-
+          echo "::error title=aarch64 Windows whisper build::The whisper feature no longer cross-compiles for aarch64-pc-windows-msvc. ggml refuses MSVC for ARM, so this needs clang-cl; see the CC/CXX exports in scripts/build-windows.sh. A failure here is a release-blocking failure caught early."
+
 
   # Performance tripwire. Every other job answers "is it correct"; this one
   # answers "is it still fast", which no correctness test can see: a change
