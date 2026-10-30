@@ -110,7 +110,21 @@ jobs:
       - uses: actions/checkout@v4
       - uses: Swatinem/rust-cache@v2
         with:
-          key: release-${{ matrix.target }}
+          # Keyed on the build script, in `shared-key` rather than `key`.
+          #
+          # whisper.cpp is compiled by a build script into a static library
+          # in the cargo target dir, which rust-cache saves and restores.
+          # Cargo does not know this script chose the cmake settings it was
+          # built with, so editing them invalidates nothing: the cached
+          # library comes back and the new settings apply to nothing.
+          #
+          # Observed, not theorised. A `GGML_NATIVE=OFF` change echoed its
+          # own log line here and the baseline guard still found 12703
+          # post-baseline instructions, because whisper-rs-sys was never
+          # recompiled. It has to be `shared-key`: rust-cache derives its
+          # restore keys from that, so a changed `key` still matches the old
+          # entry by prefix. Watch for `Compiling whisper-rs-sys` in the log.
+          shared-key: release-${{ matrix.target }}-${{ hashFiles('scripts/build-windows.sh') }}
       - name: Import Authenticode certificate
         if: env.HAVE_WINDOWS_CERT == 'true'
         shell: pwsh
@@ -166,7 +180,10 @@ jobs:
       - uses: actions/checkout@v4
       - uses: Swatinem/rust-cache@v2
         with:
-          key: release-${{ matrix.target }}
+          # Keyed on the build script for the same reason as the Windows job
+          # above: a cached libwhisper.a makes a cmake-setting change a no-op,
+          # and `shared-key` is what rust-cache builds its restore keys from.
+          shared-key: release-${{ matrix.target }}-${{ hashFiles('scripts/build-linux.sh') }}
       - name: Install packaging tools
         run: |
           sudo apt-get update
