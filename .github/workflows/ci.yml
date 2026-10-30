@@ -589,3 +589,111 @@ jobs:
         if: failure()
         run: >-
           echo "::error title=nix-cuda job failed::whisper.cpp's CUDA build or its final link failed. If the error is 'unable to find library -lcuda', the libcuda stub path in flake.nix is wrong: libcuda ships with the driver, and Nix links against cuda_cudart's stubs directory."
+
+  # Do voice app commands actually WORK on Windows?
+  #
+  # Added because the Windows half of `app-command` was written,
+  # type-checked and committed WITHOUT EVER RUNNING. The fleet's Windows
+  # machine is powered off, and no CI job ran the test suite on Windows:
+  # build-matrix only compiles, and the whisper/overlay Windows jobs each
+  # run one specific unrelated binary. So the Start Menu `.lnk` discovery
+  # and the `cmd /C start ""` launch were pure reasoning, on the platform
+  # where docs/windows-handoff.md is explicit that a green build proves
+  # nothing about behaviour.
+  #
+  # A GitHub-hosted windows-2025 runner IS a real Windows machine, which
+  # makes this the honest acceptance path short of the user's own desktop.
+  # Same reasoning as windows-overlay-runtime-smoke: CI infrastructure, not
+  # anybody's workstation.
+  #
+  # Proves: discovery finds real Start Menu shortcuts, a spoken phrase
+  # resolves to one of them, dictated prose is refused, and the launcher
+  # actually starts a process.
+  #
+  # Cannot prove: that launching an ALREADY-RUNNING single-instance app
+  # raises its existing window instead of starting a second copy. That is
+  # the "switch" half; it depends on the application, and a headless runner
+  # has no window to raise. Verified on macOS by PID and frontmost app, and
+  # on Linux by a desktop entry whose Exec wrote a timestamp. Still open on
+  # Windows, recorded rather than glossed.
+  windows-app-command-runtime-smoke:
+    runs-on: windows-2025
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: windows-app-command
+      # The crate's own tests are pure, but have only ever run on macOS and
+      # Linux. A platform difference in the discovery code shows up here.
+      - name: app-command unit tests on Windows
+        run: cargo test -p app-command
+      - name: Integration tests against the real binary
+        run: cargo test -p outloud --test app_command_refusals
+      - name: Does Start Menu discovery find anything?
+        shell: bash
+        run: |
+          cargo build -p outloud
+          BIN=target/debug/outloud.exe
+          if ! "$BIN" --list-apps > apps.txt 2> err.txt; then
+            echo "::error title=no Start Menu applications found::--list-apps failed on a real Windows runner, so the .lnk discovery in crates/app-command/src/launch.rs finds nothing. That code had never been run before this job existed."
+            cat err.txt
+            exit 1
+          fi
+          head -20 apps.txt
+          COUNT=$(head -1 apps.txt | grep -oE '^[0-9]+' || echo 0)
+          echo "discovered $COUNT applications"
+          # Any Windows install has Start Menu shortcuts. Zero means the
+          # directories or the .lnk filter are wrong.
+          if [ "$COUNT" -lt 1 ]; then
+            echo "::error title=empty Windows registry::Discovery returned no applications on a stock Windows runner."
+            exit 1
+          fi
+      - name: Does a discovered name resolve, and is prose refused?
+        shell: bash
+        run: |
+          BIN=target/debug/outloud.exe
+          # Resolve the first discovered app by its own name, DRY so nothing
+          # launches. Exercises discovery -> parse -> resolve over real
+          # Windows shortcut names, which is where names differ most from
+          # the other platforms.
+          FIRST=$(sed -n '2p' apps.txt | sed 's/^[[:space:]]*//')
+          echo "resolving: [$FIRST]"
+          if ! "$BIN" --command-dry-run "open $FIRST"; then
+            echo "::error title=a discovered app cannot be resolved::--list-apps offers '$FIRST' but 'open $FIRST' does not resolve to it, so discovery and the resolver disagree on Windows."
+            exit 1
+          fi
+          # The safety property, on Windows. Exit 0 would mean a dictated
+          # sentence launched something.
+          if "$BIN" --command "the shop will open at nine"; then
+            echo "::error title=dictated prose parsed as a command on Windows::'the shop will open at nine' did not refuse, so dictation can act on the machine."
+            exit 1
+          fi
+          echo "prose correctly refused"
+      - name: Does the launcher actually start a process?
+        shell: pwsh
+        run: |
+          # Notepad ships with every Windows install and is safe to open and
+          # close. This is the assertion that proves `cmd /C start ""` works
+          # at all, which is the line I had least evidence for.
+          $before = @(Get-Process notepad -ErrorAction SilentlyContinue).Count
+          Write-Host "notepad processes before: $before"
+          & target/debug/outloud.exe --command "open Notepad"
+          if ($LASTEXITCODE -ne 0) {
+            Write-Host "::error title=launch failed on Windows::'open Notepad' exited $LASTEXITCODE, so the cmd /C start launch path does not work."
+            exit 1
+          }
+          Start-Sleep -Seconds 5
+          $after = @(Get-Process notepad -ErrorAction SilentlyContinue).Count
+          Write-Host "notepad processes after: $after"
+          if ($after -le $before) {
+            Write-Host "::error title=launch started nothing on Windows::'open Notepad' reported success but no notepad process appeared. Exiting 0 without launching is exactly the quiet failure this job exists to catch."
+            exit 1
+          }
+          Write-Host "launch verified: a notepad process appeared"
+          Stop-Process -Name notepad -Force -ErrorAction SilentlyContinue
+      - name: Attribute failure
+        if: failure()
+        shell: bash
+        run: >-
+          echo "::error title=Windows app-command runtime failure::The voice app-launch feature does not work on a real Windows machine. See the failing step above; crates/app-command/src/launch.rs holds the Windows discovery and launch code."
