@@ -1,0 +1,13 @@
+[package]
+name = "app-command"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+# Internal workspace crate: never published to crates.io. Same reasoning as
+# edit-intent, and the same effect on `cargo deny`.
+publish = false
+description = "Launch and switch to applications by voice, from a closed registry"
+
+[dependencies]
+config = { path = "../config" }
