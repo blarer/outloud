@@ -244,6 +244,12 @@ mod platform {
         // The practical consequence is small: on a real desktop session the
         // display exists, so the failure mode this hides does not occur. On
         // a headless box there is nothing to launch into anyway.
+        //
+        // That the Exec IS invoked was then verified without a display, by
+        // pointing a desktop entry at a script that writes a timestamp file:
+        // the file appeared, with clean argv (no literal `%U` leaking
+        // through). Done with the shipped aarch64 release artifact rather
+        // than a debug build.
         let status = Command::new("gio")
             .arg("launch")
             .arg(&app.launch_id)
@@ -273,13 +279,15 @@ mod platform {
     pub fn discover() -> Vec<App> {
         // Start Menu shortcuts, which is what the Start menu itself lists.
         //
-        // NOT verified on real hardware: the Windows machine in the fleet
-        // is powered off, and `docs/windows-handoff.md` is explicit that a
-        // green build proves nothing about behaviour here. The shape is
-        // right (these are the canonical shortcut directories) but the
-        // first person to run this on Windows should check the names that
-        // come back, because `.lnk` display names are not always what the
-        // Start menu shows.
+        // VERIFIED on a real windows-2025 runner by
+        // `windows-app-command-runtime-smoke` in ci.yml: 158 applications
+        // discovered, and the first of them ("7-Zip File Manager") resolves
+        // through the whole parse-and-resolve path.
+        //
+        // This comment previously said the code was unverified and that the
+        // `.lnk` display names were the part most likely to be wrong. They
+        // were not, but that was a guess either way: nothing in CI ran the
+        // test suite on Windows at all, which is why the job exists now.
         let mut apps = Vec::new();
         let dirs = [
             std::env::var("APPDATA")
@@ -331,6 +339,12 @@ mod platform {
         // NOT `SetForegroundWindow`: Windows refuses it from a process that
         // does not already own the foreground (docs/windows-handoff.md),
         // so an explicit raise would fail exactly when it is wanted.
+        //
+        // VERIFIED to actually launch, on a real windows-2025 runner:
+        // `open Notepad` took the notepad process count from 0 to 1. That
+        // assertion counts PROCESSES rather than trusting the exit code,
+        // because the Linux path demonstrated that a launcher can exit 0
+        // having started nothing (see the gio note above).
         let status = Command::new("cmd")
             .args(["/C", "start", ""])
             .arg(&app.launch_id)

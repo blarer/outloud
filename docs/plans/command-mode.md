@@ -284,9 +284,37 @@ The four questions under "what I would want to know before building it" are
    better than this. The case that stands up is the mouse-free,
    keyboard-limited user in `docs/ux/06-accessibility.md`.
 
-Windows is built and type-checked but **never run**: the fleet's Windows
-machine is powered off. The Start Menu `.lnk` discovery is the least
-confident part of the implementation.
+### Verified where, and how
+
+Recorded per platform because "it works" meant something different on each,
+and the weakest evidence is the part worth knowing:
+
+| Platform | Discovery | Resolve | Refuse prose | Actually launched? |
+|---|---|---|---|---|
+| **macOS** | 132 real apps | yes | yes | **yes**: Chess started, then a second command raised it from Finder with the SAME PID and one process, from the signed release bundle |
+| **Linux** | 62 real apps on the Spark | yes | yes | **yes**: a desktop entry whose `Exec` wrote a timestamp file, run by the shipped aarch64 release artifact |
+| **Windows** | 158 Start Menu shortcuts | yes ("7-Zip File Manager") | yes | **yes**: `open Notepad` took notepad processes 0 -> 1 |
+
+Windows is covered by `windows-app-command-runtime-smoke` in `ci.yml`, added
+because the Windows half was originally written and committed without ever
+running: no CI job had ever executed the test suite on Windows, and the
+fleet's Windows box is powered off. A windows-2025 runner is a real Windows
+machine, so that job now runs the unit tests, the integration tests, and all
+four behaviours above. It passed first try, including the `.lnk` discovery
+that was the least confident code in the implementation.
+
+The Linux launch needed a second attempt to prove anything. The first test
+ran headless, where `gio launch` exits 0 and the application then dies with
+"Failed to open display", so success proved only that a process was spawned.
+A desktop entry pointing at a shell script that records a timestamp closes
+that: no display needed, and the file either exists or it does not. It also
+confirmed the `Exec` is invoked with clean argv rather than a literal `%U`.
+
+**Still unverified: the switch half on Windows and Linux.** Raising an
+already-running window depends on the application, and neither a GitHub
+runner nor the headless Spark has a window to raise. Only macOS has
+PID-and-frontmost evidence. On the other two, "switch to X" is documented as
+a synonym for "open X" and nothing stronger is claimed.
 
 ## See also
 

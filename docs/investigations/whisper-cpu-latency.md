@@ -27,6 +27,37 @@ how you ship a regression.
 about 250ms, a 9x difference in audio for an 11% difference in time. That is
 the whole finding: the cost is not proportional to what the user said.
 
+### Re-measured 2026-10-30, after the ISA baseline change
+
+The numbers above were taken before `4d4a522` and `4511eb7` forced
+`GGML_NATIVE=OFF` so the shipped binary runs on pre-Haswell CPUs. That is
+exactly the kind of change that could invalidate a latency finding, since it
+gives up host-specific SIMD, so the benchmark was re-run on the same machine
+rather than assumed to still hold:
+
+| Utterance | Finalize (best of 3) |
+|---|---|
+| "Yes." | 219ms |
+| "A short one." | 220ms |
+| "Change quick to slow." | 228ms |
+| "The quick brown fox jumps over the lazy dog." | 233ms |
+| "Please send the report to Sarah by Friday afternoon." | 234ms |
+| "The meeting is at three o'clock in the main conference room." | 241ms |
+| "I think we should refactor the authentication middleware..." | 241ms |
+
+Still flat, and if anything slightly faster (219-241ms against 244-271ms),
+which is within the noise of a different rep count on a machine doing other
+work. The conclusion is unchanged and now holds for the binary that actually
+ships: **the baseline build did not cost measurable dictation latency**,
+which is worth knowing, because "correct everywhere" was accepted in those
+commits on the assumption that the cost was real but acceptable. It appears
+not to be measurable at all at this model size.
+
+One text mismatch, "at 3 o'clock" for "at three o'clock", which the harness
+flags as a DIFF and its own note calls expected at baseline (number
+formatting). Not a regression: the harness exists to catch a change ADDING
+mismatches, and the count is the same shape as before.
+
 The reason is whisper's architecture. The encoder operates on a fixed 30-second
 mel window, so a 0.6s utterance is padded with 29.4 seconds of silence and the
 encoder does the same work either way. For a dictation tool, where a typical
