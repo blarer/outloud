@@ -84,8 +84,8 @@ rustup target add "$TARGET"
 # MSVC's calling convention and command-line interface, so the Rust side
 # still links against the MSVC ABI and nothing else in the build changes.
 #
-# CXXFLAGS=/EHsc is the third thing this needs, and it is a consequence of
-# the second. The Visual Studio generator supplies `/EHsc` in its default
+# CXXFLAGS is the third thing this needs, and it is a consequence of the
+# second. The Visual Studio generator supplies `/EHsc` in its default
 # CMAKE_CXX_FLAGS; Ninja supplies nothing, so cmake-rs's flags are all the
 # compiler gets. ggml's `gguf.cpp` uses `try`/`catch`, which without that
 # flag fails with "cannot use 'try' with exceptions disabled" at every use
@@ -93,6 +93,18 @@ rustup target add "$TARGET"
 # introduced a second, unrelated-looking failure. Both are the same root
 # cause: the Visual Studio generator was doing things for us that Ninja does
 # not.
+#
+# WRITTEN `-EHsc`, NOT `/EHsc`. This script runs under Git Bash, whose MSYS
+# path mangling rewrites a lone `/EHsc` argument into a Windows path, and
+# the first attempt failed with
+#
+#     clang-cl: error: no such file or directory: 'C:/Program'
+#     clang-cl: error: no such file or directory: 'Files/Git/EHsc'
+#
+# which is the flag being turned into `C:/Program Files/Git/EHsc`. clang-cl
+# accepts `-` and `/` interchangeably for MSVC-style flags, and `-EHsc` has
+# no leading slash to mangle. Anything else added here needs the same
+# treatment.
 if [ "$TARGET" = "aarch64-pc-windows-msvc" ]; then
     echo "==> aarch64: Ninja + clang-cl (ggml refuses to build for ARM under MSVC)"
     for tool in clang-cl ninja; do
@@ -107,7 +119,7 @@ if [ "$TARGET" = "aarch64-pc-windows-msvc" ]; then
     export CMAKE_GENERATOR_aarch64_pc_windows_msvc=Ninja
     export CC_aarch64_pc_windows_msvc=clang-cl
     export CXX_aarch64_pc_windows_msvc=clang-cl
-    export CXXFLAGS_aarch64_pc_windows_msvc="/EHsc"
+    export CXXFLAGS_aarch64_pc_windows_msvc="-EHsc"
 fi
 
 # --features outloud/whisper: the recognizer itself. Without it the daemon

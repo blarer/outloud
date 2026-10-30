@@ -55,7 +55,7 @@ Cross-compilation strategy, per target:
   CMAKE_GENERATOR_aarch64_pc_windows_msvc=Ninja
   CC_aarch64_pc_windows_msvc=clang-cl
   CXX_aarch64_pc_windows_msvc=clang-cl
-  CXXFLAGS_aarch64_pc_windows_msvc=/EHsc
+  CXXFLAGS_aarch64_pc_windows_msvc=-EHsc
   ```
 
   All four are load-bearing, and each was discovered by the one before it
@@ -67,10 +67,16 @@ Cross-compilation strategy, per target:
      `CC`/`CXX`, so ggml still sees cl.exe and still aborts.
   2. `Ninja` is what makes `CC`/`CXX` authoritative, and it works: ggml's
      compiler check passes.
-  3. `/EHsc` is then needed *because* of Ninja. The Visual Studio generator
+  3. `-EHsc` is then needed *because* of Ninja. The Visual Studio generator
      supplies it in its default `CMAKE_CXX_FLAGS` and Ninja supplies nothing,
      so ggml's `gguf.cpp` fails with `cannot use 'try' with exceptions
      disabled` at every `try` site.
+  4. It must be written with a **leading dash**, not `/EHsc`. The release
+     script runs under Git Bash, and MSYS path mangling rewrites a lone
+     `/EHsc` into `C:/Program Files/Git/EHsc`, which clang-cl then reports as
+     two missing files. clang-cl accepts `-` and `/` interchangeably for
+     MSVC-style flags, so the dash form is the one that survives the shell.
+     Any flag added here needs the same treatment.
 
   clang-cl keeps MSVC's ABI and command-line interface, so nothing else in
   the build changes. The general lesson, if this breaks again: the Visual

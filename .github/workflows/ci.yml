@@ -429,7 +429,9 @@ jobs:
         # /EHsc is needed BECAUSE of Ninja: the Visual Studio generator
         # supplies it in its default CXX flags and Ninja supplies nothing, so
         # ggml's gguf.cpp fails with "cannot use 'try' with exceptions
-        # disabled" without it.
+        # disabled" without it. Spelled `-EHsc`, not `/EHsc`: this step runs
+        # under bash on Windows, and MSYS path mangling turns a lone `/EHsc`
+        # into `C:/Program Files/Git/EHsc`. clang-cl takes either prefix.
         run: |
           for tool in clang-cl ninja; do
             command -v "$tool" >/dev/null || { echo "::error::$tool missing from the runner image"; exit 1; }
@@ -437,7 +439,7 @@ jobs:
           export CMAKE_GENERATOR_aarch64_pc_windows_msvc=Ninja
           export CC_aarch64_pc_windows_msvc=clang-cl
           export CXX_aarch64_pc_windows_msvc=clang-cl
-          export CXXFLAGS_aarch64_pc_windows_msvc="/EHsc"
+          export CXXFLAGS_aarch64_pc_windows_msvc="-EHsc"
           cargo build --release --locked --package outloud \
             --features outloud/whisper --target aarch64-pc-windows-msvc
       - name: Attribute failure
