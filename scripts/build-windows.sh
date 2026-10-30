@@ -83,6 +83,16 @@ rustup target add "$TARGET"
 # authoritative. Ninja is present on the windows-2025 image. clang-cl keeps
 # MSVC's calling convention and command-line interface, so the Rust side
 # still links against the MSVC ABI and nothing else in the build changes.
+#
+# CXXFLAGS=/EHsc is the third thing this needs, and it is a consequence of
+# the second. The Visual Studio generator supplies `/EHsc` in its default
+# CMAKE_CXX_FLAGS; Ninja supplies nothing, so cmake-rs's flags are all the
+# compiler gets. ggml's `gguf.cpp` uses `try`/`catch`, which without that
+# flag fails with "cannot use 'try' with exceptions disabled" at every use
+# site. So moving to Ninja to get past ggml's compiler check immediately
+# introduced a second, unrelated-looking failure. Both are the same root
+# cause: the Visual Studio generator was doing things for us that Ninja does
+# not.
 if [ "$TARGET" = "aarch64-pc-windows-msvc" ]; then
     echo "==> aarch64: Ninja + clang-cl (ggml refuses to build for ARM under MSVC)"
     for tool in clang-cl ninja; do
@@ -97,6 +107,7 @@ if [ "$TARGET" = "aarch64-pc-windows-msvc" ]; then
     export CMAKE_GENERATOR_aarch64_pc_windows_msvc=Ninja
     export CC_aarch64_pc_windows_msvc=clang-cl
     export CXX_aarch64_pc_windows_msvc=clang-cl
+    export CXXFLAGS_aarch64_pc_windows_msvc="/EHsc"
 fi
 
 # --features outloud/whisper: the recognizer itself. Without it the daemon

@@ -49,20 +49,33 @@ Cross-compilation strategy, per target:
   itself needs only a `rustup target add`. **The recognizer does not.** ggml's
   `ggml-cpu/CMakeLists.txt` aborts with `MSVC is not supported for ARM, use
   clang` unless the C compiler is Clang, so `scripts/build-windows.sh` sets
-  three variables for this target:
+  four variables for this target:
 
   ```
   CMAKE_GENERATOR_aarch64_pc_windows_msvc=Ninja
   CC_aarch64_pc_windows_msvc=clang-cl
   CXX_aarch64_pc_windows_msvc=clang-cl
+  CXXFLAGS_aarch64_pc_windows_msvc=/EHsc
   ```
 
-  The generator is not optional and setting `CC`/`CXX` alone does not work.
-  With no generator set, cmake-rs selects the Visual Studio generator for an
-  MSVC target, and a Visual Studio generator takes its compiler from its
-  *toolset* rather than from `CC`/`CXX`, so ggml still sees cl.exe and still
-  aborts. Ninja is what makes `CC`/`CXX` authoritative. clang-cl keeps MSVC's
-  ABI and command-line interface, so nothing else in the build changes.
+  All four are load-bearing, and each was discovered by the one before it
+  failing:
+
+  1. `CC`/`CXX` alone do nothing. With no generator set, cmake-rs selects the
+     Visual Studio generator for an MSVC target, and a Visual Studio
+     generator takes its compiler from its *toolset* rather than from
+     `CC`/`CXX`, so ggml still sees cl.exe and still aborts.
+  2. `Ninja` is what makes `CC`/`CXX` authoritative, and it works: ggml's
+     compiler check passes.
+  3. `/EHsc` is then needed *because* of Ninja. The Visual Studio generator
+     supplies it in its default `CMAKE_CXX_FLAGS` and Ninja supplies nothing,
+     so ggml's `gguf.cpp` fails with `cannot use 'try' with exceptions
+     disabled` at every `try` site.
+
+  clang-cl keeps MSVC's ABI and command-line interface, so nothing else in
+  the build changes. The general lesson, if this breaks again: the Visual
+  Studio generator does things for you that Ninja does not, so each step away
+  from it surfaces another of those things.
 
   That refusal broke every aarch64 release job from 2026-10-21, when the
   whisper feature was added to the release build, until it was found on
