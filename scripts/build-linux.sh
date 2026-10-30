@@ -259,6 +259,57 @@ if command -v dpkg-deb >/dev/null 2>&1; then
         DEB_DESC=" Diagnostic harness only: this musl build links no audio backend, so\n it cannot dictate. See the glibc package for the daemon."
     fi
     cp LICENSE* "$DEB/usr/share/doc/outloud/" 2>/dev/null || true
+
+    # Dependencies, READ OFF THE BINARIES rather than hardcoded.
+    #
+    # This field was absent until 2026-10-30, so every `.deb` this script
+    # produced declared no dependencies whatsoever. apt therefore considered
+    # it installable on any Debian or Ubuntu release, and the failure landed
+    # at *runtime* as a dynamic-linker error naming a glibc version, which is
+    # not something a user can act on. The floor is real and high: a
+    # ubuntu-24.04 runner links `pidfd_spawnp@GLIBC_2.39`, so these binaries
+    # do not run on Debian 12 (2.36) or Ubuntu 22.04 (2.35) at all.
+    #
+    # Derived, not written down, because a hardcoded floor silently becomes a
+    # lie the next time the runner image moves, which is exactly how the
+    # "glibc floor is 2.31" line in docs/build-and-release.md came to be
+    # wrong. `strings` is used rather than readelf/objdump because binutils
+    # is the one package guaranteed present on every runner here, and the
+    # version tokens are plain symbol-table strings.
+    DEB_DEPENDS=""
+    case "$TARGET" in
+        *-musl) : ;;  # static: no libc dependency to declare
+        *)
+            # Scan EVERY binary in the package, not just one. The daemon
+            # links whisper.cpp and the harness does not, so they can
+            # legitimately differ, and the package's floor is the highest of
+            # the two. Measured equal (2.39) on both arches today, which is
+            # precisely why taking the max rather than sampling one has to be
+            # structural: the day they diverge, a sampled floor is too low
+            # and the package installs onto a system it cannot run on.
+            GLIBC_MAX="$(strings -a "$DEB"/usr/bin/* \
+                | grep -oE 'GLIBC_2\.[0-9]+' \
+                | sort -t. -k2 -n -u | tail -1 | sed 's/GLIBC_//')"
+            if [ -z "${GLIBC_MAX:-}" ]; then
+                echo "FATAL: could not read a GLIBC_2.x floor out of the binary." >&2
+                echo "  A dynamically linked glibc build always references one," >&2
+                echo "  so this means the probe broke, not that there is no" >&2
+                echo "  floor. Refusing to ship a .deb with no Depends: that is" >&2
+                echo "  the bug this block exists to fix." >&2
+                exit 1
+            fi
+            echo "    glibc floor read from binary: $GLIBC_MAX"
+            DEB_DEPENDS="libc6 (>= $GLIBC_MAX)"
+            if [ "$WANT_DAEMON" = 1 ]; then
+                # cpal links libasound at runtime. Alternation because the
+                # 64-bit-time_t transition renamed the package: Ubuntu 24.04
+                # and Debian 13 ship libasound2t64, older releases
+                # libasound2. apt accepts the first that exists.
+                DEB_DEPENDS="$DEB_DEPENDS, libasound2t64 | libasound2"
+            fi
+            ;;
+    esac
+
     cat > "$DEB/DEBIAN/control" <<CONTROL
 Package: outloud
 Version: $VERSION
@@ -266,9 +317,14 @@ Architecture: $DEB_ARCH
 Maintainer: OutLoud project
 Section: utils
 Priority: optional
+${DEB_DEPENDS:+Depends: $DEB_DEPENDS}
 Description: Local voice dictation and edit-by-voice
 $(printf '%b' "$DEB_DESC")
 CONTROL
+    # An empty Depends expansion leaves a blank line, which dpkg-deb reads as
+    # the end of the control stanza and then rejects the file for having no
+    # Description. Harmless to run unconditionally.
+    sed -i.bak '/^$/d' "$DEB/DEBIAN/control" && rm -f "$DEB/DEBIAN/control.bak"
     dpkg-deb --build --root-owner-group "$DEB" "$OUT/outloud_${VERSION}_${DEB_ARCH}.deb"
 else
     echo "==> dpkg-deb not found: skipping .deb"
@@ -302,9 +358,14 @@ if command -v rpmbuild >/dev/null 2>&1; then
     if [ "$WANT_DAEMON" = 1 ]; then
         RPM_INSTALL="install -m 0755 $ROOT/$OUT/outloud %{buildroot}/usr/bin/outloud"
         RPM_FILES="/usr/bin/outloud"
+        # alsa-lib is the RPM name for what Debian calls libasound2. Only
+        # the daemon links it; see the .deb block for the full reasoning
+        # about declared dependencies.
+        RPM_REQUIRES="Requires: alsa-lib"
     else
         RPM_INSTALL=""
         RPM_FILES=""
+        RPM_REQUIRES=""
     fi
     cat > "$RPMTOP/SPECS/outloud.spec" <<SPEC
 Name: outloud
@@ -312,6 +373,7 @@ Version: $VERSION
 Release: 1
 Summary: Local voice dictation and edit-by-voice
 License: MIT
+$RPM_REQUIRES
 %global __os_install_post %{nil}
 %global debug_package %{nil}
 
@@ -328,6 +390,29 @@ SPEC
     rpmbuild --define "_topdir $ROOT/$RPMTOP" \
              --define "_rpmdir $ROOT/$OUT" \
              --target "$ARCH" -bb "$RPMTOP/SPECS/outloud.spec"
+    # rpmbuild writes to _rpmdir/<arch>/, NOT to _rpmdir. Release artifacts
+    # are globbed as dist/linux/<target>/*.rpm, which never matched that
+    # subdirectory, so no release has ever actually contained an RPM despite
+    # the workflow listing one and docs/build-and-release.md promising one.
+    # Nothing failed: the glob simply matched nothing, and
+    # upload-artifact only warns.
+    #
+    # Moved rather than re-pointed because -bb ignores a _rpmdir without an
+    # arch component in some rpm versions; moving the result is the behaviour
+    # that does not depend on the rpm version.
+    if [ -d "$OUT/$ARCH" ]; then
+        find "$OUT/$ARCH" -name '*.rpm' -exec mv -f {} "$OUT/" \;
+        rmdir "$OUT/$ARCH" 2>/dev/null || true
+    fi
+    # The whole point of this block is an artifact that reaches users, so
+    # assert it exists rather than assuming the move worked.
+    if ! ls "$OUT"/*.rpm >/dev/null 2>&1; then
+        echo "FATAL: rpmbuild reported success but no .rpm is in $OUT." >&2
+        echo "  The release globs $OUT/*.rpm; an RPM anywhere else ships" >&2
+        echo "  to nobody. This guard exists because that silently happened" >&2
+        echo "  for every release up to 2026-10-30." >&2
+        exit 1
+    fi
 else
     echo "==> rpmbuild not found: skipping .rpm"
 fi

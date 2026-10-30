@@ -97,15 +97,17 @@ Cross-compilation strategy, per target:
   tested build.
 - **Linux x86_64 (glibc and musl)** builds natively on `ubuntu-24.04`, with
   `musl-tools` supplying the musl C toolchain.
-- **Linux aarch64 (both libcs)** goes through
-  [`cross`](https://github.com/cross-rs/cross) with images pinned in
-  `Cross.toml`. Why cross rather than installing `gcc-aarch64-linux-gnu` on
-  the runner: the container pins the sysroot, so the glibc *floor* of the
-  shipped binary (2.31, from the Ubuntu 20.04 image) is a decision recorded
-  in a file rather than an accident of the runner's package archive. The
-  failure mode being avoided: a runner image update silently raising the
-  glibc requirement and breaking every Debian 11 user with a linker error
-  they report as "the app does not start".
+- **Linux aarch64 (both libcs)** builds natively on `ubuntu-24.04-arm`. It
+  went through [`cross`](https://github.com/cross-rs/cross) until
+  2026-10-30, which was fine while the Linux release shipped only the
+  diagnostic harness and became impossible the moment it shipped the
+  whisper-linked daemon: the pinned cross aarch64 image is Ubuntu xenial,
+  whose cmake is 3.5, and ggml requires 3.14 or newer. Native arm64 runners
+  are free for public repositories, so the image, its arm64-ALSA extraction
+  hack, and its old sysroot all left the release path at once.
+
+  `Cross.toml` is kept for building this target on an x86_64 developer
+  machine, where `build-linux.sh` restricts it to the harness and says so.
 
 QEMU-based test execution for aarch64 was considered and rejected for now:
 the crates with interesting behaviour (`edit-intent`) are pure and already
@@ -344,10 +346,24 @@ via our own flags:
 `scripts/build-linux.sh` produces a tarball, AppImage, `.deb`, `.rpm`, and a
 Flatpak manifest per target.
 
-- **glibc floor is 2.31** (Debian 11 / Ubuntu 20.04), set by the `cross`
-  image for aarch64 and by the runner for x86_64. Raising it is treated like
-  an MSRV bump. The **musl builds are fully static** and exist precisely for
-  machines outside that floor.
+- **glibc floor is 2.39** (Ubuntu 24.04 / Debian 13), set by the runner on
+  both architectures. This is **measured, not chosen**: the binaries
+  reference `pidfd_spawnp@GLIBC_2.39`, and `build-linux.sh` reads the highest
+  `GLIBC_2.x` out of the shipped binaries and writes it into the `.deb`'s
+  `Depends:` rather than hardcoding a number.
+
+  This line previously claimed 2.31 and attributed it to the `cross` image.
+  That was wrong for x86_64 the whole time (nothing pinned the x86_64 floor,
+  so it followed the runner), and the hardcoded number is exactly how the
+  claim rotted undetected. **Users on Debian 12 or Ubuntu 22.04 cannot run
+  the glibc builds**, and before 2026-10-30 the `.deb` declared no
+  dependencies at all, so apt installed it for them anyway and the failure
+  showed up as a dynamic-linker error. The **musl builds are fully static**
+  and are the answer for machines below the floor.
+
+  Lowering the floor deliberately means building in a container with an
+  older sysroot, which is a real option and a real tradeoff, not a thing to
+  do by accident.
 - **AppImage** for "download one file, run it anywhere without root".
 - **`.deb` and `.rpm`** because distro users expect them, and because the
   package metadata is where runtime dependencies get declared once the input
