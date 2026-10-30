@@ -170,12 +170,24 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        target:
-          - x86_64-unknown-linux-gnu
-          - x86_64-unknown-linux-musl
-          - aarch64-unknown-linux-gnu
-          - aarch64-unknown-linux-musl
-    runs-on: ubuntu-24.04
+        # Each row carries its own runner so the aarch64 targets build
+        # NATIVELY. They went through `cross` until 2026-10-30, which worked
+        # while this job shipped only the harness and broke the moment it
+        # started shipping the whisper-linked daemon: the cross 0.2.5 aarch64
+        # image is Ubuntu xenial, whose cmake is 3.5, and ggml requires 3.14+.
+        # Native arm64 runners are free for public repositories, and they
+        # remove the cross image, its pinned glibc floor, and the arm64-ALSA
+        # extraction hack from the release path in one move.
+        include:
+          - target: x86_64-unknown-linux-gnu
+            runner: ubuntu-24.04
+          - target: x86_64-unknown-linux-musl
+            runner: ubuntu-24.04
+          - target: aarch64-unknown-linux-gnu
+            runner: ubuntu-24.04-arm
+          - target: aarch64-unknown-linux-musl
+            runner: ubuntu-24.04-arm
+    runs-on: ${{ matrix.runner }}
     steps:
       - uses: actions/checkout@v4
       - uses: Swatinem/rust-cache@v2
@@ -196,10 +208,21 @@ jobs:
           # glibc targets. Added when build-linux.sh started shipping the
           # daemon rather than only the harness: before that, nothing in the
           # Linux release path compiled a recognizer.
-          sudo apt-get install -y musl-tools rpm binutils desktop-file-utils cmake
-          # appimagetool: single static binary, pinned release.
+          # libasound2-dev: cpal's alsa-sys needs ALSA headers for the host
+          # arch. Supplied by ci-install-linux-deps.sh on x86_64; the arm64
+          # rows build natively now, so they need it here too, and asking
+          # apt for it twice is harmless.
+          sudo apt-get install -y musl-tools rpm binutils desktop-file-utils cmake libasound2-dev
+          # appimagetool: single static binary, pinned release. Per-arch,
+          # because this now runs on arm64 as well and the x86_64 AppImage
+          # cannot execute there.
+          case "$(uname -m)" in
+            x86_64)  AI_ARCH=x86_64 ;;
+            aarch64) AI_ARCH=aarch64 ;;
+            *) echo "unexpected runner arch $(uname -m)" >&2; exit 1 ;;
+          esac
           curl -fsSL -o /usr/local/bin/appimagetool \
-            https://github.com/AppImage/appimagetool/releases/download/1.9.0/appimagetool-x86_64.AppImage
+            "https://github.com/AppImage/appimagetool/releases/download/1.9.0/appimagetool-${AI_ARCH}.AppImage"
           sudo chmod +x /usr/local/bin/appimagetool
       - name: Build and package
         run: scripts/build-linux.sh ${{ matrix.target }}

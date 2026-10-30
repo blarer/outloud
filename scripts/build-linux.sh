@@ -127,10 +127,44 @@ fi
 
 case "$TARGET" in
     aarch64-*)
-        # aarch64 cross-builds go through cross (pinned images, Cross.toml).
-        command -v cross >/dev/null || cargo install cross --locked
-        cross build --release --locked "${PACKAGES[@]}" "${FEATURES[@]}" \
-            --target "$TARGET"
+        # Native when the runner is already arm64, cross otherwise.
+        #
+        # Native is strongly preferred, and the release workflow now puts
+        # the aarch64 rows on `ubuntu-24.04-arm` so this is the path CI
+        # takes. Reason: the cross 0.2.5 aarch64 image is Ubuntu *xenial*,
+        # which ships cmake 3.5 and libclang 3.8. ggml's CMakeLists requires
+        # cmake >= 3.14, and xenial cannot satisfy it (`cmake : Depends:
+        # cmake-data (= 3.5.1-1ubuntu3)` conflicts with any newer
+        # cmake-data). Building whisper.cpp inside that image means
+        # backporting a toolchain into a 2016 userland.
+        #
+        # Everything the cross path needed the elaborate Cross.toml
+        # pre-build for (arm64 ALSA headers extracted with `dpkg -x`,
+        # ports.ubuntu.com sources, a glibc floor set by the image's
+        # sysroot) is simply absent natively: apt installs arm64
+        # libasound2-dev because the machine IS arm64.
+        #
+        # The cross branch is kept, not deleted, because it is the only way
+        # to build this target on an x86_64 developer machine. It cannot
+        # build the daemon (no cmake), so it is restricted to the harness,
+        # and says so rather than failing 90 seconds into a whisper build.
+        if [ "$(uname -m)" = "aarch64" ]; then
+            rustup target add "$TARGET"
+            cargo build --release --locked "${PACKAGES[@]}" "${FEATURES[@]}" \
+                --target "$TARGET"
+        else
+            command -v cross >/dev/null || cargo install cross --locked
+            if [ "$WANT_DAEMON" = 1 ]; then
+                echo "==> cross-building aarch64 from $(uname -m): harness only"
+                echo "    (the cross image's cmake is too old for whisper.cpp;"
+                echo "     build on an arm64 host for a daemon-bearing package)"
+                WANT_DAEMON=0
+                PACKAGES=(--package spike-cli)
+                FEATURES=()
+            fi
+            cross build --release --locked "${PACKAGES[@]}" "${FEATURES[@]}" \
+                --target "$TARGET"
+        fi
         ;;
     *)
         rustup target add "$TARGET"
