@@ -44,6 +44,21 @@ pre-build = [
     "echo 'deb [arch=arm64] http://ports.ubuntu.com/ubuntu-ports bionic main universe' >> /etc/apt/sources.list",
     "echo 'deb [arch=arm64] http://ports.ubuntu.com/ubuntu-ports bionic-updates main universe' >> /etc/apt/sources.list",
     "echo 'deb [arch=arm64] http://ports.ubuntu.com/ubuntu-ports bionic-security main universe' >> /etc/apt/sources.list",
+    # pkg-config for alsa-sys. clang/libclang for whisper-rs-sys's bindgen,
+    # and cmake to build whisper.cpp itself.
+    #
+    # Needed as of 2026-10-30, when build-linux.sh started shipping the
+    # dictation daemon rather than only the diagnostic harness. The daemon
+    # pulls whisper-rs-sys, whose build script runs bindgen, and the cross
+    # image carries no libclang:
+    #
+    #   Unable to find libclang: "couldn't find any valid shared libraries
+    #   matching: ['libclang.so', ...]"
+    #
+    # These are HOST (amd64) tools that run during the build, so they install
+    # normally. Only the ALSA libraries below have to be arm64, which is what
+    # the extract-don't-install note below is about.
+    "apt-get update && apt-get install -y pkg-config clang libclang-dev cmake",
     # Extract, don't install: apt refuses to install any arm64 library into
     # this image because every Multi-Arch: same pair (libc6, libcrypt1,
     # gcc-10-base, ...) must match the amd64 copy byte-for-byte, and no
@@ -53,7 +68,6 @@ pre-build = [
     # aarch64 sysroot glibc that resolves the final link ships with the
     # cross toolchain itself. `apt-get download` + `dpkg -x /` lays the
     # files down with no dependency resolution at all.
-    "apt-get update && apt-get install -y pkg-config",
     "cd /tmp && apt-get download libasound2:arm64 libasound2-dev:arm64 && for f in /tmp/libasound2*.deb; do dpkg -x \"$f\" /; done",
 ]
 
