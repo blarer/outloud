@@ -369,23 +369,27 @@ jobs:
         run: scripts/ci-install-linux-deps.sh
       - uses: Swatinem/rust-cache@v2
         with:
-          shared-key: whisper-${{ matrix.os }}
-          # Include the script's own hash in the cache key.
+          # The script's hash belongs in `shared-key`, NOT in `key`.
           #
           # whisper.cpp is compiled by a build script into a static library
-          # that lands in the cargo target dir, so rust-cache restores it.
+          # inside the cargo target dir, so rust-cache saves and restores it.
           # Cargo does not know that `ci-whisper.sh` chose the CFLAGS it was
-          # built with, so changing those flags does NOT invalidate anything:
-          # the cached `libwhisper.a` is reused and the new flags have no
-          # effect at all.
+          # built with, so editing those flags invalidates nothing on its own.
           #
-          # That cost a full debugging cycle. An AMX fix was added to
-          # ci-whisper.sh, the log confirmed the flags were exported, and the
-          # job still died with the identical SIGILL, from a test binary with
-          # a byte-identical hash to the three previous runs. Nothing had been
-          # rebuilt. Keying on the script means editing it forces the rebuild
-          # that makes the edit mean something.
-          key: ${{ hashFiles('scripts/ci-whisper.sh') }}
+          # Adding the hash to `key` was not enough, and the failure is
+          # instructive: rust-cache falls back to RESTORE KEYS built from
+          # `shared-key`, so a changed `key` still matched the old entry by
+          # prefix and served the same stale `libwhisper.a`. Proof it was
+          # stale: the test binary's fingerprint hash stayed
+          # `whisper_transcribes_testdata-737af1223d81fdd7` across six runs,
+          # including two that claimed to change compiler flags, and the log
+          # said `Cache hit for: v0-rust-whisper-ubuntu-24.04-...`.
+          #
+          # `shared-key` is what the restore keys are derived from, so putting
+          # the hash there makes an edit a genuine miss and forces the
+          # rebuild. Watch for `Compiling whisper-rs-sys` in the log: without
+          # that line, nothing about the build actually changed.
+          shared-key: whisper-${{ matrix.os }}-${{ hashFiles('scripts/ci-whisper.sh') }}
       # Keyed by the pinned hash, not by a date: a re-pin must miss the cache
       # and fetch the new file, and an unchanged pin must never re-download.
       - name: Cache the ggml model
