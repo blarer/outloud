@@ -370,6 +370,22 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           shared-key: whisper-${{ matrix.os }}
+          # Include the script's own hash in the cache key.
+          #
+          # whisper.cpp is compiled by a build script into a static library
+          # that lands in the cargo target dir, so rust-cache restores it.
+          # Cargo does not know that `ci-whisper.sh` chose the CFLAGS it was
+          # built with, so changing those flags does NOT invalidate anything:
+          # the cached `libwhisper.a` is reused and the new flags have no
+          # effect at all.
+          #
+          # That cost a full debugging cycle. An AMX fix was added to
+          # ci-whisper.sh, the log confirmed the flags were exported, and the
+          # job still died with the identical SIGILL, from a test binary with
+          # a byte-identical hash to the three previous runs. Nothing had been
+          # rebuilt. Keying on the script means editing it forces the rebuild
+          # that makes the edit mean something.
+          key: ${{ hashFiles('scripts/ci-whisper.sh') }}
       # Keyed by the pinned hash, not by a date: a re-pin must miss the cache
       # and fetch the new file, and an unchanged pin must never re-download.
       - name: Cache the ggml model
