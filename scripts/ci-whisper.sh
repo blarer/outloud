@@ -64,6 +64,56 @@ echo "==> model verified against the registry pin"
 # the run independent of where the cache landed.
 export OUTLOUD_WHISPER_MODEL="$MODEL"
 
+# Keep ggml off AMX, so a build on one runner cannot crash on another.
+#
+# WHY: without this, the Linux job fails intermittently with
+#
+#   AMX is not ready to be used!
+#   process didn't exit successfully: ... (signal: 4, SIGILL: illegal instruction)
+#
+# ggml's CMakeLists sets `GGML_NATIVE` ON by default (unless
+# cross-compiling), which tunes for whatever CPU the build landed on.
+# GitHub's runner fleet is not homogeneous: a build assigned to a Sapphire
+# Rapids host compiles in AMX instructions, and the resulting binary may then
+# execute on a CPU without them. The failure is a coin flip on runner
+# allocation, which is why it has been passing and failing across commits
+# that touch nothing related to whisper.
+#
+# Same class as the pre-Haswell AVX2 crash `scripts/ci-verify-baseline.sh`
+# exists to catch, with one difference: that guard inspects the SHIPPED
+# x86_64 release artifact, and this is a CI-only test build, so nothing was
+# watching it.
+#
+# HOW, and what does NOT work: `CMAKE_ARGS` is a dead end. Neither
+# `whisper-rs-sys`'s build script nor the `cmake` crate reads it (the crate
+# only honours `CMAKE`, `CMAKE_GENERATOR`, `CMAKE_TOOLCHAIN_FILE`,
+# `CMAKE_PREFIX_PATH`, and the `cc`-derived flag variables), so
+# `-DGGML_NATIVE=OFF` passed that way is silently discarded. That was my
+# first attempt here and it would have looked like a fix while changing
+# nothing.
+#
+# `CFLAGS`/`CXXFLAGS` DO reach the compiler: cmake-rs builds
+# `CMAKE_C_FLAGS`/`CMAKE_CXX_FLAGS` from `cc`, which reads them. Explicitly
+# disabling the AMX feature families is also narrower than turning all native
+# tuning off: AVX2 and friends still apply, so the test keeps representative
+# performance and only the instruction set that actually faults is excluded.
+#
+# x86_64 ONLY. `-mno-amx-*` are x86 feature flags; passing them on Apple
+# Silicon makes clang reject the whole compilation, which would turn a Linux
+# fix into a macOS breakage. AMX does not exist outside x86, so there is
+# nothing to disable elsewhere.
+case "$(uname -m)" in
+    x86_64 | amd64)
+        AMX_OFF="-mno-amx-tile -mno-amx-int8 -mno-amx-bf16"
+        export CFLAGS="${CFLAGS:-} $AMX_OFF"
+        export CXXFLAGS="${CXXFLAGS:-} $AMX_OFF"
+        echo "==> x86_64: AMX disabled for ggml ($AMX_OFF)"
+        ;;
+    *)
+        echo "==> $(uname -m): no AMX on this architecture, nothing to disable"
+        ;;
+esac
+
 echo "==> cargo test -p asr --features whisper"
 cargo test --locked -p asr --features whisper
 
