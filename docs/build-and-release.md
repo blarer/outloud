@@ -49,9 +49,20 @@ Cross-compilation strategy, per target:
   itself needs only a `rustup target add`. **The recognizer does not.** ggml's
   `ggml-cpu/CMakeLists.txt` aborts with `MSVC is not supported for ARM, use
   clang` unless the C compiler is Clang, so `scripts/build-windows.sh` sets
-  `CC_aarch64_pc_windows_msvc` and `CXX_aarch64_pc_windows_msvc` to
-  `clang-cl` for this target. clang-cl keeps MSVC's ABI and command-line
-  interface, so nothing else in the build changes.
+  three variables for this target:
+
+  ```
+  CMAKE_GENERATOR_aarch64_pc_windows_msvc=Ninja
+  CC_aarch64_pc_windows_msvc=clang-cl
+  CXX_aarch64_pc_windows_msvc=clang-cl
+  ```
+
+  The generator is not optional and setting `CC`/`CXX` alone does not work.
+  With no generator set, cmake-rs selects the Visual Studio generator for an
+  MSVC target, and a Visual Studio generator takes its compiler from its
+  *toolset* rather than from `CC`/`CXX`, so ggml still sees cl.exe and still
+  aborts. Ninja is what makes `CC`/`CXX` authoritative. clang-cl keeps MSVC's
+  ABI and command-line interface, so nothing else in the build changes.
 
   That refusal broke every aarch64 release job from 2026-10-21, when the
   whisper feature was added to the release build, until it was found on

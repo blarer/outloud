@@ -416,12 +416,20 @@ jobs:
         run: rustup target add aarch64-pc-windows-msvc
       - name: Build the whisper feature for aarch64
         shell: bash
-        # Same CC/CXX override as scripts/build-windows.sh, deliberately
-        # repeated rather than sourced: this job must fail if the script's
-        # mechanism stops being sufficient, which it cannot do if it reuses
-        # the script's own logic.
+        # Same generator + CC/CXX override as scripts/build-windows.sh,
+        # deliberately repeated rather than sourced: this job must fail if
+        # the script's mechanism stops being sufficient, which it cannot do
+        # if it reuses the script's own logic.
+        #
+        # CC/CXX alone do NOT work here. cmake-rs picks the Visual Studio
+        # generator for an MSVC target, and that generator takes its compiler
+        # from its toolset rather than from CC/CXX, so ggml still sees cl.exe
+        # and still aborts. Ninja is what makes CC/CXX authoritative.
         run: |
-          command -v clang-cl >/dev/null || { echo "::error::clang-cl missing from the runner image"; exit 1; }
+          for tool in clang-cl ninja; do
+            command -v "$tool" >/dev/null || { echo "::error::$tool missing from the runner image"; exit 1; }
+          done
+          export CMAKE_GENERATOR_aarch64_pc_windows_msvc=Ninja
           export CC_aarch64_pc_windows_msvc=clang-cl
           export CXX_aarch64_pc_windows_msvc=clang-cl
           cargo build --release --locked --package outloud \
@@ -429,7 +437,7 @@ jobs:
       - name: Attribute failure
         if: failure()
         run: >-
-          echo "::error title=aarch64 Windows whisper build::The whisper feature no longer cross-compiles for aarch64-pc-windows-msvc. ggml refuses MSVC for ARM, so this needs clang-cl; see the CC/CXX exports in scripts/build-windows.sh. A failure here is a release-blocking failure caught early."
+          echo "::error title=aarch64 Windows whisper build::The whisper feature no longer cross-compiles for aarch64-pc-windows-msvc. ggml refuses MSVC for ARM, so this needs the Ninja generator plus clang-cl; see the CMAKE_GENERATOR/CC/CXX exports in scripts/build-windows.sh. A failure here is a release-blocking failure caught early."
 
 
   # Performance tripwire. Every other job answers "is it correct"; this one

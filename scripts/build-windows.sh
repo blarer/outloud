@@ -71,19 +71,30 @@ rustup target add "$TARGET"
 # that fails is therefore absent from the only job that builds this triple.
 # A green CI row and a red release row were both correct.
 #
-# cmake-rs reads `CC_<target>` / `CXX_<target>`, so pointing those at
-# clang-cl is enough to satisfy ggml's check; clang-cl keeps MSVC's calling
-# convention and command-line interface, so the Rust side still links
-# against the MSVC ABI and nothing else in the build has to change.
+# cmake-rs reads `CC_<target>` / `CXX_<target>`, but on an MSVC target those
+# are NOT ENOUGH on their own. With no generator set, cmake-rs selects the
+# Visual Studio generator and passes `-AARM64`, and a Visual Studio generator
+# picks its compiler from its toolset, ignoring CC/CXX entirely. So ggml's
+# check still sees cl.exe and still aborts. Setting CC/CXX alone was my first
+# attempt at this and the aarch64 job failed again, identically.
+#
+# `CMAKE_GENERATOR_<target>` IS read from the environment (cmake-rs's
+# `getenv_target_os`), so switching this target to Ninja makes CC/CXX
+# authoritative. Ninja is present on the windows-2025 image. clang-cl keeps
+# MSVC's calling convention and command-line interface, so the Rust side
+# still links against the MSVC ABI and nothing else in the build changes.
 if [ "$TARGET" = "aarch64-pc-windows-msvc" ]; then
-    echo "==> aarch64: using clang-cl (ggml refuses to build for ARM under MSVC)"
-    if ! command -v clang-cl >/dev/null 2>&1; then
-        echo "ERROR: clang-cl not on PATH." >&2
-        echo "The windows-2025 runner ships LLVM; locally, install it with" >&2
-        echo "  choco install llvm" >&2
-        echo "Without it this target cannot build the whisper feature at all." >&2
-        exit 1
-    fi
+    echo "==> aarch64: Ninja + clang-cl (ggml refuses to build for ARM under MSVC)"
+    for tool in clang-cl ninja; do
+        if ! command -v "$tool" >/dev/null 2>&1; then
+            echo "ERROR: $tool not on PATH." >&2
+            echo "The windows-2025 runner ships both; locally, install with" >&2
+            echo "  choco install llvm ninja" >&2
+            echo "Without them this target cannot build the whisper feature." >&2
+            exit 1
+        fi
+    done
+    export CMAKE_GENERATOR_aarch64_pc_windows_msvc=Ninja
     export CC_aarch64_pc_windows_msvc=clang-cl
     export CXX_aarch64_pc_windows_msvc=clang-cl
 fi
