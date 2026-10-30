@@ -138,7 +138,7 @@ click: `App profiles… → [+ Frontmost app]`.
 
 ### Vocabulary and dictionary management
 
-The dictionary is a competitive front: OutLoud caps free users at 5 entries and
+The dictionary is a competitive front: Aqua caps free users at 5 entries and
 Pro at 800. Ours is unlimited and plain-text, and that is a feature we say
 out loud.
 

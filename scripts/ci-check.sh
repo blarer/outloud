@@ -102,6 +102,14 @@ echo "==> tests that assume a host resource"
 # it: clippy never executes tests.
 scripts/ci-check-host-assumptions.py
 
+echo "==> competitor claims are not attributed to us"
+# The rename in a4b4f09 did a global substitution and renamed the COMPETITOR
+# in docs/competitive-analysis.md, a document about them. For three months
+# our own repo asserted that we are cloud-based, retain transcripts, and have
+# no offline mode. A rename cannot know which uses of a name mean someone
+# else, so the property is checked instead of remembered.
+scripts/ci-check-competitor-naming.py
+
 echo "==> cargo fmt --check"
 cargo fmt --all -- --check
 

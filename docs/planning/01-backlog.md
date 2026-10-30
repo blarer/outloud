@@ -148,3 +148,13 @@ closes the task; the generic per-task Definition of Done in
 | Z-12 | Release checklist automation | SYS | S | Z-05 | Checklist in `03-definition-of-done.md` runs as a scripted pre-release job; manual steps < 5 |
 
 Task count: 8 + 10 + 7 + 9 (M1) + 5 + 5 + 6 + 5 + 6 + 7 (M2) + 12 (M3) = **80**.
+
+## Post-1.0, proposed and not scheduled
+
+Ideas with a written design and no milestone. They are here so they are not
+re-invented from scratch, and are deliberately outside the task count above:
+nothing in this section has an owner, a size, or a commitment.
+
+| id | title | design | why not yet |
+|---|---|---|---|
+| X-01 | Command mode: app and system actions by voice | [`docs/plans/command-mode.md`](../plans/command-mode.md) | Acts on the machine rather than on text, so a misheard phrase has no undo ring. Depends on R-07-style eval work for a command vocabulary and on M2's vocabulary biasing. The smaller launch-and-switch-only version in that document is the one to try first. |

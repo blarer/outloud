@@ -42,7 +42,7 @@ Plain dictation must be *safe* before it is smart:
 - **Nothing we inject ever ends with Enter by itself.** Dictation composes
   the command line; the human presses Enter. The single exception is the
   explicit spoken command "run it" / "send it" (off by default, opt-in
-  setting, mirroring OutLoud's "Send It" but gated because terminals execute
+  setting, mirroring Aqua's "Send It" but gated because terminals execute
   things). When enabled, "run it" strips the phrase, injects, and sends `\r`.
 - **Terminal-profile formatting.** The destination profile
   (`05-settings-and-states.md`) for terminals defaults to: no auto-
