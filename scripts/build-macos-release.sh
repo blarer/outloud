@@ -177,6 +177,43 @@ $ICON_KEY
 </plist>
 PLIST
 
+# Fall back to a LOCAL signing identity before falling back to ad-hoc.
+#
+# This exists because of a real regression on 2026-11-01. Running this script
+# on a developer Mac without MACOS_SIGN_IDENTITY set produced an ad-hoc
+# bundle, which has no signing identity, so its designated requirement
+# degenerates to the hash of that exact binary:
+#
+#   designated => cdhash H"523eca91..."
+#
+# macOS therefore treats every rebuild as a DIFFERENT application. The user's
+# Accessibility and Input Monitoring grants stopped applying, while System
+# Settings still showed OutLoud switched on, so it read as "already granted"
+# while nothing worked. `scripts/bundle-outloud-macos.sh` has carried that
+# exact warning for months and already auto-detects an identity; this script
+# did not, and that asymmetry is the whole bug.
+#
+# An Apple Development certificate (free with any Apple ID) is enough,
+# because the requirement then names the CERTIFICATE rather than one build:
+#
+#   designated => identifier "dev.outloud.outloud" and anchor apple generic
+#                 and certificate leaf[subject.CN] = "Apple Development: ..."
+#
+# Developer ID is about distributing to OTHER machines (notarization), which
+# is a separate axis from TCC identity on this one.
+if [ -z "${MACOS_SIGN_IDENTITY:-}" ]; then
+    # Same detection as bundle-outloud-macos.sh. `-v` lists only valid
+    # identities, so an expired certificate is not offered.
+    DETECTED="$(security find-identity -v -p codesigning 2>/dev/null \
+        | grep -E '"(Developer ID Application|Apple Development):' \
+        | head -1 | sed 's/.*) \([0-9A-F]*\) ".*/\1/')"
+    if [ -n "$DETECTED" ]; then
+        echo "==> MACOS_SIGN_IDENTITY unset; using keychain identity ${DETECTED:0:12}..."
+        echo "    (so TCC grants survive a rebuild; set MACOS_SIGN_IDENTITY to override)"
+        MACOS_SIGN_IDENTITY="$DETECTED"
+    fi
+fi
+
 if [ -n "${MACOS_SIGN_IDENTITY:-}" ]; then
     echo "==> Signing with Developer ID: $MACOS_SIGN_IDENTITY"
     # INSIDE OUT. The speech helper is a nested executable, and codesign does
