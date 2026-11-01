@@ -216,17 +216,52 @@ fi
 
 if [ -n "${MACOS_SIGN_IDENTITY:-}" ]; then
     echo "==> Signing with Developer ID: $MACOS_SIGN_IDENTITY"
+    # ENTITLEMENTS ARE NOT OPTIONAL HERE.
+    #
+    # `--options runtime` (hardened runtime) is required for notarization,
+    # and it flips several capabilities from "allowed, prompt the user" to
+    # "denied unless the binary declares the entitlement". This script
+    # passed `--options runtime` with NO entitlements file, which produced a
+    # correctly signed, launchable bundle that could not record audio: the
+    # app opened an input device and received nothing, and sat in
+    # `listening` for ever. tccd said so plainly in the unified log while
+    # the app itself reported healthy:
+    #
+    #   Prompting policy for hardened runtime; service: kTCCServiceAppleEvents
+    #   requires entitlement com.apple.security.automation.apple-events
+    #   but it is missing
+    #
+    # What made this hard to see: Accessibility and Input Monitoring kept
+    # working, because they are granted through a different mechanism that
+    # hardened runtime does not gate, so `--permissions` reported both as
+    # granted and the real problem was invisible to it. And
+    # bundle-outloud-macos.sh, the developer bundler, never passes
+    # `--options runtime` at all, so the dev loop could not reproduce it.
+    ENTITLEMENTS="$ROOT/scripts/outloud.entitlements"
+    [ -f "$ENTITLEMENTS" ] || {
+        echo "FATAL: $ENTITLEMENTS is missing." >&2
+        echo "  Signing with --options runtime and no entitlements produces a" >&2
+        echo "  bundle that cannot use the microphone. Refusing to build one." >&2
+        exit 1
+    }
     # INSIDE OUT. The speech helper is a nested executable, and codesign does
     # not sign nested code implicitly: signing only the bundle leaves the
     # helper unsigned, `codesign --verify --strict` rejects it, and
     # notarization rejects it too. Nested first, bundle second.
+    #
+    # The helper gets the hardened runtime but NOT the entitlements: it reads
+    # PCM from stdin and never opens an input device, so audio-input would be
+    # surface with no purpose. See the note in the entitlements file.
     codesign --force --options runtime --timestamp \
         --sign "$MACOS_SIGN_IDENTITY" \
         "$APP_DIR/Contents/MacOS/outloud-speech-helper"
     # --options runtime (hardened runtime) is REQUIRED for notarization.
     # --timestamp embeds a secure timestamp so the signature outlives the
     # signing certificate's expiry.
+    # --entitlements is what makes the hardened runtime survivable; see the
+    # long note above.
     codesign --force --options runtime --timestamp \
+        --entitlements "$ENTITLEMENTS" \
         --sign "$MACOS_SIGN_IDENTITY" \
         --identifier "$BUNDLE_ID" \
         "$APP_DIR"
@@ -351,6 +386,42 @@ if ! /usr/libexec/PlistBuddy -c 'Print :NSMicrophoneUsageDescription' "$APP_DIR/
 else
     echo "  ok: NSMicrophoneUsageDescription present"
 fi
+# Hardened runtime without the audio entitlement is a bundle that cannot
+# dictate, and it is INVISIBLE from the outside: signature valid, app
+# launches, Accessibility and Input Monitoring still report granted. It
+# shipped that way on 2026-11-01 and presented to the user as "it is not
+# capturing my mic". Checked here against the SIGNED artifact rather than
+# against the entitlements file, because the question is what codesign
+# actually embedded, not what we meant to pass.
+# Captured to variables FIRST, then matched. Piping `codesign` straight into
+# `grep -q` is wrong under `set -o pipefail`: grep exits as soon as it has
+# its answer, codesign then dies of SIGPIPE, and the pipeline reports
+# failure. The effect is a guard that silently takes its "not hardened"
+# branch on a bundle that IS hardened, which is exactly the false negative
+# this check exists to prevent. Observed, not theorised: the first version
+# printed "no hardened runtime" for a bundle whose flags were 0x10000.
+SIG_INFO="$(codesign -dvv "$APP_DIR" 2>&1 || true)"
+EMBEDDED_ENTS="$(codesign -d --entitlements - --xml "$APP_DIR" 2>/dev/null | plutil -p - 2>/dev/null || true)"
+case "$SIG_INFO" in
+*flags=*runtime*)
+    case "$EMBEDDED_ENTS" in
+    *'"com.apple.security.device.audio-input" => true'*)
+        echo "  ok: hardened runtime WITH the audio-input entitlement"
+        ;;
+    *)
+        echo "  FAIL: hardened runtime is on but com.apple.security.device.audio-input is not embedded." >&2
+        echo "        This bundle is signed, launchable, and cannot record audio." >&2
+        echo "        See scripts/outloud.entitlements.md." >&2
+        fail=1
+        ;;
+    esac
+    ;;
+*)
+    # Not an error: an ad-hoc local build does not harden, and then the
+    # entitlement is unnecessary because nothing is gating on it.
+    echo "  ok: no hardened runtime (unhardened build; entitlement not required)"
+    ;;
+esac
 if [ "$fail" -ne 0 ]; then
     echo "Refusing to publish this artifact." >&2
     exit 1
